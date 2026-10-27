@@ -54,7 +54,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-01] Zig Engine Core Skeleton & Toolchain Gate
 - **Milestone**: PoC (Nov 1)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Set up the WSL2 and `gx10-03` toolchains, then initialize the C/Zig engine skeleton with a page-aligned arena allocator, a C-ABI boundary for C and CUDA components, and CI. Replaces the CLion `CMakeLists.txt` / `main.cpp` stub with `build.zig`. This task is the test for Risk R1 (Section 7).
 - **Steps (Monday start)**:
@@ -73,7 +73,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-02] Mock All-to-All Token Dispatcher (Loopback + TCP Transport)
 - **Milestone**: PoC (Nov 1)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement a `Transport` interface with a shared-memory loopback backend and a TCP backend that simulate token hidden-state dispatch and combine between 2 engine processes. The interface must match what the RDMA backend needs in TASK-07: pre-registered slot rings, slot credits, and a per-message 32-bit immediate tag. The TCP backend is what links the desktop and `gx10-03`, and is the fallback for Risk R2.
 - **Steps (Monday start)**:
@@ -87,14 +87,15 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-03] `io_uring` O_DIRECT Expert Reader Prototype
 - **Milestone**: PoC (Nov 1)
-- **Status**: To Do
+- **Status**: Review
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Create a C wrapper around liburing using `O_DIRECT`, `IORING_SETUP_SQPOLL`, registered files, and registered fixed buffers (`io_uring_prep_read_fixed`) to load dummy 1 GB expert weight files into page-aligned memory. Alignment comes from `statx(STATX_DIOALIGN)`, not hard-coded constants. This task is the test for Risk R3.
 - **Steps (Monday start)**:
-  - [ ] Port the reference fixed-buffer loop from the verification report (Section 4.3) into `csrc/io/uring_reader.c`; unit-test in WSL2.
-  - [ ] Generate 1 GB aligned dummy expert files with a deterministic pattern for checksumming (check free disk space on `gx10-03` first; delete test files after runs).
-  - [ ] On `gx10-03`, record a `fio` O_DIRECT baseline (256 KiB, QD 64) as the ceiling to compare against.
-  - [ ] Report GB/s plus p50/p95/p99 submit-to-reap latency; sweep block size (128 KiB to 1 MiB) and queue depth (16 to 128).
+  - [x] Port the reference fixed-buffer loop from the verification report (Section 4.3) into `csrc/io/uring_reader.c`; unit-test in WSL2 (Oct 27; library API in `include/tf_io.h`, test `zig build io-test`).
+  - [x] Generate 1 GB aligned dummy expert files with a deterministic pattern for checksumming (check free disk space on `gx10-03` first; delete test files after runs) (`uring_bench mk`; deleted after the run).
+  - [x] On `gx10-03`, record a `fio` O_DIRECT baseline (256 KiB, QD 64) as the ceiling to compare against (7.21 to 7.26 GB/s).
+  - [x] Report GB/s plus p50/p95/p99 submit-to-reap latency; sweep block size (128 KiB to 1 MiB) and queue depth (16 to 128).
+  - **Results (Oct 27)**: all acceptance checks pass. Reader 7.24 to 7.27 GB/s, about 100% of `fio`; all words verified; page cache +0 MiB. The drive saturates once about 4 MiB is in flight, so the engine default is 256 KiB x QD 16 (p50 0.57 ms). Risk R3 is retired for single-drive reads. See `bench/storage/gx10-03-2026-10-27.md`.
 - **Acceptance Criteria**: Done when, on `gx10-03`, the reader sustains at least 90% of the `fio` O_DIRECT baseline (the drive is PCIe Gen 4 x4, so expect roughly 6 to 7 GB/s; build `fio` under `~/lukehinojosa/tools/` since it is not installed), reads verify by checksum, the kernel page cache does not grow during the run (checked via `/proc/meminfo` `Cached` delta or `fincore`), and results are logged with drive model, firmware, kernel, filesystem, and co-tenant load.
 
 #### [TASK-04] WebGL Token Flow Canvas Mockup
@@ -296,10 +297,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | Column | Tasks |
 |---|---|
 | **Backlog** | TASK-07 to TASK-20 (including 15b, 16b) |
-| **To Do** | TASK-03 |
+| **To Do** | (none) |
 | **In Progress** | TASK-04, TASK-05, TASK-06 |
-| **Review** | TASK-01, TASK-02 (all acceptance checks pass locally; Done once CI is green on `main`) |
-| **Done** | (none) |
+| **Review** | TASK-03 (acceptance checks pass on `gx10-03`; Done once CI is green on `main`) |
+| **Done** | TASK-01, TASK-02 |
 
 | Area | Tasks | Count |
 |---|---|---|
@@ -363,7 +364,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|---|---|
 | **R1** | **Zig is new to the only engineer.** Zig is pre-1.0, with breaking changes between versions and fewer learning resources; combining it with C, CUDA, liburing, and verbs could stall the schedule. | TASK-01 toolchain gate: `build.zig` compiles C, links `liburing` and `libcudart`, calls CUDA on the 5070 Ti, cross-compiles to aarch64, and runs on `gx10-03`. | **Wed Oct 28**: gate not passing, or the TASK-01 matmul not working by Fri Oct 30. | Write the engine core in C11 with CMake (reusing the existing CLion project). No task changes, because every subsystem already sits behind a C ABI; Zig can return later for the scheduler only. |
 | **R2** | **Only one node, and it is shared.** `gx10-01` and `gx10-02` are busy, so real node-to-node RDMA may never be available; `gx10-03`'s ConnectX-7 ports may be unlinked, which can block even RDMA loopback; the other student's jobs compete for memory, GPU, and disk. | TASK-05 probe: ConnectX-7 port state, loopback `ib_write_lat` on `gx10-03`, and realistic free memory; TASK-02 TCP backend between the desktop and `gx10-03`. | **Fri Oct 30**: loopback `ib_write_lat` does not run on `gx10-03`, or less than about 40 GB of memory is realistically free. **Memory condition already met on Oct 26 (about 11 GB free).** | RDMA code is developed against Soft-RoCE (`rdma_rxe`) and performance runs use the shared-memory and TCP backends if loopback fails (Emergency cut); for memory, cap each engine process at 4 GB on `gx10-03`, develop and test models on the desktop (64 GB RAM), use OLMoE-1B-7B-class models on the Spark, and ask the co-tenant for a window with vLLM paused for the soak; label every benchmark with the hardware and co-tenant load it ran under. |
-| **R3** | **NVMe expert streaming is too slow or unsupported.** Direct I/O alignment may not be supported by `gx10-03`'s filesystem, or throughput may fall far below what streaming needs. | TASK-03 reader versus the `fio` O_DIRECT baseline on `gx10-03`. | **Fri Oct 30**: O_DIRECT reads fail, or the reader reaches under 50% of the `fio` baseline. | Load every expert at startup and run resident-only (the RC model fits in memory); TASK-12 and TASK-13 drop with the first cut, and TASK-11 prefetching targets the transport only. |
+| **R3** | **NVMe expert streaming is too slow or unsupported.** Direct I/O alignment may not be supported by `gx10-03`'s filesystem, or throughput may fall far below what streaming needs. **Retired Oct 27 for single-drive reads:** ext4 reports DIO alignment and the reader reaches 7.2 GB/s, matching `fio`; contention with GPU kernels is still untested. | TASK-03 reader versus the `fio` O_DIRECT baseline on `gx10-03`. | **Fri Oct 30**: O_DIRECT reads fail, or the reader reaches under 50% of the `fio` baseline. | Load every expert at startup and run resident-only (the RC model fits in memory); TASK-12 and TASK-13 drop with the first cut, and TASK-11 prefetching targets the transport only. |
 
 ### 7.2 Other Risks
 

@@ -59,14 +59,50 @@ pub fn build(b: *std.Build) void {
     run_startup.addArtifactArg(exe);
     b.step("startup", "Time process start to first kernel (median of 20)").dependOn(&run_startup.step);
 
-    addGate(b, target, optimize);
+    const uring = b.option([]const u8, "uring", "liburing install prefix, if not in system paths");
+    addIo(b, target, optimize, uring);
+    addGate(b, target, optimize, uring);
+}
+
+/// Links liburing, from `prefix` if given, else from the system paths.
+fn linkUring(b: *std.Build, mod: *std.Build.Module, prefix: ?[]const u8) void {
+    if (prefix) |p| {
+        mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ p, "include" }) });
+        const lib = b.pathJoin(&.{ p, "lib" });
+        mod.addLibraryPath(.{ .cwd_relative = lib });
+        mod.addRPath(.{ .cwd_relative = lib });
+    }
+    mod.linkSystemLibrary("uring", .{});
+}
+
+/// io_uring expert reader (TASK-03): its unit test and bench need liburing,
+/// so they live in their own step, like the gate.
+fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, uring: ?[]const u8) void {
+    const io_test = b.step("io-test", "Run the io_uring reader unit test (needs liburing)");
+    const io_bench = b.step("io-bench", "Build tools/bench/uring_bench (needs liburing)");
+    const programs = [_]struct { name: []const u8, src: []const u8, step: *std.Build.Step }{
+        .{ .name = "reader_test", .src = "tests/reader_test.c", .step = io_test },
+        .{ .name = "uring_bench", .src = "tools/bench/uring_bench.c", .step = io_bench },
+    };
+    for (programs) |p| {
+        const mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+        mod.addIncludePath(b.path("include"));
+        mod.addCSourceFiles(.{ .files = &.{ "csrc/io/uring_reader.c", p.src }, .flags = &c_flags });
+        linkUring(b, mod, uring);
+        const exe = b.addExecutable(.{ .name = p.name, .root_module = mod });
+        const install = b.addInstallArtifact(exe, .{});
+        if (p.step == io_test) {
+            p.step.dependOn(&b.addRunArtifact(exe).step);
+        } else {
+            p.step.dependOn(&install.step);
+        }
+    }
 }
 
 /// Toolchain gate (TASK-01): links liburing and the CUDA runtime, so it is a
 /// separate step that only machines with both installed need to build.
-fn addGate(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+fn addGate(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, uring: ?[]const u8) void {
     const cuda = b.option([]const u8, "cuda", "CUDA toolkit root (default /usr/local/cuda)") orelse "/usr/local/cuda";
-    const uring = b.option([]const u8, "uring", "liburing install prefix, if not in system paths");
 
     const gate = b.createModule(.{
         .root_source_file = b.path("src/gate.zig"),
@@ -83,13 +119,7 @@ fn addGate(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
     gate.addRPath(.{ .cwd_relative = cuda_lib });
     gate.linkSystemLibrary("cudart", .{});
 
-    if (uring) |prefix| {
-        gate.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "include" }) });
-        const lib = b.pathJoin(&.{ prefix, "lib" });
-        gate.addLibraryPath(.{ .cwd_relative = lib });
-        gate.addRPath(.{ .cwd_relative = lib });
-    }
-    gate.linkSystemLibrary("uring", .{});
+    linkUring(b, gate, uring);
 
     const exe = b.addExecutable(.{ .name = "gate", .root_module = gate });
     const install = b.addInstallArtifact(exe, .{});

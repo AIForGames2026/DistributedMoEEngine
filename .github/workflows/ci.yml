@@ -14,8 +14,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+      - name: Install liburing
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev
       - name: Unit tests (x86_64)
         run: zig build test --summary all
+      - name: io_uring reader test
+        run: zig build io-test --summary all
       - name: Run
         run: zig build run
       - name: Start-to-first-kernel time (< 5 ms)

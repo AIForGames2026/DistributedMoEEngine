@@ -1,6 +1,7 @@
 //! TensorFold-Swarm engine entry point (TASK-01 skeleton).
 const std = @import("std");
 const gemm = @import("gemm.zig");
+const Arena = @import("arena.zig").Arena;
 
 // C ABI boundary (include/tensorfold.h). Declared directly rather than through
 // @cImport so the build does not depend on translate-c.
@@ -11,21 +12,19 @@ pub fn main() !void {
     std.debug.print("TensorFold-Swarm engine v{d}.{d}.{d}\n", .{ v >> 16, (v >> 8) & 0xff, v & 0xff });
 
     const n = 256;
-    const alloc = std.heap.page_allocator;
-    const a = try alloc.alloc(f32, n * n);
-    defer alloc.free(a);
-    const b = try alloc.alloc(f32, n * n);
-    defer alloc.free(b);
-    const ref = try alloc.alloc(f32, n * n);
-    defer alloc.free(ref);
-    const out = try alloc.alloc(f32, n * n);
-    defer alloc.free(out);
+    var arena = try Arena.init(4 * n * n * @sizeOf(f32));
+    defer arena.deinit();
+    const a = try arena.alloc(f32, n * n);
+    const b = try arena.alloc(f32, n * n);
+    const ref = try arena.alloc(f32, n * n);
+    const out = try arena.alloc(f32, n * n);
 
     fill(a, 1);
     fill(b, 2);
     gemm.naive(a, b, ref, n, n, n);
     gemm.tiled(a, b, out, n, n, n);
     std.debug.print("{d}x{d} tiled GEMM max relative error vs naive: {e}\n", .{ n, n, gemm.maxRelErr(ref, out) });
+    std.debug.print("arena: {d} KiB used of {d} KiB, base 2 MiB aligned\n", .{ arena.high_water / 1024, arena.capacity() / 1024 });
 }
 
 /// Deterministic pseudo-random fill in [-1, 1).
@@ -37,6 +36,11 @@ fn fill(buf: []f32, seed: u32) void {
         s ^= s << 5;
         x.* = @as(f32, @floatFromInt(s >> 8)) / 8388608.0 - 1.0;
     }
+}
+
+test {
+    _ = @import("arena.zig");
+    _ = @import("wire.zig");
 }
 
 test "C ABI reports version 0.1.0" {

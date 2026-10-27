@@ -59,14 +59,14 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Set up the WSL2 and `gx10-03` toolchains, then initialize the C/Zig engine skeleton with a page-aligned arena allocator, a C-ABI boundary for C and CUDA components, and CI. Replaces the CLion `CMakeLists.txt` / `main.cpp` stub with `build.zig`. This task is the test for Risk R1 (Section 7).
 - **Steps (Monday start)**:
   - [x] On `gx10-03`: Zig 0.17.0, liburing 2.15, and fio 3.43 installed in `~/lukehinojosa/tools/` (Oct 26); `zig cc` builds and runs a liburing test.
-  - [ ] Install WSL2 Ubuntu 24.04 with the NVIDIA WSL CUDA toolkit; install Zig 0.17.0 (pinned in `.zig-version`), `liburing-dev`, `rdma-core`, `libibverbs-dev`, `fio`.
+  - [x] Install WSL2 Ubuntu 24.04 with the NVIDIA WSL CUDA toolkit; install Zig 0.17.0 (pinned in `.zig-version`), `liburing-dev`, `rdma-core`, `libibverbs-dev`, `fio` (Oct 27: `tools/setup/install-zig.sh` and `tools/setup/wsl2-packages.sh`; CUDA 13.0, liburing 2.5, rdma-core 50.0, fio 3.36).
   - [x] Set up key-based SSH to `gx10-03` (README, "Machine access"); done Oct 26 for all three Sparks.
   - [ ] Work through the Zig ramp-up list in Section 9 (about one day).
   - [x] Create `build.zig` with `run` and `test` steps; compile one C file (`csrc/tf_version.c`) and call it from Zig (Oct 27; `bench` step still to add).
-  - [ ] **Toolchain gate (Wed Oct 28)**: in WSL2, `zig build` compiles C, links `liburing` and `libcudart`, calls `cudaGetDeviceCount` on the 5070 Ti, and cross-compiles for `aarch64-linux-gnu`; the same build runs natively on `gx10-03`.
-  - [ ] Implement `Arena` (2 MiB aligned, huge-page aware) with allocation tracing hooks.
+  - [x] **Toolchain gate (Wed Oct 28)**: in WSL2, `zig build` compiles C, links `liburing` and `libcudart`, calls `cudaGetDeviceCount` on the 5070 Ti, and cross-compiles for `aarch64-linux-gnu`; the same build runs natively on `gx10-03`. (**Passed Oct 27, one day early.** `zig build gate` passes in WSL2 (RTX 5070 Ti, 12.0, 70 SMs) and on `gx10-03` (GB10, 12.1, 48 SMs): io_uring NOP reaped, cudaMalloc and cudaMemset ok, no libpython. The aarch64 cross-compile from WSL2 works. Risk R1's fallback is not needed.)
+  - [x] Implement `Arena` (2 MiB aligned, huge-page aware) with allocation tracing hooks (Oct 27; `src/arena.zig`).
   - [x] Add a naive and a tiled FP32 GEMM on host memory as the correctness reference kernel (Oct 27; tests pass on `gx10-03`).
-  - [ ] Expose `include/tensorfold.h` and call it from a C test to prove the ABI (header exists and is called from Zig; C-side test still to add).
+  - [x] Expose `include/tensorfold.h` and call it from a C test to prove the ABI (Oct 27; `tests/abi_test.c` runs in `zig build test`).
   - [x] GitHub Actions: `zig build test` on x86_64 Linux plus an aarch64 cross-compile (`.github/workflows/ci.yml`).
 - **Acceptance Criteria**: Done when the toolchain gate passes, `zig build run` executes a 1024x1024 host matmul that matches the naive reference within 1e-5 relative error, the binary links no Python or libpython, process start to first kernel call is under 5 ms (median of 20 runs on `gx10-03`), and CI is green.
 
@@ -113,9 +113,9 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Priority**: `must` | **Area**: `benchmarking`
 - **Description**: Run a probe on `gx10-03` and the desktop that records the facts later tasks depend on, so design decisions rest on measured hardware instead of datasheet assumptions (Section 7). This task is the test for Risk R2.
 - **Steps (Monday start)**:
-  - [ ] Query `cudaGetDeviceProperties` for compute capability and SM count (expected 12.1 on `gx10-03`, 12.0 on the 5070 Ti).
-  - [ ] Try to assemble a `tcgen05.mma` PTX snippet for `sm_121a` to confirm whether GB10 has the datacenter Blackwell Tensor Memory path (likely not; Section 7.3).
-  - [ ] Query `CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_MAXIMUM_LENGTH` and test a buffer with `CU_POINTER_ATTRIBUTE_IS_HW_DECOMPRESS_CAPABLE` to detect a hardware Decompression Engine.
+  - [x] Query compute capability and SM count (Oct 27: 12.1 and 48 SMs on `gx10-03` via `tools/probe/cuda_probe.c`; 12.0 on the 5070 Ti via `nvidia-smi`).
+  - [x] Try to assemble a `tcgen05` PTX snippet for `sm_121a` to confirm whether GB10 has the datacenter Blackwell Tensor Memory path (Oct 27: it does not; see `bench/platform/gx10-03-2026-10-27.md`).
+  - [x] Query `CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_MAXIMUM_LENGTH` and test a buffer with `CU_POINTER_ATTRIBUTE_IS_HW_DECOMPRESS_CAPABLE` to detect a hardware Decompression Engine (Oct 27: algorithm mask 0, no hardware DE).
   - [x] On `gx10-03`, record `ibdev2netdev` link state and speed for the ConnectX-7 ports (done Oct 26: all four `ACTIVE` at 200 Gb/s, full mesh to `gx10-01` / `gx10-02`).
   - [x] Record the RoCE GID table; run `ib_write_lat` and `ib_write_bw` in loopback (done Oct 26: 3.26 us typical for a 7,552-byte packet, about 106 Gb/s on one device; see `bench/platform/gx10-03-2026-10-26.md`).
   - [ ] Record `lspci -vv` NVMe link speed and width, free disk space, total and free memory, and a STREAM-style memory bandwidth test; note what the other student's jobs are using.
@@ -127,9 +127,9 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Priority**: `must` | **Area**: `architecture`
 - **Description**: Freeze the v0 token packet layout and immediate-data encoding, and build an offline PyTorch reference harness (testing only, never linked into the engine) that produces golden activations and logits for a tiny synthetic MoE. The harness can run on the desktop's 5070 Ti. TASK-02 and TASK-10 depend on it.
 - **Steps (Monday start)**:
-  - [ ] Reconcile the blueprint packet table: its offsets give 208 bytes of scale factors but `fp8_e8m0[224]` needs 224 (7,168 / 32). With 224 scales the packet is 7,440 bytes; pad to 7,552 (59 x 128) or shrink the header. Document the choice.
-  - [ ] Pick one immediate-data layout (the two research documents propose different bit fields) and put the full generation number and length in the slot header, since an 8-bit epoch wraps.
-  - [ ] Write `docs/wire-format.md` with a byte-offset table and `comptime` / `static_assert` size checks.
+  - [x] Reconcile the blueprint packet table: its offsets give 208 bytes of scale factors but `fp8_e8m0[224]` needs 224 (7,168 / 32). With 224 scales the packet is 7,440 bytes; pad to 7,552 (59 x 128) or shrink the header. Document the choice (Oct 27: padded to 7,552).
+  - [x] Pick one immediate-data layout (the two research documents propose different bit fields) and put the full generation number and length in the slot header, since an 8-bit epoch wraps (Oct 27: slot, kind, gen8, src_rank).
+  - [x] Write `docs/wire-format.md` with a byte-offset table and `comptime` / `static_assert` size checks (Oct 27; `src/wire.zig`, `include/tf_wire.h`, cross-checked in `zig build test`).
   - [ ] Build `tools/ref/` to export a 2-layer, 8-expert synthetic MoE plus golden inputs and outputs in a simple binary format.
 - **Acceptance Criteria**: Done when the Zig and C structs match `docs/wire-format.md` under compile-time size and offset assertions, and `tools/ref` reproducibly regenerates golden files from a fixed seed.
 
@@ -381,9 +381,10 @@ The blueprint PDF contains several figures that the verification PDF shows are n
 | Topic | Blueprint claim | Verified boundary | Plan impact |
 |---|---|---|---|
 | CUDA target | SM120 / `sm_120` | GB10 is compute capability 12.1; target `sm_121` and query at runtime (the 5070 Ti is 12.0) | TASK-05 probe; build both |
-| Tensor Memory | `tcgen05.mma` and TMEM ping-pong tiles | `tcgen05` / TMEM belong to datacenter Blackwell (10.x); the 12.x family uses warp-level block-scaled MMA, so GB10 most likely has no TMEM | TASK-05 confirms; kernels use 12.x-style MMA |
+| Tensor Memory | `tcgen05.mma` and TMEM ping-pong tiles | **Confirmed absent (Oct 27):** ptxas rejects `tcgen05.alloc` for `sm_121a` and `sm_120a` but accepts it for `sm_100a`. Shared memory is 99 KiB per block | Kernels use 12.x-style block-scaled MMA with shared-memory tiles |
 | RDMA link | 400 Gbps ConnectX-7 | DGX Spark lists 200 Gbps | TASK-07 targets are relative to measured `ib_write_bw` |
-| Hardware DE | 539 to 600 GB/s on GB10 | nvCOMP DE FAQ lists B200/B300/GB200/GB300, not GB10 | TASK-13 is measure-first, fail-closed, and `could` |
+| Hardware DE | 539 to 600 GB/s on GB10 | nvCOMP DE FAQ lists B200/B300/GB200/GB300, not GB10. **Confirmed absent (Oct 27):** `MEM_DECOMPRESS_ALGORITHM_MASK = 0` on `gx10-03` | TASK-13 uses software decompression only, and stays `could` |
+| GPUDirect RDMA | NIC writes straight into GPU buffers | `GPU_DIRECT_RDMA_SUPPORTED = 0` on `gx10-03` (Oct 27); the GPU reads pageable host memory, which is the same LPDDR5X | TASK-07 registers host (`Arena`) memory with `ibv_reg_mr`; no `nvidia-peermem` |
 | DE codecs | Bitcomp / GDeflate | Fixed-function DE supports LZ4, Snappy, Deflate; Bitcomp and GDeflate are SM-only | TASK-13 codec choice |
 | TMEM target | NVMe → DE → TMEM | No documented TMEM destination; DE ends in CUDA memory buffers | TASK-13 pipeline |
 | Immediate data | Auto-increments a counter | CQE carries the 32-bit value; CPU must publish readiness | TASK-07 design |

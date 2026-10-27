@@ -1,0 +1,16 @@
+{
+  "name": "NVIDIA GB10",
+  "driver_api_version": 13000,
+  "compute_capability": "12.1",
+  "sm_count": 48,
+  "total_mem_bytes": 130594156544,
+  "free_mem_bytes": 1887068160,
+  "l2_cache_bytes": 25165824,
+  "max_shared_mem_per_block_optin": 101376,
+  "integrated": 1,
+  "pageable_memory_access": 1,
+  "gpu_direct_rdma_supported": 0,
+  "mem_decompress_algorithm_mask": 0,
+  "mem_decompress_max_length": 0,
+  "hw_decompress_capable_pointer": 1
+}

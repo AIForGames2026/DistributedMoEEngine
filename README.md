@@ -76,10 +76,26 @@ Then open the URL Vite prints (usually http://localhost:5173). `npm run build` w
 
 ### Engine
 
-Requires Zig 0.17.0 (pinned in `.zig-version`) on Linux or WSL2.
+Requires Zig 0.17.0 (pinned in `.zig-version`) on Linux or WSL2. One-time setup on WSL2 (Ubuntu 24.04), from the repo root:
+
+```bash
+bash tools/setup/install-zig.sh
+```
+
+```bash
+sudo bash tools/setup/wsl2-packages.sh
+```
+
+The first installs Zig into `~/tools/zig` (checksum verified, no sudo). The second installs liburing, rdma-core, fio, and the CUDA 13.0 toolkit from NVIDIA's WSL repository (the GPU driver comes from Windows).
 
 ```bash
 zig build test --summary all
+```
+
+Toolchain gate (links liburing and the CUDA runtime, then calls both). Add `-During=<prefix>` if liburing is not in the system paths, as on the Sparks:
+
+```bash
+zig build gate
 ```
 
 ```bash
@@ -143,12 +159,15 @@ Design details and verified hardware limits are in [Plan.md, Section 7](Plan.md#
 
 ```
 build.zig            Zig build (run, test); .zig-version pins Zig 0.17.0
-include/             Public C ABI (tensorfold.h)
+include/             Public C ABI (tensorfold.h, tf_wire.h)
 csrc/                C sources behind the ABI (io_uring and verbs code lands here)
-src/                 Zig engine core (entry point, reference GEMM kernels)
+src/                 Zig engine core (entry point, arena allocator, wire format, reference GEMM)
+tests/               Plain C tests of the public ABI
+tools/probe/         Hardware probes (CUDA attributes, tcgen05 assembly check)
+tools/setup/         Zig installer and WSL2 package setup
 web/                 WebGL inspector (Vite + Three.js)
 bench/platform/      Hardware probe results
-docs/                Pitch, images, and (later) wire format, telemetry schema, whitepaper
+docs/                Pitch, wire format, images, and (later) telemetry schema, whitepaper
 Research/            Source research reports
 .github/workflows/   CI (engine tests, web build) and GitHub Pages deploy
 ```

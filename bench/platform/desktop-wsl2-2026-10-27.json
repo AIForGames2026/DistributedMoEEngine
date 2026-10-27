@@ -1,0 +1,81 @@
+{
+  "probe_version": 1,
+  "date": "2026-10-27",
+  "host": {
+    "name": "desktop-wsl2",
+    "os": "Ubuntu 24.04.5 LTS",
+    "kernel": "6.6.87.2-microsoft-standard-WSL2",
+    "arch": "x86_64",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i7-12700K",
+    "cpus": 20,
+    "mem_total_bytes": 33788420096,
+    "mem_available_bytes": 30892990464,
+    "swap_used_bytes": 0,
+    "load_average": [
+      0.0,
+      0.0,
+      0.05859375
+    ],
+    "wsl": true
+  },
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 5070 Ti",
+    "driver_api_version": 13040,
+    "compute_capability": "12.0",
+    "sm_count": 70,
+    "total_mem_bytes": 17066033152,
+    "free_mem_bytes": 15740174336,
+    "l2_cache_bytes": 50331648,
+    "max_shared_mem_per_block_optin": 101376,
+    "integrated": 0,
+    "pageable_memory_access": 0,
+    "gpu_direct_rdma_supported": 0,
+    "mem_decompress_algorithm_mask": 0,
+    "mem_decompress_max_length": 0,
+    "hw_decompress_capable_pointer": 1,
+    "driver_version": "617.42",
+    "utilization_percent": 3
+  },
+  "tcgen05": {
+    "sm_100a": {
+      "assembles": true,
+      "message": ""
+    },
+    "sm_120a": {
+      "assembles": false,
+      "message": "ptxas /tmp/tmp8kcpcczp/sm_120a.ptx, line 14; error   : Instruction 'tcgen05.alloc' not supported on .target 'sm_120a'"
+    }
+  },
+  "rdma": {
+    "ports": []
+  },
+  "nvme": {
+    "drives": [],
+    "filesystem": "ext4",
+    "free_bytes": 1010861047808,
+    "read_bench": {
+      "bs": "256k",
+      "iodepth": 16,
+      "direct": true,
+      "gb_s": 6.59,
+      "p50_us": 602,
+      "p99_us": 1090
+    }
+  },
+  "memory": {
+    "array_mib": 256,
+    "threads": 20,
+    "triad_gb_s": 22.8,
+    "check": 21
+  },
+  "answers": {
+    "1_compute_capability": "12.0",
+    "2_tcgen05_tmem": false,
+    "3_rdma_active_ports": 0,
+    "3_rdma_loopback_us": null,
+    "4_hw_decompress": false,
+    "5_cpu_triad_gb_s": 22.8,
+    "5_nvme_read_gb_s": 6.59,
+    "5_mem_available_bytes": 30892990464
+  }
+}

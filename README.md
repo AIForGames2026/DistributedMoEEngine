@@ -187,7 +187,7 @@ include/             Public C ABI (tensorfold.h, tf_wire.h)
 csrc/                C sources behind the ABI (io_uring reader, CRC32C; verbs code lands here)
 src/                 Zig engine core (entry point, arena, wire format, transport, reference GEMM)
 tests/               Plain C tests of the public ABI
-tools/probe/         Hardware probes (CUDA attributes, tcgen05 assembly check)
+tools/probe/         Platform probe (probe.py writes bench/platform/<host>-<date>.json)
 tools/setup/         Zig installer and WSL2 package setup
 web/                 WebGL inspector (Vite + Three.js)
 bench/platform/      Hardware probe results

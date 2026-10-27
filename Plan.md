@@ -87,7 +87,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-03] `io_uring` O_DIRECT Expert Reader Prototype
 - **Milestone**: PoC (Nov 1)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Create a C wrapper around liburing using `O_DIRECT`, `IORING_SETUP_SQPOLL`, registered files, and registered fixed buffers (`io_uring_prep_read_fixed`) to load dummy 1 GB expert weight files into page-aligned memory. Alignment comes from `statx(STATX_DIOALIGN)`, not hard-coded constants. This task is the test for Risk R3.
 - **Steps (Monday start)**:
@@ -112,7 +112,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-05] Platform Capability Probe (`gx10-03` + Desktop)
 - **Milestone**: PoC (Nov 1)
-- **Status**: To Do
+- **Status**: Review
 - **Priority**: `must` | **Area**: `benchmarking`
 - **Description**: Run a probe on `gx10-03` and the desktop that records the facts later tasks depend on, so design decisions rest on measured hardware instead of datasheet assumptions (Section 7). This task is the test for Risk R2.
 - **Steps (Monday start)**:
@@ -121,7 +121,8 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - [x] Query `CU_DEVICE_ATTRIBUTE_MEM_DECOMPRESS_MAXIMUM_LENGTH` and test a buffer with `CU_POINTER_ATTRIBUTE_IS_HW_DECOMPRESS_CAPABLE` to detect a hardware Decompression Engine (Oct 27: algorithm mask 0, no hardware DE).
   - [x] On `gx10-03`, record `ibdev2netdev` link state and speed for the ConnectX-7 ports (done Oct 26: all four `ACTIVE` at 200 Gb/s, full mesh to `gx10-01` / `gx10-02`).
   - [x] Record the RoCE GID table; run `ib_write_lat` and `ib_write_bw` in loopback (done Oct 26: 3.26 us typical for a 7,552-byte packet, about 106 Gb/s on one device; see `bench/platform/gx10-03-2026-10-26.md`).
-  - [ ] Record `lspci -vv` NVMe link speed and width, free disk space, total and free memory, and a STREAM-style memory bandwidth test; note what the other student's jobs are using.
+  - [x] Record `lspci -vv` NVMe link speed and width, free disk space, total and free memory, and a STREAM-style memory bandwidth test; note what the other student's jobs are using (Oct 27; NVMe link from sysfs, `tools/probe/stream.c`).
+  - **Results (Oct 27)**: `tools/probe/probe.py` writes `bench/platform/gx10-03-2026-10-27.json` and `bench/platform/desktop-wsl2-2026-10-27.json`; each has an `answers` block. `gx10-03`: compute 12.1, no TMEM, 4 ports ACTIVE, RDMA loopback 3.17 us (7,552 B), no hardware DE, CPU triad 126 GB/s, NVMe 7.21 GB/s, 12.3 GB available. Desktop: compute 12.0, no TMEM, no hardware DE, triad 22.8 GB/s. Re-baselined targets: TASK-07 p50 at most 4.8 us (1.5 x 3.17 us) and at least 93 Gb/s (90% of loopback `ib_write_bw` at 7,552 B); TASK-13 uses software decompression only; TASK-15's soak model and buffers must fit in about 12 GB, so it uses an OLMoE-1B-7B-class model with a 4 GB cap per process.
 - **Acceptance Criteria**: Done when `tools/probe` emits a JSON report per machine committed under `bench/platform/`, and the report answers: (1) compute capability on each machine, (2) whether `tcgen05` / TMEM assembles for `sm_121a`, (3) ConnectX-7 port state and whether `ib_write_lat` runs in loopback on `gx10-03`, (4) whether the hardware DE path exists, and (5) measured memory and NVMe bandwidth plus how much memory is realistically free. TASK-07, TASK-13, and TASK-15 targets are re-baselined from these answers.
 
 #### [TASK-06] Wire Format v0 Spec & Reference Golden Harness
@@ -298,9 +299,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|
 | **Backlog** | TASK-07 to TASK-20 (including 15b, 16b) |
 | **To Do** | (none) |
-| **In Progress** | TASK-04, TASK-05, TASK-06 |
-| **Review** | TASK-03 (acceptance checks pass on `gx10-03`; Done once CI is green on `main`) |
-| **Done** | TASK-01, TASK-02 |
+| **In Progress** | TASK-04, TASK-06 |
+| **Review** | TASK-05 (both reports committed; Done once reviewed) |
+| **Done** | TASK-01, TASK-02, TASK-03 |
 
 | Area | Tasks | Count |
 |---|---|---|

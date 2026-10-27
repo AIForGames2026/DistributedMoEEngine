@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const c_sources = [_][]const u8{ "csrc/tf_version.c", "csrc/tf_wire.c" };
+const c_sources = [_][]const u8{ "csrc/tf_version.c", "csrc/tf_wire.c", "csrc/tf_crc32c.c" };
 const c_flags = [_][]const u8{ "-std=c11", "-Wall", "-Wextra", "-Werror" };
 
 pub fn build(b: *std.Build) void {
@@ -35,6 +35,29 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
     test_step.dependOn(&b.addRunArtifact(abi_test).step);
+
+    // Two-process dispatch/combine check (TASK-02).
+    const dispatch_mod = b.createModule(.{
+        .root_source_file = b.path("src/dispatch.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    dispatch_mod.addIncludePath(b.path("include"));
+    dispatch_mod.addCSourceFiles(.{ .files = &c_sources, .flags = &c_flags });
+    const dispatch = b.addExecutable(.{ .name = "dispatch", .root_module = dispatch_mod });
+    b.installArtifact(dispatch);
+    const run_dispatch = b.addRunArtifact(dispatch);
+    run_dispatch.addPassthruArgs();
+    b.step("dispatch", "Run the dispatch/combine check (args after --)").dependOn(&run_dispatch.step);
+
+    // Process start to first kernel call (TASK-01).
+    const startup_mod = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libc = true });
+    startup_mod.addCSourceFile(.{ .file = b.path("tools/bench/startup.c"), .flags = &c_flags });
+    const startup = b.addExecutable(.{ .name = "startup", .root_module = startup_mod });
+    const run_startup = b.addRunArtifact(startup);
+    run_startup.addArtifactArg(exe);
+    b.step("startup", "Time process start to first kernel (median of 20)").dependOn(&run_startup.step);
 
     addGate(b, target, optimize);
 }

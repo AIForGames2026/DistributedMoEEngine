@@ -63,6 +63,10 @@ _Static_assert(offsetof(tf_packet, scales) == 0x1C20, "scales offset");
 _Static_assert(offsetof(tf_packet, pad) == 0x1D00, "pad offset");
 _Static_assert(offsetof(tf_packet, tail) == 0x1D70, "tail offset");
 
+/* CRC32C (Castagnoli) of `len` bytes, hardware accelerated where available.
+ * tf_crc32c("123456789", 9) == 0xE3069283. */
+uint32_t tf_crc32c(const void *data, size_t len);
+
 /* Writes up to n layout values (size, then field offsets, in the order of
  * `layout` in src/wire.zig) and returns how many exist. */
 size_t tf_wire_layout(size_t *out, size_t n);

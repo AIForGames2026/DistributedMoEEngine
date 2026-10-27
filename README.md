@@ -98,6 +98,20 @@ Toolchain gate (links liburing and the CUDA runtime, then calls both). Add `-Dur
 zig build gate
 ```
 
+Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
+
+```bash
+zig build install -Doptimize=ReleaseFast && zig-out/bin/dispatch shm
+```
+
+```bash
+zig-out/bin/dispatch expert --port 7470
+```
+
+```bash
+zig-out/bin/dispatch router --host <expert IPv4> --port 7470
+```
+
 ```bash
 zig build run
 ```
@@ -161,7 +175,7 @@ Design details and verified hardware limits are in [Plan.md, Section 7](Plan.md#
 build.zig            Zig build (run, test); .zig-version pins Zig 0.17.0
 include/             Public C ABI (tensorfold.h, tf_wire.h)
 csrc/                C sources behind the ABI (io_uring and verbs code lands here)
-src/                 Zig engine core (entry point, arena allocator, wire format, reference GEMM)
+src/                 Zig engine core (entry point, arena, wire format, transport, reference GEMM)
 tests/               Plain C tests of the public ABI
 tools/probe/         Hardware probes (CUDA attributes, tcgen05 assembly check)
 tools/setup/         Zig installer and WSL2 package setup

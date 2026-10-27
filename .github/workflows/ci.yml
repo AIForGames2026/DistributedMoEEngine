@@ -18,6 +18,15 @@ jobs:
         run: zig build test --summary all
       - name: Run
         run: zig build run
+      - name: Start-to-first-kernel time (< 5 ms)
+        run: zig build startup -Doptimize=ReleaseFast
+      - name: Dispatch check (shared memory and TCP loopback)
+        run: |
+          zig build install -Doptimize=ReleaseFast
+          zig-out/bin/dispatch shm
+          zig-out/bin/dispatch expert --port 7470 &
+          zig-out/bin/dispatch router --host 127.0.0.1 --port 7470
+          wait
       - name: Cross-compile for DGX Spark (aarch64)
         run: zig build -Dtarget=aarch64-linux-gnu
 

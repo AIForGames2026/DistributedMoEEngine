@@ -23,6 +23,8 @@ int main(void)
     CHECK(tf_wire_layout(layout, 16) == 8);
     CHECK(layout[0] == TF_PACKET_BYTES);
 
+    CHECK(tf_crc32c("123456789", 9) == 0xE3069283u);
+
     unsigned imm = TF_IMM(513, TF_KIND_COMBINE, 0xAB, 5);
     CHECK(imm == (513u | (1u << 16) | (0xABu << 18) | (5u << 26)));
     CHECK(TF_IMM_SLOT(imm) == 513);

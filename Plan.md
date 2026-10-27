@@ -54,7 +54,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-01] Zig Engine Core Skeleton & Toolchain Gate
 - **Milestone**: PoC (Nov 1)
-- **Status**: In Progress
+- **Status**: Review
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Set up the WSL2 and `gx10-03` toolchains, then initialize the C/Zig engine skeleton with a page-aligned arena allocator, a C-ABI boundary for C and CUDA components, and CI. Replaces the CLion `CMakeLists.txt` / `main.cpp` stub with `build.zig`. This task is the test for Risk R1 (Section 7).
 - **Steps (Monday start)**:
@@ -68,19 +68,21 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - [x] Add a naive and a tiled FP32 GEMM on host memory as the correctness reference kernel (Oct 27; tests pass on `gx10-03`).
   - [x] Expose `include/tensorfold.h` and call it from a C test to prove the ABI (Oct 27; `tests/abi_test.c` runs in `zig build test`).
   - [x] GitHub Actions: `zig build test` on x86_64 Linux plus an aarch64 cross-compile (`.github/workflows/ci.yml`).
+  - **Results (Oct 27)**: all acceptance checks pass locally. 1024x1024 tiled GEMM matches naive exactly (0 relative error); `zig build startup` measures process start to first kernel at a median of 0.30 ms on `gx10-03` and 0.93 ms in WSL2 (target < 5 ms); no libpython.
 - **Acceptance Criteria**: Done when the toolchain gate passes, `zig build run` executes a 1024x1024 host matmul that matches the naive reference within 1e-5 relative error, the binary links no Python or libpython, process start to first kernel call is under 5 ms (median of 20 runs on `gx10-03`), and CI is green.
 
 #### [TASK-02] Mock All-to-All Token Dispatcher (Loopback + TCP Transport)
 - **Milestone**: PoC (Nov 1)
-- **Status**: To Do
+- **Status**: Review
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement a `Transport` interface with a shared-memory loopback backend and a TCP backend that simulate token hidden-state dispatch and combine between 2 engine processes. The interface must match what the RDMA backend needs in TASK-07: pre-registered slot rings, slot credits, and a per-message 32-bit immediate tag. The TCP backend is what links the desktop and `gx10-03`, and is the fallback for Risk R2.
 - **Steps (Monday start)**:
-  - [ ] Define the `Transport` vtable: `register_ring`, `post_write_imm`, `poll_completions`, `grant_credit`.
-  - [ ] Implement the shared-memory backend with two processes and fixed-size slot rings.
-  - [ ] Implement the TCP backend with the same semantics (framing carries the immediate value).
-  - [ ] Use the v0 packet layout from TASK-06; stub with a 7,168-byte FP8 payload until that lands.
-  - [ ] Add CRC32C per packet and a full 64-bit generation counter in the slot header.
+  - [x] Define the `Transport` vtable: `post_write_imm`, `post_imm`, `poll_completions`, `slot` (`src/transport.zig`). Credit grants and a goodbye handshake ride on `post_imm`; the backend owns ring registration (Oct 27).
+  - [x] Implement the shared-memory backend with two processes and fixed-size slot rings (`src/transport/shm.zig`, memfd + fork).
+  - [x] Implement the TCP backend with the same semantics (framing carries the immediate value) (`src/transport/tcp.zig`).
+  - [x] Use the v0 packet layout from TASK-06.
+  - [x] Add CRC32C per packet and a full 64-bit generation counter in the slot header (CRC uses ARMv8 / SSE4.2 instructions, `csrc/tf_crc32c.c`).
+  - **Results (Oct 27)**: all acceptance checks pass. 4,096 + 4,096 packets verified over shared memory (1.8 us per token on `gx10-03`), TCP loopback, and TCP from WSL2 to `gx10-03`; credit-withholding test passes; backend chosen by the `dispatch` mode argument. See `bench/transport/2026-10-27.md`.
 - **Acceptance Criteria**: Done when two processes exchange 4,096 token hidden-state packets in each direction (dispatch then combine) over both backends, including TCP between the desktop (WSL2) and `gx10-03`; every packet passes CRC and generation checks; a test that withholds credits proves the sender blocks instead of overwriting an unconsumed slot; and the backend is selected by one build or runtime flag.
 
 #### [TASK-03] `io_uring` O_DIRECT Expert Reader Prototype
@@ -294,9 +296,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | Column | Tasks |
 |---|---|
 | **Backlog** | TASK-07 to TASK-20 (including 15b, 16b) |
-| **To Do** | TASK-02, TASK-03, TASK-05, TASK-06 |
-| **In Progress** | TASK-01, TASK-04 |
-| **Review** | (none) |
+| **To Do** | TASK-03 |
+| **In Progress** | TASK-04, TASK-05, TASK-06 |
+| **Review** | TASK-01, TASK-02 (all acceptance checks pass locally; Done once CI is green on `main`) |
 | **Done** | (none) |
 
 | Area | Tasks | Count |

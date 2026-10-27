@@ -7,11 +7,37 @@ const Arena = @import("arena.zig").Arena;
 // @cImport so the build does not depend on translate-c.
 extern fn tf_version() c_uint;
 
-pub fn main() !void {
+/// Usage: tensorfold [--n N] [--first-kernel]
+///   --n N           GEMM size (default 1024)
+///   --first-kernel  exit right after the first kernel call; used by
+///                   tools/bench/startup.c to time process start to first kernel
+pub fn main(init: std.process.Init) !void {
+    var n: usize = 1024;
+    var first_kernel = false;
+    var it = init.minimal.args.iterate();
+    _ = it.next();
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--first-kernel")) {
+            first_kernel = true;
+        } else if (std.mem.eql(u8, arg, "--n")) {
+            n = try std.fmt.parseInt(usize, it.next() orelse return error.MissingValue, 10);
+        } else {
+            std.debug.print("unknown argument '{s}'\n", .{arg});
+            std.process.exit(2);
+        }
+    }
+
+    if (first_kernel) {
+        var tiny_arena = try Arena.init(3 * 64 * 64 * @sizeOf(f32));
+        defer tiny_arena.deinit();
+        const t = try tiny_arena.alloc(f32, 3 * 64 * 64);
+        gemm.tiled(t[0 .. 64 * 64], t[64 * 64 .. 2 * 64 * 64], t[2 * 64 * 64 ..], 64, 64, 64);
+        return;
+    }
+
     const v = tf_version();
     std.debug.print("TensorFold-Swarm engine v{d}.{d}.{d}\n", .{ v >> 16, (v >> 8) & 0xff, v & 0xff });
 
-    const n = 256;
     var arena = try Arena.init(4 * n * n * @sizeOf(f32));
     defer arena.deinit();
     const a = try arena.alloc(f32, n * n);
@@ -41,6 +67,7 @@ fn fill(buf: []f32, seed: u32) void {
 test {
     _ = @import("arena.zig");
     _ = @import("wire.zig");
+    _ = @import("transport.zig");
 }
 
 test "C ABI reports version 0.1.0" {

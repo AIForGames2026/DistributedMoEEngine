@@ -10,7 +10,12 @@ pub const scale_bytes = hidden_bytes / 32;
 pub const packet_bytes = 7552;
 
 /// CRC32C (Castagnoli), the same CRC used by iSCSI and ext4 metadata.
-const Crc32c = std.hash.crc.@"CRC-32/ISCSI";
+/// Implemented in csrc/tf_crc32c.c with the CPU's CRC instructions.
+extern fn tf_crc32c(data: [*]const u8, len: usize) u32;
+
+pub fn crc32c(bytes: []const u8) u32 {
+    return tf_crc32c(bytes.ptr, bytes.len);
+}
 
 pub const Kind = enum(u2) { dispatch = 0, combine = 1, credit = 2, control = 3 };
 
@@ -45,7 +50,7 @@ pub const Packet = extern struct {
 
     pub fn computeCrc(self: *const Packet) u32 {
         const bytes: *const [packet_bytes]u8 = @ptrCast(self);
-        return Crc32c.hash(bytes[0..@offsetOf(Packet, "tail")]);
+        return crc32c(bytes[0..@offsetOf(Packet, "tail")]);
     }
 
     /// Fills the tail. Call after the header, payload, and scales are final.
@@ -130,8 +135,11 @@ test "immediate round-trips and places fields at the documented bits" {
     try std.testing.expectEqual(imm, Imm.decode(raw));
 }
 
-test "CRC32C matches the standard check value" {
-    try std.testing.expectEqual(@as(u32, 0xE3069283), Crc32c.hash("123456789"));
+test "CRC32C matches the standard check value and Zig's reference" {
+    try std.testing.expectEqual(@as(u32, 0xE3069283), crc32c("123456789"));
+    var buf: [1027]u8 = undefined;
+    for (&buf, 0..) |*b, i| b.* = @truncate(i *% 31 +% 7);
+    try std.testing.expectEqual(std.hash.crc.@"CRC-32/ISCSI".hash(&buf), crc32c(&buf));
 }
 
 test "sealed packet passes; corruption and stale generation are caught" {

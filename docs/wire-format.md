@@ -39,7 +39,7 @@ Sent with every RDMA `WRITE_WITH_IMM`, and carried in the frame header by the TC
 | Bits | Field | Meaning |
 |---|---|---|
 | 0 to 15 | `slot` | Slot index in the receiver's ring (up to 65,536 slots) |
-| 16 to 17 | `kind` | 0 dispatch, 1 combine, 2 credit grant, 3 control |
+| 16 to 17 | `kind` | 0 dispatch, 1 combine, 2 credit grant (`slot` = number of slots freed), 3 control (`slot` = message; 1 = goodbye) |
 | 18 to 25 | `gen8` | Low 8 bits of the slot generation |
 | 26 to 31 | `src_rank` | Sending node (up to 64) |
 

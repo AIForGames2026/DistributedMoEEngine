@@ -38,7 +38,7 @@ Machine time is informal and flexible: there is no booking schedule. Because `gx
 
 | Milestone | Target Date | Core Focus | Git Tag |
 |---|---|---|---|
-| **PoC** | Nov 1, 2026 | Zig engine loop, mock token dispatch, io_uring prototype, platform probe, wire format, & WebGL mockup | `v0.1.0-poc` |
+| **PoC** | Nov 1, 2026 | Zig engine loop, mock token dispatch, io_uring prototype, platform probe, wire format, & WebGL mockup | `v0.1.0-poc` (released Oct 27) |
 | **Alpha** | Nov 8, 2026 | RDMA transport (single-node loopback first), quantized expert loader, & first two-process forward pass | `v0.2.0-alpha` |
 | **Beta** | Nov 22, 2026 | Predictive lookahead router, miss handling, swarm tracker, & (stretch) KV tiering and compressed streaming | `v0.3.0-beta` |
 | **Release Candidate** | Nov 29, 2026 | 1-hour soak on `gx10-03`, cross-machine run with the desktop, recorded-trace visualizer, & capacity guardrails | `v0.9.0-rc1` |
@@ -100,7 +100,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-04] WebGL Token Flow Canvas Mockup
 - **Milestone**: PoC (Nov 1)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `webgl`
 - **Description**: Build a lightweight WebGL 2.0 canvas (Three.js) displaying node topology and animated token packet routing, driven by a synthetic JSON trace whose schema the engine will emit later (TASK-16).
 - **Steps (Monday start)**:
@@ -113,7 +113,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-05] Platform Capability Probe (`gx10-03` + Desktop)
 - **Milestone**: PoC (Nov 1)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `benchmarking`
 - **Description**: Run a probe on `gx10-03` and the desktop that records the facts later tasks depend on, so design decisions rest on measured hardware instead of datasheet assumptions (Section 7). This task is the test for Risk R2.
 - **Steps (Monday start)**:
@@ -128,7 +128,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-06] Wire Format v0 Spec & Reference Golden Harness
 - **Milestone**: PoC (Nov 1)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `architecture`
 - **Description**: Freeze the v0 token packet layout and immediate-data encoding, and build an offline PyTorch reference harness (testing only, never linked into the engine) that produces golden activations and logits for a tiny synthetic MoE. The harness can run on the desktop's 5070 Ti. TASK-02 and TASK-10 depend on it.
 - **Steps (Monday start)**:
@@ -302,8 +302,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | **Backlog** | TASK-07 to TASK-20 (including 15b, 16b) |
 | **To Do** | (none) |
 | **In Progress** | (none) |
-| **Review** | TASK-04, TASK-05, TASK-06 (all acceptance checks pass; Done once CI is green on `main`) |
-| **Done** | TASK-01, TASK-02, TASK-03 |
+| **Review** | (none) |
+| **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27) |
 
 | Area | Tasks | Count |
 |---|---|---|

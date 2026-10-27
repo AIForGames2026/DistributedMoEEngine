@@ -4,7 +4,7 @@
 [![CI](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml)
 [![Pages](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml/badge.svg)](https://aiforgames2026.github.io/DistributedMoEEngine/)
 
-> **Status:** PoC milestone in progress (due Nov 1, 2026).
+> **Status:** PoC complete, released as [`v0.1.0-poc`](https://github.com/AIForGames2026/DistributedMoEEngine/releases/tag/v0.1.0-poc) on Oct 27, 2026. Next: Alpha (due Nov 8, 2026).
 > **Live demo:** https://aiforgames2026.github.io/DistributedMoEEngine/
 > **Project board:** https://github.com/orgs/AIForGames2026/projects/3
 

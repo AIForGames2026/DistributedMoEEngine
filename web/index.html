@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
+    <title>TensorFold-Swarm Inspector</title>
+    <meta name="description" content="WebGL view of Mixture-of-Experts tokens routed to experts across DGX Spark nodes." />
+  </head>
+  <body>
+    <main class="layout">
+      <aside class="panel">
+        <header>
+          <h1>TensorFold-Swarm</h1>
+          <p class="tagline">Distributed MoE inference: watch tokens get routed to experts across machines.</p>
+          <p class="badge">Simulated routing (PoC). Real engine traces replace this in TASK-16.</p>
+        </header>
+
+        <section>
+          <label for="preset">Cluster</label>
+          <select id="preset"></select>
+
+          <label for="topk">Experts per token (top-k): <output id="topk-out"></output></label>
+          <input id="topk" type="range" min="1" max="8" step="1" value="8" />
+
+          <label class="check"><input id="lookahead" type="checkbox" checked /> Lookahead prefetch</label>
+          <label for="recall">Predictor recall: <output id="recall-out"></output></label>
+          <input id="recall" type="range" min="0.5" max="1" step="0.05" value="0.85" />
+
+          <label for="speed">Animation speed: <output id="speed-out"></output></label>
+          <input id="speed" type="range" min="0.25" max="4" step="0.25" value="1" />
+
+          <div class="buttons">
+            <button id="play" type="button">Pause</button>
+            <button id="restart" type="button">Restart</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Live stats <span class="hint">(modeled, not measured)</span></h2>
+          <dl class="stats">
+            <dt>Layer</dt><dd id="stat-layer">…</dd>
+            <dt>Modeled throughput</dt><dd id="stat-tps">…</dd>
+            <dt>Avg layer time</dt><dd id="stat-layer-us">…</dd>
+            <dt>Prefetch hit rate</dt><dd id="stat-hit">…</dd>
+            <dt>Remote dispatches</dt><dd id="stat-remote">…</dd>
+            <dt>Tokens completed</dt><dd id="stat-tokens">…</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h2>Legend</h2>
+          <ul class="legend">
+            <li><i style="background:#7dd3fc"></i>Expert already in memory</li>
+            <li><i style="background:#4ade80"></i>Expert prefetched by lookahead</li>
+            <li><i style="background:#f87171"></i>Miss: expert loaded from NVMe (stall)</li>
+            <li><i style="background:#38bdf8"></i>Packet over RDMA</li>
+            <li><i style="background:#fb923c"></i>Packet over TCP</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Model inputs</h2>
+          <ul id="sources" class="sources"></ul>
+          <p class="hint">Model shape: OLMoE-1B-7B (16 layers, 64 experts, top-8). Drag to orbit, scroll to zoom.</p>
+        </section>
+      </aside>
+      <div id="viewport" class="viewport"></div>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,31 +1,41 @@
 # TensorFold-Swarm (Distributed MoE Inference Engine)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-<!-- Enable once CI and Pages are live:
-[![CI](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AIForGames2026/DistributedMoEEngine/actions)
-[![Demo](https://img.shields.io/badge/demo-GitHub%20Pages-blue)](https://aiforgames2026.github.io/DistributedMoEEngine/)
--->
+[![CI](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml)
+[![Pages](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml/badge.svg)](https://aiforgames2026.github.io/DistributedMoEEngine/)
 
-> **Status:** Pre-PoC (planning baseline Oct 26, 2026). See [Plan.md](Plan.md) for the roadmap and workboard.
-> **Repository:** https://github.com/AIForGames2026/DistributedMoEEngine
+> **Status:** PoC milestone in progress (due Nov 1, 2026).
+> **Live demo:** https://aiforgames2026.github.io/DistributedMoEEngine/
+> **Project board:** https://github.com/orgs/AIForGames2026/projects/3
 
 ## Pitch
 
-TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference engine for frontier-scale sparse Mixture-of-Experts models. Instead of copying weights around, it pins each expert to a node and moves only the tokens: a Zig/C engine core with no Python runtime sends token hidden states node to node over zero-copy RoCE v2 RDMA, straight into the destination's LPDDR5X memory. A lightweight lookahead router predicts which experts the next layers will need, so network transfers and `io_uring` NVMe expert reads start before the layer that needs them, hidden behind the compute already running. Everything the swarm does can be watched live in an in-browser WebGL inspector, with nothing to install.
+TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference engine for frontier-scale sparse Mixture-of-Experts models. Instead of copying weights around, it pins each expert to a node and moves only the tokens: a Zig/C engine core with no Python runtime sends token hidden states node to node over zero-copy RoCE v2 RDMA, straight into the destination's LPDDR5X memory. A lightweight lookahead router predicts which experts the next layers will need, so network transfers and `io_uring` NVMe expert reads start before the layer that needs them, hidden behind the compute already running. Everything the swarm does can be watched in an in-browser WebGL inspector, with nothing to install.
+
+## Proof of Concept
+
+[![TensorFold-Swarm inspector](docs/images/inspector.png)](https://aiforgames2026.github.io/DistributedMoEEngine/)
+
+**Core mechanic: routing tokens to experts across machines.** The WebGL inspector ([open it live](https://aiforgames2026.github.io/DistributedMoEEngine/)) animates a Mixture-of-Experts model (OLMoE-1B-7B shape: 16 layers, 64 experts, top-8) running across the real lab topology:
+
+- Each batch of tokens goes through a top-k gate, layer by layer. Packets fly to whichever node owns each chosen expert (**dispatch**), the experts light up (**compute**), and the results fly back (**combine**).
+- Expert colors show what the lookahead router achieved: already in memory, prefetched in time, or a miss that stalls on NVMe.
+- Switch between the target cluster (three DGX Sparks in a 200 Gb/s RDMA full mesh) and today's setup (one Spark plus the desktop over Tailscale TCP), and adjust top-k, predictor recall, and speed. The modeled throughput updates live.
+- Link latency uses the **measured** RDMA number from `gx10-03` (3.26 µs per 7,552-byte packet, [probe results](bench/platform/gx10-03-2026-10-26.md)). Inputs that are still estimates are labeled as such in the panel.
+
+Engine side: the Zig build compiles the C ABI and reference GEMM kernels, passes its unit tests in CI, and cross-compiles for the Sparks (aarch64). RDMA loopback, io_uring, and the Zig toolchain are verified on `gx10-03`.
 
 ## Links
 
-- [Complete Game/Engine Design Document](docs/GDD.md) *(placeholder)*
-- [Technical Pitch Deck](docs/PITCH.md) *(placeholder)*
-- [Project Plan & Roadmap](Plan.md)
-- [Wire Format Spec](docs/wire-format.md) *(lands with TASK-06)*
-- [Telemetry Schema](docs/telemetry-schema.md) *(lands with TASK-04)*
-- [Architecture Whitepaper](docs/WHITEPAPER.pdf) *(lands with TASK-19)*
-- [Live WebGL Demo](https://aiforgames2026.github.io/DistributedMoEEngine/) *(lands with TASK-18)*
+- [Design Document & Plan](Plan.md): scope, tasks, milestones, risks, and verified hardware constraints
+- [Technical Pitch](docs/PITCH.md)
+- [Project Board](https://github.com/orgs/AIForGames2026/projects/3) and [Milestones](https://github.com/AIForGames2026/DistributedMoEEngine/milestones)
+- [Platform probe: gx10-03](bench/platform/gx10-03-2026-10-26.md)
+- [Research reports](Research/)
 
 ## Team Roles & Members
 
-This is a one-person project built with an AI pair programmer. Luke holds all four roles; the role split shows which hat each part of the work needs.
+This is a one-person project built with an AI pair programmer. Luke holds all four roles and owns every task on the board; the role split shows which hat each part of the work needs.
 
 | Role | Member | Owns |
 |---|---|---|
@@ -41,61 +51,48 @@ This is a one-person project built with an AI pair programmer. Luke holds all fo
 |---|---|
 | **Compute node** | NVIDIA DGX Spark (GB10 Grace Blackwell): 20-core Arm Grace CPU, Blackwell GPU (compute capability 12.1, `sm_121`), 128 GB unified LPDDR5X (~273 GB/s). The project starts on one shared Spark, with up to three as they free up. |
 | **Dev workstation** | RTX 5070 Ti (16 GB, compute capability 12.0), i7-12700K, 64 GB DDR4, running WSL2; also serves as a second node in cross-machine TCP runs |
-| **Interconnect** | NVIDIA ConnectX-7, RoCE v2 (200 Gbps per DGX Spark spec; link speed verified per node by `tools/probe`) |
-| **Storage** | PCIe Gen 5 x4 NVMe, read through `io_uring` + `O_DIRECT` |
+| **Interconnect** | NVIDIA ConnectX-7, RoCE v2, 200 Gb/s; the three Sparks are direct-cabled in a full mesh |
+| **Storage** | PCIe Gen 4 x4 NVMe on `gx10-03`, read through `io_uring` + `O_DIRECT` |
 | **Weight formats** | NVFP4, MXFP4, Q8_0 (GGUF) |
 | **OS** | Linux (aarch64); the engine runs in user space with no Python runtime |
-| **Web inspector** | Any current browser with WebGL 2.0 and WebAssembly (Chrome, Firefox, Safari) |
+| **Web inspector** | Any current browser with WebGL 2.0 (Chrome, Firefox, Edge, Safari) |
 
-## Architecture at a Glance
+## Planned Publish Locations
 
-| Layer | Subsystem | Technology |
-|---|---|---|
-| 4 | Swarm orchestration (node registry, health, expert ownership) | Lumabri / Colibri pure-C tracker daemon |
-| 3 | Scheduling, token batching, lookahead loop, arena allocation | TensorFold engine core (Zig) |
-| 2 | Token transport and weight streaming | libibverbs (RoCE v2), liburing, nvCOMP |
-| 1 | Expert execution kernels | Blackwell FP4 Tensor Core kernels (CUDA / PTX) |
+- **GitHub Pages** (primary): the in-browser WebGL inspector, deployed by CI on every push to `main`.
+- **GitHub Releases**: tagged source releases (`v0.1.0-poc` to `v1.0.0`), operator builds for GB10, and benchmark data bundles.
 
-Four bottlenecks, four answers:
+## Running It
 
-1. **All-to-all network choke**: one-sided RDMA WRITE-with-immediate into pre-registered slot rings, with receiver-granted credits.
-2. **Routing dependency stalls**: a lookahead router predicts expert sets 1 to 2 layers ahead; the native router stays authoritative, so predictions affect only prefetching.
-3. **PCIe streaming bottleneck**: fine-grained expert reads via `io_uring` fixed buffers, with optional lossless compression only where measurements show a win.
-4. **Memory contention**: tiered KV cache keeping attention sink and recent tokens in LPDDR5X and offloading middle context to NVMe.
+### Web inspector
 
-Design details and verified hardware limits are in [Plan.md, Section 6](Plan.md#6-research-verified-constraints--risk-register).
+Requires Node.js 22 or newer.
 
-## Web Delivery & Safety
-
-- The public demo is **100% WebGL 2.0 + WebAssembly, in the browser sandbox**.
-- **Showcase visitors never download** `.exe`, `.dmg`, `.pkg`, `.msi`, or install scripts. CI rejects any such file in the Pages bundle.
-- The hosted demo replays recorded traces. Live mode connects only to an operator-supplied `wss://` endpoint and is never enabled by default.
-- Engine builds on GitHub Releases are for operators running their own GB10 hardware, not for web visitors.
-
-## Repository Layout (planned)
-
-```
-build.zig            Zig build entry (run, test, bench)
-include/             Public C headers (tensorfold.h)
-src/                 Zig engine core: scheduler, arena, gating, lookahead
-csrc/
-  io/                io_uring O_DIRECT reader
-  net/               libibverbs RoCE v2 transport
-kernels/             CUDA / PTX FP4 expert kernels
-tools/
-  probe/             GB10 platform capability probe
-  ref/               PyTorch reference harness (testing only, not linked)
-web/                 WebGL inspector + Wasm telemetry decoder
-bench/               Benchmark scripts and recorded results
-docs/                GDD, pitch deck, wire format, telemetry schema, whitepaper
-Research/            Source research reports
+```bash
+cd web && npm install && npm run dev
 ```
 
-## Getting Started (planned, finalized in TASK-20)
+Then open the URL Vite prints (usually http://localhost:5173). `npm run build` writes the static site to `web/dist/`.
 
-Development happens in WSL2 (Ubuntu 24.04) on Windows or any Linux machine; published benchmarks run only on DGX Spark (GB10) nodes.
+### Engine
 
-### Machine access
+Requires Zig 0.17.0 (pinned in `.zig-version`) on Linux or WSL2.
+
+```bash
+zig build test --summary all
+```
+
+```bash
+zig build run
+```
+
+Cross-compile for the DGX Sparks:
+
+```bash
+zig build -Dtarget=aarch64-linux-gnu
+```
+
+### Lab machine access
 
 Lab machines are reached over Tailscale with SSH keys, never passwords stored in the repo. One-time setup from Git Bash or WSL2:
 
@@ -115,40 +112,50 @@ Host gx10-03
     IdentityFile ~/.ssh/spark_ed25519
 ```
 
-Prerequisites: Linux aarch64 (or x86_64 for CPU-only development), Zig (version pinned in `.zig-version`), CUDA Toolkit with `sm_121` support, `rdma-core`, `liburing`.
+The `admin` account is shared, so all project files on a Spark live in `~/lukehinojosa/` and are activated with `source ~/lukehinojosa/env.sh`.
 
-```bash
-zig build test
-```
+## Architecture at a Glance
 
-```bash
-zig build run
-```
-
-The web inspector builds separately:
-
-```bash
-cd web && npm install && npm run build
-```
-
-## Milestones
-
-| Milestone | Date | Focus |
+| Layer | Subsystem | Technology |
 |---|---|---|
-| PoC | Nov 1, 2026 | Engine loop, mock dispatch, io_uring prototype, platform probe, WebGL mockup |
-| Alpha | Nov 8, 2026 | RDMA transport (single-node loopback first), expert loader, first two-process forward pass |
-| Beta | Nov 22, 2026 | Lookahead router, tiered KV cache, compressed streaming, miss handling |
-| Release Candidate | Nov 29, 2026 | 1-hour soak on one Spark, cross-machine run, multi-Spark stretch, telemetry replay, capacity guardrails |
-| Final | Dec 6, 2026 | Public release, docs freeze, benchmark whitepaper |
+| 4 | Swarm orchestration (node registry, health, expert ownership) | Lumabri / Colibri pure-C tracker daemon |
+| 3 | Scheduling, token batching, lookahead loop, arena allocation | TensorFold engine core (Zig) |
+| 2 | Token transport and weight streaming | libibverbs (RoCE v2), liburing, nvCOMP |
+| 1 | Expert execution kernels | Blackwell FP4 Tensor Core kernels (CUDA / PTX) |
 
-## Planned Publish Locations
+Four bottlenecks, four answers:
 
-- **GitHub Pages**: in-browser WebGL cluster inspector and demo playground.
-- **GitHub Releases**: tagged source releases, operator builds for GB10, and benchmark data bundles.
+1. **All-to-all network choke**: one-sided RDMA WRITE-with-immediate into pre-registered slot rings, with receiver-granted credits.
+2. **Routing dependency stalls**: a lookahead router predicts expert sets 1 to 2 layers ahead; the native router stays authoritative, so predictions affect only prefetching.
+3. **PCIe streaming bottleneck**: fine-grained expert reads via `io_uring` fixed buffers, with optional lossless compression only where measurements show a win.
+4. **Memory contention**: tiered KV cache keeping attention sink and recent tokens in LPDDR5X and offloading middle context to NVMe.
 
-## Contributing
+Design details and verified hardware limits are in [Plan.md, Section 7](Plan.md#7-risks-research-verified-constraints--fallbacks).
 
-Work is tracked on the project board with columns `Backlog`, `To Do`, `In Progress`, `Review`, `Done`. Each task carries an area label (`code`, `architecture`, `benchmarking`, `webgl`, `docs`) and a priority label (`must`, `should`, `could`). See [Plan.md, Section 4](Plan.md#4-workboard-snapshot) for board rules.
+## Web Delivery & Safety
+
+- The demo is **100% WebGL 2.0 + JavaScript in the browser sandbox**, served as static files from GitHub Pages.
+- **Visitors never download** `.exe`, `.dmg`, `.pkg`, `.msi`, or install scripts. The Pages workflow fails the deploy if any such file appears in the bundle.
+- The page sets a Content-Security-Policy and loads no third-party scripts.
+- The hosted demo uses simulated or recorded data only. Live telemetry (TASK-16b) would connect only to an operator-supplied `wss://` endpoint and is never enabled by default.
+
+## Repository Layout
+
+```
+build.zig            Zig build (run, test); .zig-version pins Zig 0.17.0
+include/             Public C ABI (tensorfold.h)
+csrc/                C sources behind the ABI (io_uring and verbs code lands here)
+src/                 Zig engine core (entry point, reference GEMM kernels)
+web/                 WebGL inspector (Vite + Three.js)
+bench/platform/      Hardware probe results
+docs/                Pitch, images, and (later) wire format, telemetry schema, whitepaper
+Research/            Source research reports
+.github/workflows/   CI (engine tests, web build) and GitHub Pages deploy
+```
+
+## Workflow
+
+Work is tracked on the [project board](https://github.com/orgs/AIForGames2026/projects/3) with columns `Backlog`, `To Do`, `In Progress`, `Review`, `Done`. Every task has a priority label (`must`, `should`, `could`), an area label (`code`, `architecture`, `benchmarking`, `webgl`, `docs`), a milestone, and, if it is in a cut line, a `cut-1` or `cut-2` tag. See [Plan.md, Sections 4 and 5](Plan.md#4-scope-tiers--cut-lines) for scope tiers, cut lines, and board rules.
 
 ## Acknowledgements & References
 

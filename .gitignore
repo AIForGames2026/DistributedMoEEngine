@@ -3,6 +3,7 @@
 cmake-build-*/
 .vscode/
 .claude/settings.local.json
+.claude/launch.json
 
 # Zig build output
 .zig-cache/

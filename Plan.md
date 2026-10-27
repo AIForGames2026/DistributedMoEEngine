@@ -3,6 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #22 mirror the tasks below). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -61,12 +62,12 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - [ ] Install WSL2 Ubuntu 24.04 with the NVIDIA WSL CUDA toolkit; install Zig 0.17.0 (pinned in `.zig-version`), `liburing-dev`, `rdma-core`, `libibverbs-dev`, `fio`.
   - [x] Set up key-based SSH to `gx10-03` (README, "Machine access"); done Oct 26 for all three Sparks.
   - [ ] Work through the Zig ramp-up list in Section 9 (about one day).
-  - [ ] Create `build.zig` with `run`, `test`, and `bench` steps; compile one C file (`csrc/hello.c`) and call it from Zig.
+  - [x] Create `build.zig` with `run` and `test` steps; compile one C file (`csrc/tf_version.c`) and call it from Zig (Oct 27; `bench` step still to add).
   - [ ] **Toolchain gate (Wed Oct 28)**: in WSL2, `zig build` compiles C, links `liburing` and `libcudart`, calls `cudaGetDeviceCount` on the 5070 Ti, and cross-compiles for `aarch64-linux-gnu`; the same build runs natively on `gx10-03`.
   - [ ] Implement `Arena` (2 MiB aligned, huge-page aware) with allocation tracing hooks.
-  - [ ] Add a naive and a tiled FP32 GEMM on host memory as the correctness reference kernel.
-  - [ ] Expose `include/tensorfold.h` and call it from a C test to prove the ABI.
-  - [ ] GitHub Actions: `zig build test` on x86_64 Linux plus an aarch64 cross-compile.
+  - [x] Add a naive and a tiled FP32 GEMM on host memory as the correctness reference kernel (Oct 27; tests pass on `gx10-03`).
+  - [ ] Expose `include/tensorfold.h` and call it from a C test to prove the ABI (header exists and is called from Zig; C-side test still to add).
+  - [x] GitHub Actions: `zig build test` on x86_64 Linux plus an aarch64 cross-compile (`.github/workflows/ci.yml`).
 - **Acceptance Criteria**: Done when the toolchain gate passes, `zig build run` executes a 1024x1024 host matmul that matches the naive reference within 1e-5 relative error, the binary links no Python or libpython, process start to first kernel call is under 5 ms (median of 20 runs on `gx10-03`), and CI is green.
 
 #### [TASK-02] Mock All-to-All Token Dispatcher (Loopback + TCP Transport)
@@ -100,10 +101,10 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Priority**: `must` | **Area**: `webgl`
 - **Description**: Build a lightweight WebGL 2.0 canvas (Three.js) displaying node topology and animated token packet routing, driven by a synthetic JSON trace whose schema the engine will emit later (TASK-16).
 - **Steps (Monday start)**:
-  - [ ] Scaffold `web/` as a Vite static site that builds to a folder deployable on GitHub Pages.
+  - [x] Scaffold `web/` as a Vite static site that builds to a folder deployable on GitHub Pages (Oct 27; deployed by `.github/workflows/pages.yml`).
   - [ ] Draft `docs/telemetry-schema.md` v0: node, process, expert, layer, token-batch, and timestamp fields.
-  - [ ] Render 3 nodes (configurable from 2 to 8), per-node expert grids, and instanced token particles moving along edges.
-  - [ ] Add a trace player (play, pause, scrub, speed).
+  - [x] Render the cluster presets (three Sparks, or `gx10-03` + desktop), per-node expert grids, and instanced token packets moving along links, driven by a simulated top-k router (Oct 27).
+  - [ ] Add a trace player (play, pause, and speed done; scrubbing waits for recorded traces).
 - **Acceptance Criteria**: Done when the canvas renders a 10,000-packet synthetic trace at 60 FPS in desktop Chrome and Firefox, opens from a static file server with no plugins, installers, or downloads, and a browser without WebGL2 sees a readable fallback message instead of a blank page.
 
 #### [TASK-05] Platform Capability Probe (`gx10-03` + Desktop)
@@ -270,6 +271,8 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20 |
 | **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. | 12, 13, 15b, 16b |
 
+**If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, and live telemetry.
+
 **Cut lines.** Cuts are applied in order. A cut task moves to `Backlog` with a `cut` note and is listed as future work in TASK-19.
 
 | Cut | Tag | Name | Tasks dropped | Trigger |
@@ -291,8 +294,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | Column | Tasks |
 |---|---|
 | **Backlog** | TASK-07 to TASK-20 (including 15b, 16b) |
-| **To Do** | TASK-02, TASK-03, TASK-04, TASK-05, TASK-06 |
-| **In Progress** | TASK-01 |
+| **To Do** | TASK-02, TASK-03, TASK-05, TASK-06 |
+| **In Progress** | TASK-01, TASK-04 |
 | **Review** | (none) |
 | **Done** | (none) |
 

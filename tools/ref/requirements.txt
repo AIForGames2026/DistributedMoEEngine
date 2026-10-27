@@ -1,0 +1,4 @@
+# tools/ref only (testing). CPU build is enough:
+#   pip install -r tools/ref/requirements.txt --index-url https://download.pytorch.org/whl/cpu
+torch==2.9.0
+numpy

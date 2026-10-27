@@ -68,6 +68,8 @@ test {
     _ = @import("arena.zig");
     _ = @import("wire.zig");
     _ = @import("transport.zig");
+    _ = @import("tfref.zig");
+    _ = @import("moe_ref.zig");
 }
 
 test "C ABI reports version 0.1.0" {

@@ -48,4 +48,6 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - name: Trace generator check (schema v0, 10,000-packet stress trace)
+        run: npm test
       - run: npm run build

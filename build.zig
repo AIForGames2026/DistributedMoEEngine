@@ -15,6 +15,8 @@ pub fn build(b: *std.Build) void {
     });
     engine.addIncludePath(b.path("include"));
     engine.addCSourceFiles(.{ .files = &c_sources, .flags = &c_flags });
+    // Golden outputs from tools/ref/ref_moe.py, embedded for the reference test.
+    engine.addAnonymousImport("moe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/moe_tiny.tfref") });
 
     const exe = b.addExecutable(.{ .name = "tensorfold", .root_module = engine });
     b.installArtifact(exe);

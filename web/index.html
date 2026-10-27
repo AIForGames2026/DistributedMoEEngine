@@ -13,10 +13,20 @@
         <header>
           <h1>TensorFold-Swarm</h1>
           <p class="tagline">Distributed MoE inference: watch tokens get routed to experts across machines.</p>
-          <p class="badge">Simulated routing (PoC). Real engine traces replace this in TASK-16.</p>
+          <p class="badge" id="badge">Loading trace…</p>
         </header>
 
         <section>
+          <label for="source">Trace</label>
+          <select id="source">
+            <option value="live">Synthetic: simulated routing</option>
+            <option value="stress">Stress test: 10,000+ packets</option>
+            <option value="file">Load trace file (.json)…</option>
+          </select>
+          <input id="trace-file" type="file" accept=".json,application/json" hidden />
+          <p id="trace-error" class="error" role="alert"></p>
+          <progress id="trace-progress" max="1" value="0" aria-label="Trace position"></progress>
+
           <label for="preset">Cluster</label>
           <select id="preset"></select>
 
@@ -37,14 +47,15 @@
         </section>
 
         <section>
-          <h2>Live stats <span class="hint">(modeled, not measured)</span></h2>
+          <h2>Trace stats <span class="hint">(modeled for synthetic traces)</span></h2>
           <dl class="stats">
             <dt>Layer</dt><dd id="stat-layer">…</dd>
-            <dt>Modeled throughput</dt><dd id="stat-tps">…</dd>
+            <dt>Throughput</dt><dd id="stat-tps">…</dd>
             <dt>Avg layer time</dt><dd id="stat-layer-us">…</dd>
             <dt>Prefetch hit rate</dt><dd id="stat-hit">…</dd>
-            <dt>Remote dispatches</dt><dd id="stat-remote">…</dd>
-            <dt>Tokens completed</dt><dd id="stat-tokens">…</dd>
+            <dt>Remote packets</dt><dd id="stat-remote">…</dd>
+            <dt>Packets</dt><dd id="stat-packets">…</dd>
+            <dt>Render FPS</dt><dd id="stat-fps">…</dd>
           </dl>
         </section>
 
@@ -62,7 +73,7 @@
         <section>
           <h2>Model inputs</h2>
           <ul id="sources" class="sources"></ul>
-          <p class="hint">Model shape: OLMoE-1B-7B (16 layers, 64 experts, top-8). Drag to orbit, scroll to zoom.</p>
+          <p class="hint">Model shape: OLMoE-1B-7B (16 layers, 64 experts, top-8). Trace format: docs/telemetry-schema.md. Drag to orbit, scroll to zoom.</p>
         </section>
       </aside>
       <div id="viewport" class="viewport"></div>

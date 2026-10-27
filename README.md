@@ -20,10 +20,10 @@ TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference
 
 - Each batch of tokens goes through a top-k gate, layer by layer. Packets fly to whichever node owns each chosen expert (**dispatch**), the experts light up (**compute**), and the results fly back (**combine**).
 - Expert colors show what the lookahead router achieved: already in memory, prefetched in time, or a miss that stalls on NVMe.
-- Switch between the target cluster (three DGX Sparks in a 200 Gb/s RDMA full mesh) and today's setup (one Spark plus the desktop over Tailscale TCP), and adjust top-k, predictor recall, and speed. The modeled throughput updates live.
-- Link latency uses the **measured** RDMA number from `gx10-03` (3.26 µs per 7,552-byte packet, [probe results](bench/platform/gx10-03-2026-10-26.md)). Inputs that are still estimates are labeled as such in the panel.
+- Everything on screen is played from a **telemetry trace** ([schema v0](docs/telemetry-schema.md)), the same format the engine will record in TASK-16. Pick a trace: one generated in the browser from simulated routing (switch between the three-Spark cluster and today's Spark-plus-desktop setup, and adjust top-k and predictor recall), a 10,000-packet stress test, or a `.json` trace file of your own.
+- Timing in synthetic traces uses **measured** numbers: 3.26 µs RDMA per 7,552-byte packet, 7.2 GB/s NVMe reads, and the Tailscale relay's 33 ms round trip ([`bench/`](bench/)). The panel lists every input and its source.
 
-Engine side: the Zig build compiles the C ABI and reference GEMM kernels, passes its unit tests in CI, and cross-compiles for the Sparks (aarch64). RDMA loopback, io_uring, and the Zig toolchain are verified on `gx10-03`.
+Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory and TCP, verified desktop to Spark), the io_uring expert reader (7.2 GB/s, matching `fio`), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and cross-compiles for the Sparks (aarch64).
 
 ## Links
 
@@ -108,6 +108,16 @@ zig build io-test
 zig build io-bench -Doptimize=ReleaseFast && zig-out/bin/uring_bench mk /tmp/expert.bin 1024 && zig-out/bin/uring_bench read /tmp/expert.bin --bs 256 --qd 16 --verify
 ```
 
+Reference harness (TASK-06, testing only): regenerates `tests/golden/moe_tiny.tfref` from a fixed seed, or checks that the committed file still matches. Needs PyTorch (CPU build), for example in a virtual environment:
+
+```bash
+python3 -m venv ~/tools/ref-venv && ~/tools/ref-venv/bin/pip install -r tools/ref/requirements.txt --index-url https://download.pytorch.org/whl/cpu
+```
+
+```bash
+~/tools/ref-venv/bin/python tools/ref/ref_moe.py --check
+```
+
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 
 ```bash
@@ -186,12 +196,13 @@ build.zig            Zig build (run, test); .zig-version pins Zig 0.17.0
 include/             Public C ABI (tensorfold.h, tf_wire.h)
 csrc/                C sources behind the ABI (io_uring reader, CRC32C; verbs code lands here)
 src/                 Zig engine core (entry point, arena, wire format, transport, reference GEMM)
-tests/               Plain C tests of the public ABI
+tests/               Plain C tests of the public ABI; golden/ holds PyTorch reference outputs
 tools/probe/         Platform probe (probe.py writes bench/platform/<host>-<date>.json)
+tools/ref/           PyTorch reference harness for the golden files (testing only)
 tools/setup/         Zig installer and WSL2 package setup
-web/                 WebGL inspector (Vite + Three.js)
+web/                 WebGL inspector (Vite + Three.js) and trace generator
 bench/platform/      Hardware probe results
-docs/                Pitch, wire format, images, and (later) telemetry schema, whitepaper
+docs/                Pitch, wire format, telemetry schema, images, and (later) whitepaper
 Research/            Source research reports
 .github/workflows/   CI (engine tests, web build) and GitHub Pages deploy
 ```

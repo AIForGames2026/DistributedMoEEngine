@@ -21,14 +21,14 @@ export const LINKS = {
   },
   tcp: {
     label: 'TCP over Tailscale',
-    us: 2000,
-    source: 'assumed until TASK-02 measures it',
+    us: 16500,
+    source: 'measured: half of the 33 ms tailscale ping RTT, desktop to gx10-03 via the NYC relay',
   },
 };
 
 export const HW = {
-  memGBps: { value: 273, source: 'DGX Spark spec (LPDDR5X peak)' },
-  nvmeGBps: { value: 6.5, source: 'estimate for PCIe Gen 4 x4, pending TASK-03 fio baseline' },
+  memGBps: { value: 273, source: 'DGX Spark spec (LPDDR5X peak; CPU STREAM triad measured 126 GB/s)' },
+  nvmeGBps: { value: 7.2, source: 'measured: io_uring reader on gx10-03, matches fio' },
 };
 
 export const NODES = {
@@ -112,21 +112,9 @@ export function owner(expert, nodes) {
   return nodes[expert % nodes.length];
 }
 
-// Modeled (not measured) cost of one layer for one batch.
-export function layerCost(events, nodes, linkUs) {
-  const computeUs = EXPERT_BYTES / (HW.memGBps.value * 1e3);
-  const missUs = EXPERT_BYTES / (HW.nvmeGBps.value * 1e3);
-  const perNode = new Map(nodes.map((n) => [n, { active: new Set(), misses: new Set() }]));
-  let comm = 0;
-  for (const ev of events) {
-    const slot = perNode.get(ev.to);
-    slot.active.add(ev.expert);
-    if (ev.status === 'miss') slot.misses.add(ev.expert);
-    if (ev.from !== ev.to) comm = Math.max(comm, 2 * linkUs(ev.from, ev.to));
-  }
-  let worst = 0;
-  for (const { active, misses } of perNode.values()) {
-    worst = Math.max(worst, active.size * computeUs + misses.size * missUs);
-  }
-  return { us: comm + worst, commUs: comm, computeUs, missUs };
+// Transport between two nodes of a preset ('rdma' or 'tcp').
+export function linkTypeOf(preset, a, b) {
+  const link = preset.links.find(([x, y]) => (x === a && y === b) || (x === b && y === a));
+  if (!link) throw new Error(`no link between ${a} and ${b}`);
+  return link[2];
 }

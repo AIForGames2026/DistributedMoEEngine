@@ -100,14 +100,15 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-04] WebGL Token Flow Canvas Mockup
 - **Milestone**: PoC (Nov 1)
-- **Status**: To Do
+- **Status**: Review
 - **Priority**: `must` | **Area**: `webgl`
 - **Description**: Build a lightweight WebGL 2.0 canvas (Three.js) displaying node topology and animated token packet routing, driven by a synthetic JSON trace whose schema the engine will emit later (TASK-16).
 - **Steps (Monday start)**:
   - [x] Scaffold `web/` as a Vite static site that builds to a folder deployable on GitHub Pages (Oct 27; deployed by `.github/workflows/pages.yml`).
-  - [ ] Draft `docs/telemetry-schema.md` v0: node, process, expert, layer, token-batch, and timestamp fields.
+  - [x] Draft `docs/telemetry-schema.md` v0: node, process, expert, layer, token-batch, and timestamp fields (Oct 27; compact positional events `L`, `D`, `X`, `C`, `F`; readers ignore unknown kinds).
   - [x] Render the cluster presets (three Sparks, or `gx10-03` + desktop), per-node expert grids, and instanced token packets moving along links, driven by a simulated top-k router (Oct 27).
-  - [ ] Add a trace player (play, pause, and speed done; scrubbing waits for recorded traces).
+  - [x] Add a trace player (play, pause, and speed done; scrubbing waits for recorded traces) (Oct 27; the renderer now consumes only traces: generated in the browser by `web/src/trace.js`, the 10,000-packet stress trace, or a loaded `.json` file; progress bar; `npm test` checks the generator in CI).
+  - **Results (Oct 27)**: the stress trace (10,984 drawn packets, up to 493 in flight) plays with 0.9 to 2.0 ms of main-thread work per frame during playback (60 FPS needs under 16.7 ms), on the desktop's RTX 5070 Ti in the Claude browser pane. That pane caps `requestAnimationFrame` at 30 FPS, so the frame rate was confirmed by hand on the desktop: **144 FPS on the stress trace** (the HUD's "Render FPS", capped by the 144 Hz display). Files load and validate; bad versions are rejected with a message; no horizontal scroll at 375 px.
 - **Acceptance Criteria**: Done when the canvas renders a 10,000-packet synthetic trace at 60 FPS in desktop Chrome and Firefox, opens from a static file server with no plugins, installers, or downloads, and a browser without WebGL2 sees a readable fallback message instead of a blank page.
 
 #### [TASK-05] Platform Capability Probe (`gx10-03` + Desktop)
@@ -127,14 +128,15 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-06] Wire Format v0 Spec & Reference Golden Harness
 - **Milestone**: PoC (Nov 1)
-- **Status**: To Do
+- **Status**: Review
 - **Priority**: `must` | **Area**: `architecture`
 - **Description**: Freeze the v0 token packet layout and immediate-data encoding, and build an offline PyTorch reference harness (testing only, never linked into the engine) that produces golden activations and logits for a tiny synthetic MoE. The harness can run on the desktop's 5070 Ti. TASK-02 and TASK-10 depend on it.
 - **Steps (Monday start)**:
   - [x] Reconcile the blueprint packet table: its offsets give 208 bytes of scale factors but `fp8_e8m0[224]` needs 224 (7,168 / 32). With 224 scales the packet is 7,440 bytes; pad to 7,552 (59 x 128) or shrink the header. Document the choice (Oct 27: padded to 7,552).
   - [x] Pick one immediate-data layout (the two research documents propose different bit fields) and put the full generation number and length in the slot header, since an 8-bit epoch wraps (Oct 27: slot, kind, gen8, src_rank).
   - [x] Write `docs/wire-format.md` with a byte-offset table and `comptime` / `static_assert` size checks (Oct 27; `src/wire.zig`, `include/tf_wire.h`, cross-checked in `zig build test`).
-  - [ ] Build `tools/ref/` to export a 2-layer, 8-expert synthetic MoE plus golden inputs and outputs in a simple binary format.
+  - [x] Build `tools/ref/` to export a 2-layer, 8-expert synthetic MoE plus golden inputs and outputs in a simple binary format (Oct 27; `tools/ref/ref_moe.py` writes `tests/golden/moe_tiny.tfref`).
+  - **Results (Oct 27)**: all acceptance checks pass. `ref_moe.py --check` regenerates a byte-identical file (PyTorch 2.9.0 CPU, seed 20261101). `src/moe_ref.zig` reruns the model in plain Zig from the embedded golden file and matches PyTorch layer by layer: identical expert routing, values within `torch.allclose` tolerance (rtol 1e-4, atol 1e-5). TASK-10's kernels are checked against the same file.
 - **Acceptance Criteria**: Done when the Zig and C structs match `docs/wire-format.md` under compile-time size and offset assertions, and `tools/ref` reproducibly regenerates golden files from a fixed seed.
 
 ---
@@ -299,8 +301,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|
 | **Backlog** | TASK-07 to TASK-20 (including 15b, 16b) |
 | **To Do** | (none) |
-| **In Progress** | TASK-04, TASK-06 |
-| **Review** | TASK-05 (both reports committed; Done once reviewed) |
+| **In Progress** | (none) |
+| **Review** | TASK-04, TASK-05, TASK-06 (all acceptance checks pass; Done once CI is green on `main`) |
 | **Done** | TASK-01, TASK-02, TASK-03 |
 
 | Area | Tasks | Count |

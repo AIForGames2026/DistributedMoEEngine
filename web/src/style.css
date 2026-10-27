@@ -56,6 +56,10 @@ select {
   color: var(--text);
 }
 input[type="range"] { accent-color: var(--accent); }
+select:disabled, input:disabled { opacity: 0.45; }
+progress { width: 100%; height: 6px; margin-top: 8px; accent-color: var(--accent); }
+.error { margin: 6px 0 0; color: #fca5a5; font-size: 12px; }
+.error:empty { display: none; }
 output { color: var(--accent); font-variant-numeric: tabular-nums; }
 
 .buttons { display: flex; gap: 8px; margin-top: 14px; }

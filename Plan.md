@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #22 mirror the tasks below). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #23 mirror the tasks below; #23 is TASK-21, added after the PoC). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -149,6 +149,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement the RDMA backend of the TASK-02 `Transport` with libibverbs Reliable Connection QPs over ConnectX-7, using one-sided `IBV_WR_RDMA_WRITE_WITH_IMM` into pre-registered remote slot rings. Bootstrap QPN, PSN, GID index, remote address, and rkey from a launcher manifest. The CPU publishes receiver-side readiness after it sees the CQE; the immediate value does not increment memory by itself. With one free node, this is developed and accepted as two processes on `gx10-03` talking through its ConnectX-7 (HCA loopback). The Sparks are already direct-cabled in a full mesh at 200 Gb/s, so real two-node runs need only `gx10-01` or `gx10-02` to be free (TASK-15b).
 - **Acceptance Criteria**: Done when two processes on `gx10-03` pass the TASK-02 test suite unchanged on the RDMA backend, single-packet one-way latency p50 is within 1.5x of loopback `ib_write_lat` for the same size, sustained bandwidth reaches at least 90% of loopback `ib_write_bw`, and no payload slot is reused before its send completion. If TASK-05 shows RDMA loopback cannot run on `gx10-03`, the same suite passes against Soft-RoCE (`rdma_rxe`) and the Emergency cut in Section 4 applies for performance numbers.
+  - **From the PoC (Nov 2)**: keep the ordered goodbye (rank 0 first; rank 1 tears down after rank 0), since the relayed TCP path showed that close-time ordering cannot be assumed; and keep CRC32C on the hardware instructions (or offload it), because software CRC dominated per-token cost on ARM.
 
 #### [TASK-08] Quantized Expert Loader (GGUF + NVFP4)
 - **Milestone**: Alpha (Nov 8)
@@ -159,10 +160,18 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-10] Top-k Expert Gating & First Two-Process Forward Pass
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Backlog
+- **Status**: In Progress
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement the gating router (softmax over top-k logits, starting with k = 1 and generalizing to k = 8) that sends each token to local or remote experts, runs the expert FFN, and combines weighted results. Combine writes each expert contribution to its own slot and reduces locally; overlapping RDMA writes do not sum. Expert placement comes from a static manifest file until TASK-09 lands.
 - **Acceptance Criteria**: Done when a token sequence completes a forward pass split across 2 engine processes (on `gx10-03` over RDMA, and between the desktop and `gx10-03` over TCP) for the TASK-06 synthetic MoE and one small public MoE (for example OLMoE-1B-7B), with output logits matching the PyTorch reference within a documented tolerance (target: max abs error at or below 1e-2 in FP8 paths) and identical top-1 next tokens on the golden prompts.
+  - **Progress (Nov 2, PoC core check)**: the TASK-06 synthetic MoE runs split across 2 processes on CPU (`dispatch --moe`: rank 0 routes, rank 1 owns every expert) over shared memory, TCP loopback, and TCP desktop to `gx10-03`. Routing identical, logits max abs error 7.15e-7, top-1 16/16 on every path. Left: GPU kernels, the RDMA path (needs TASK-07), and OLMoE-1B-7B (needs TASK-08). See `POC.md` and `bench/transport/2026-11-02.md`.
+
+#### [TASK-21] Direct Desktop-to-Spark Network Path
+- **Milestone**: Alpha (Nov 8)
+- **Status**: Backlog
+- **Priority**: `should` | **Area**: `benchmarking`
+- **Description**: Added after the PoC. Every desktop-to-`gx10-03` run so far went through Tailscale's DERP relay in NYC (33 ms round trip, about 5 ms per token pipelined), so cross-machine numbers measure the relay, not the transport. Find a direct path: Tailscale direct UDP (41641) through the campus network, a subnet route, or another link the lab allows.
+- **Acceptance Criteria**: Done when `tailscale ping` (or the chosen route) reports a direct connection and `dispatch router --packets 4096` desktop to `gx10-03` is re-measured and recorded in `bench/transport/`; if no direct path is possible, the reason is recorded and TASK-10 and TASK-15 label their cross-machine numbers as relay-bound.
 
 ---
 
@@ -274,7 +283,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 | Tier | Label | Meaning | Tasks |
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, shown in a browser replay. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 18, 19 |
-| **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20 |
+| **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
 | **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. | 12, 13, 15b, 16b |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, and live telemetry.
@@ -299,24 +308,24 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-07 to TASK-20 (including 15b, 16b) |
-| **To Do** | (none) |
-| **In Progress** | (none) |
+| **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b) |
+| **To Do** | TASK-07, TASK-08, TASK-21 |
+| **In Progress** | TASK-10 (synthetic two-process CPU slice passes) |
 | **Review** | (none) |
-| **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27) |
+| **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
 | `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17 | 11 |
 | `architecture` | 06, 09 | 2 |
-| `benchmarking` | 05, 15, 15b | 3 |
+| `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b | 3 |
 | `docs` | 18, 19, 20 | 3 |
 
 | Priority | Count | Cut tag |
 |---|---|---|
 | `must` | 13 | none |
-| `should` | 5 | 4 tagged `cut-2` |
+| `should` | 6 | 4 tagged `cut-2` |
 | `could` | 4 | all tagged `cut-1` |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.

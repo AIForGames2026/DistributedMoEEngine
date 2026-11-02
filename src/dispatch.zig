@@ -2,14 +2,21 @@
 //! dispatches N token packets to rank 1 (expert), which verifies each one and
 //! sends a combine packet back; rank 0 verifies every combine.
 //!
-//!   dispatch shm [--packets N] [--slots S]          both ranks, forked
-//!   dispatch expert --port P [--packets N] [--slots S]   TCP server, rank 1
-//!   dispatch router --host IP --port P [--packets N] [--slots S]
+//! With `--moe`, the packets carry a real model instead of test patterns: the
+//! tiny MoE from tests/golden is split so rank 0 owns the norms, router, and
+//! LM head, and rank 1 owns every expert FFN. Rank 0 checks the routing and
+//! final logits against the PyTorch goldens (the PoC's pass/fail check).
+//!
+//!   dispatch shm [--packets N] [--slots S] [--moe]        both ranks, forked
+//!   dispatch expert --port P [--packets N] [--slots S] [--moe]   TCP server, rank 1
+//!   dispatch router --host IP --port P [--packets N] [--slots S] [--moe]
 const std = @import("std");
 const c = std.c;
 const wire = @import("wire.zig");
 const transport = @import("transport.zig");
 const Arena = @import("arena.zig").Arena;
+const tfref = @import("tfref.zig");
+const moe_ref = @import("moe_ref.zig");
 
 const Options = struct {
     mode: []const u8 = "",
@@ -17,6 +24,7 @@ const Options = struct {
     slots: u16 = 64,
     host: []const u8 = "127.0.0.1",
     port: u16 = 7470,
+    moe: bool = false,
 };
 
 const combine_salt = 1;
@@ -24,9 +32,9 @@ const combine_salt = 1;
 pub fn main(init: std.process.Init) !void {
     const opts = parseArgs(init) catch {
         std.debug.print(
-            \\usage: dispatch shm [--packets N] [--slots S]
-            \\       dispatch expert --port P [--packets N] [--slots S]
-            \\       dispatch router --host IP --port P [--packets N] [--slots S]
+            \\usage: dispatch shm [--packets N] [--slots S] [--moe]
+            \\       dispatch expert --port P [--packets N] [--slots S] [--moe]
+            \\       dispatch router --host IP --port P [--packets N] [--slots S] [--moe]
             \\
         , .{});
         std.process.exit(2);
@@ -44,8 +52,9 @@ pub fn main(init: std.process.Init) !void {
         const fd = try transport.tcp.acceptOn(l.fd);
         _ = c.close(l.fd);
         var link = transport.tcp.Link.init(fd, ring);
-        defer link.close();
+        defer link.closeAfterPeer();
         var ep = transport.Endpoint.init(link.backend(), 1, opts.slots);
+        if (opts.moe) return moeExpert(&ep);
         try expert(&ep, opts.packets);
         std.debug.print("expert: verified {d} dispatch packets, sent {d} combines\n", .{ ep.stats.received, ep.stats.sent });
     } else if (std.mem.eql(u8, opts.mode, "router")) {
@@ -53,6 +62,7 @@ pub fn main(init: std.process.Init) !void {
         var link = transport.tcp.Link.init(fd, ring);
         defer link.close();
         var ep = transport.Endpoint.init(link.backend(), 0, opts.slots);
+        if (opts.moe) return moeRouter(&ep, "tcp");
         try routerReport(&ep, opts, "tcp");
     } else {
         std.debug.print("unknown mode '{s}'\n", .{opts.mode});
@@ -66,6 +76,10 @@ fn parseArgs(init: std.process.Init) !Options {
     _ = it.next();
     opts.mode = it.next() orelse return error.Usage;
     while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--moe")) {
+            opts.moe = true;
+            continue;
+        }
         const value = it.next() orelse return error.Usage;
         if (std.mem.eql(u8, arg, "--packets")) {
             opts.packets = try std.fmt.parseInt(u64, value, 10);
@@ -89,7 +103,7 @@ fn runShm(opts: Options) !void {
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) {
         var ep = transport.Endpoint.init(pair.side(1).backend(), 1, opts.slots);
-        expert(&ep, opts.packets) catch |err| {
+        (if (opts.moe) moeExpert(&ep) else expert(&ep, opts.packets)) catch |err| {
             std.debug.print("expert: {t}\n", .{err});
             c._exit(1);
         };
@@ -97,7 +111,7 @@ fn runShm(opts: Options) !void {
     }
 
     var ep = transport.Endpoint.init(pair.side(0).backend(), 0, opts.slots);
-    const result = routerReport(&ep, opts, "shm");
+    const result = if (opts.moe) moeRouter(&ep, "shm") else routerReport(&ep, opts, "shm");
     var status: c_int = 0;
     _ = c.waitpid(pid, &status, 0);
     try result;
@@ -159,13 +173,160 @@ fn routerReport(ep: *transport.Endpoint, opts: Options, name: []const u8) !void 
         "{s}: {d} dispatch + {d} combine packets verified (CRC, generation, payload), {d} slots\n" ++
             "{s}: {d:.1} ms, {d:.2} us per token (pipelined), {d:.2} Gb/s both directions\n",
         .{
-            name,                                              opts.packets,
-            opts.packets,                                      opts.slots,
-            name,                                              @as(f64, @floatFromInt(ns)) / 1e6,
-            @as(f64, @floatFromInt(ns)) / 1e3 / @as(f64, @floatFromInt(opts.packets)),
-            @as(f64, @floatFromInt(bytes * 8)) / @as(f64, @floatFromInt(ns)),
+            name,                                                                      opts.packets,
+            opts.packets,                                                              opts.slots,
+            name,                                                                      @as(f64, @floatFromInt(ns)) / 1e6,
+            @as(f64, @floatFromInt(ns)) / 1e3 / @as(f64, @floatFromInt(opts.packets)), @as(f64, @floatFromInt(bytes * 8)) / @as(f64, @floatFromInt(ns)),
         },
     );
+}
+
+const golden = @embedFile("moe_tiny.tfref");
+
+fn payloadF32(pkt: *wire.Packet, n: usize) []align(1) f32 {
+    return std.mem.bytesAsSlice(f32, pkt.payload[0 .. n * @sizeOf(f32)]);
+}
+
+/// Rank 1 in `--moe` mode: owns every expert's FFN weights. Each dispatch
+/// carries one token's normalized hidden state for one (layer, expert); the
+/// combine carries that expert's output back, unweighted.
+fn moeExpert(ep: *transport.Endpoint) !void {
+    const f = try tfref.File.parse(golden);
+    const cfg = try moe_ref.Config.fromFile(f);
+    const d = cfg.d_model;
+    var weights: [16]moe_ref.Weights = undefined;
+    if (cfg.layers > weights.len or d > 64 or cfg.d_ff > 4096) return error.ModelTooBig;
+    for (weights[0..cfg.layers], 0..) |*w, l| w.* = try moe_ref.Weights.load(f, l);
+
+    var out = std.mem.zeroes(wire.Packet);
+    var n: [64]f32 = undefined;
+    var b: [64]f32 = undefined;
+    const total = cfg.layers * cfg.tokens * cfg.top_k;
+    var done: usize = 0;
+    errdefer std.debug.print("expert: failed after {d} of {d} expert calls\n", .{ done, total });
+    while (done < total) : (done += 1) {
+        const r = try ep.recv();
+        const hdr = r.packet.header;
+        if (r.kind != .dispatch or hdr.layer >= cfg.layers or hdr.expert >= cfg.experts or
+            hdr.payload_len != d * @sizeOf(f32)) return error.BadDispatch;
+        for (n[0..d], payloadF32(@constCast(r.packet), d)) |*x, v| x.* = v;
+        try ep.release();
+        moe_ref.expert(cfg, weights[hdr.layer], hdr.expert, n[0..d], b[0..d]);
+        out.header = hdr;
+        for (payloadF32(&out, d), b[0..d]) |*x, v| x.* = v;
+        try ep.send(&out, .combine);
+    }
+    try ep.finish();
+    std.debug.print("expert: ran {d} expert FFNs ({d} layers x {d} tokens x top-{d}) for rank 0\n", .{ total, cfg.layers, cfg.tokens, cfg.top_k });
+}
+
+/// Rank 0 in `--moe` mode: norms, router, and LM head. Per layer, routes every
+/// token, dispatches top-k packets, then folds the combines back in arrival
+/// order (the same order the single-process reference sums them in).
+fn moeRouter(ep: *transport.Endpoint, name: []const u8) !void {
+    const f = try tfref.File.parse(golden);
+    const cfg = try moe_ref.Config.fromFile(f);
+    const d = cfg.d_model;
+    const k = cfg.top_k;
+    const per_layer = cfg.tokens * k;
+    // Every dispatch of a layer goes out before any combine is read.
+    if (per_layer > ep.slots) return error.NotEnoughSlots;
+
+    const max_tokens = 64;
+    if (cfg.tokens > max_tokens or d > 64 or cfg.experts > 64 or k > 8 or cfg.vocab > 256) return error.ModelTooBig;
+    var h: [max_tokens * 64]f32 = undefined;
+    var moe: [max_tokens * 64]f32 = undefined;
+    var n: [64]f32 = undefined;
+    var logits: [64]f32 = undefined;
+    var idx: [max_tokens * 8]i32 = undefined;
+    var wts: [max_tokens * 8]f32 = undefined;
+    for (h[0 .. cfg.tokens * d], (try f.get("input")).f32s()) |*x, v| x.* = v;
+
+    var pkt = std.mem.zeroes(wire.Packet);
+    var name_buf: [64]u8 = undefined;
+    const start = nowNs();
+    var ok = true;
+    for (0..cfg.layers) |l| {
+        const w = try moe_ref.Weights.load(f, l);
+        const layer_start = nowNs();
+        for (0..cfg.tokens) |t| {
+            const ti = idx[t * k ..][0..k];
+            const tw = wts[t * k ..][0..k];
+            moe_ref.route(cfg, w, h[t * d ..][0..d], n[0..d], logits[0..cfg.experts], ti, tw);
+            for (ti, tw) |e, p| {
+                pkt.header = .{ .token_id = t, .generation = 0, .src_rank = 0, .layer = @intCast(l), .expert = @intCast(e), .flags = 0, .gate_weight = p, .payload_len = @intCast(d * @sizeOf(f32)) };
+                for (payloadF32(&pkt, d), n[0..d]) |*x, v| x.* = v;
+                try ep.send(&pkt, .dispatch);
+            }
+        }
+        @memset(moe[0 .. cfg.tokens * d], 0);
+        for (0..per_layer) |i| {
+            const r = try ep.recv();
+            const hdr = r.packet.header;
+            const t = i / k;
+            // Combines must come back for exactly the (token, expert) we sent.
+            if (r.kind != .combine or hdr.token_id != t or hdr.layer != l or
+                hdr.expert != idx[i] or hdr.payload_len != d * @sizeOf(f32)) return error.BadCombine;
+            for (moe[t * d ..][0..d], payloadF32(@constCast(r.packet), d)) |*m, v| m.* += wts[i] * v;
+            try ep.release();
+        }
+        try ep.flushCredits();
+        for (h[0 .. cfg.tokens * d], moe[0 .. cfg.tokens * d]) |*x, m| x.* += m;
+        const layer_ns = nowNs() - layer_start;
+
+        const want_idx = (try f.get(try std.fmt.bufPrint(&name_buf, "golden.layer{d}.topk_idx", .{l}))).i32s();
+        const want_h = (try f.get(try std.fmt.bufPrint(&name_buf, "golden.layer{d}.hidden", .{l}))).f32s();
+        var routing_ok = want_idx.len == per_layer;
+        for (idx[0..per_layer], want_idx) |got, want_e| routing_ok = routing_ok and got == want_e;
+        const hidden_ok = moe_ref.allClose(h[0 .. cfg.tokens * d], want_h);
+        ok = ok and routing_ok and hidden_ok;
+        std.debug.print("{s}: layer {d}: {d} dispatch + {d} combine, routing {s}, hidden max err {e:.2} ({s}), {d:.2} ms\n", .{
+            name,
+            l,
+            per_layer,
+            per_layer,
+            if (routing_ok) "matches" else "DIFFERS",
+            maxErr(h[0 .. cfg.tokens * d], want_h),
+            if (hidden_ok) "ok" else "FAIL",
+            @as(f64, @floatFromInt(layer_ns)) / 1e6,
+        });
+    }
+    try ep.finish();
+
+    var out_logits: [max_tokens * 256]f32 = undefined;
+    const ol = out_logits[0 .. cfg.tokens * cfg.vocab];
+    try moe_ref.head(cfg, f, h[0 .. cfg.tokens * d], ol);
+    const want = (try f.get("golden.logits")).f32s();
+    const logits_ok = moe_ref.allClose(ol, want);
+    ok = ok and logits_ok;
+    var argmax_match: usize = 0;
+    for (0..cfg.tokens) |t| {
+        if (argmax(ol[t * cfg.vocab ..][0..cfg.vocab]) == argmax(want[t * cfg.vocab ..][0..cfg.vocab])) argmax_match += 1;
+    }
+    std.debug.print("{s}: logits vs PyTorch: max err {e:.2} ({s}), next-token argmax {d}/{d}, {d:.2} ms total\n", .{
+        name,
+        maxErr(ol, want),
+        if (logits_ok) "ok" else "FAIL",
+        argmax_match,
+        cfg.tokens,
+        @as(f64, @floatFromInt(nowNs() - start)) / 1e6,
+    });
+    if (!ok) return error.MoeMismatch;
+    std.debug.print("{s}: PASS: two-process MoE matches the PyTorch reference\n", .{name});
+}
+
+fn maxErr(x: []const f32, y: []align(1) const f32) f32 {
+    var m: f32 = 0;
+    for (x, y) |u, v| m = @max(m, @abs(u - v));
+    return m;
+}
+
+fn argmax(x: []align(1) const f32) usize {
+    var best: usize = 0;
+    for (x, 0..) |v, i| {
+        if (v > x[best]) best = i;
+    }
+    return best;
 }
 
 fn nowNs() u64 {

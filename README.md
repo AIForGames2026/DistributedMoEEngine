@@ -4,8 +4,10 @@
 [![CI](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml)
 [![Pages](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml/badge.svg)](https://aiforgames2026.github.io/DistributedMoEEngine/)
 
-> **Status:** PoC complete, released as [`v0.1.0-poc`](https://github.com/AIForGames2026/DistributedMoEEngine/releases/tag/v0.1.0-poc) on Oct 27, 2026. Next: Alpha (due Nov 8, 2026).
+> **Status:** PoC **passed** ([POC.md](POC.md): assumption, criteria, evidence, scope update). Next: Alpha (due Nov 8, 2026).
 > **Live demo:** https://aiforgames2026.github.io/DistributedMoEEngine/
+> **PoC demo video:** [watch (2 min)](VIDEO_LINK_HERE)
+> **Engine builds:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) (Linux x86_64 and aarch64)
 > **Project board:** https://github.com/orgs/AIForGames2026/projects/3
 
 ## Pitch
@@ -22,6 +24,8 @@ TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference
 - Expert colors show what the lookahead router achieved: already in memory, prefetched in time, or a miss that stalls on NVMe.
 - Everything on screen is played from a **telemetry trace** ([schema v0](docs/telemetry-schema.md)), the same format the engine will record in TASK-16. Pick a trace: one generated in the browser from simulated routing (switch between the three-Spark cluster and today's Spark-plus-desktop setup, and adjust top-k and predictor recall), a 10,000-packet stress test, or a `.json` trace file of your own.
 - Timing in synthetic traces uses **measured** numbers: 3.26 µs RDMA per 7,552-byte packet, 7.2 GB/s NVMe reads, and the Tailscale relay's 33 ms round trip ([`bench/`](bench/)). The panel lists every input and its source.
+
+**The PoC check:** `dispatch --moe` splits a real (tiny, seeded) MoE across two engine processes: one runs the router, the other runs every expert, and they talk only through 7,552-byte wire-format packets. Output logits match PyTorch to 7.2e-7 with identical routing and top-1 tokens, over shared memory, TCP loopback, and desktop to Spark. See [POC.md](POC.md).
 
 Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory and TCP, verified desktop to Spark), the io_uring expert reader (7.2 GB/s, matching `fio`), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and cross-compiles for the Sparks (aarch64).
 
@@ -132,6 +136,12 @@ zig-out/bin/dispatch expert --port 7470
 zig-out/bin/dispatch router --host <expert IPv4> --port 7470
 ```
 
+The PoC check: add `--moe` to any of the three commands above to run the tiny MoE split across the two processes and compare against the PyTorch goldens (prints PASS, or exits non-zero).
+
+```bash
+zig-out/bin/dispatch shm --moe
+```
+
 ```bash
 zig build run
 ```
@@ -139,8 +149,10 @@ zig build run
 Cross-compile for the DGX Sparks:
 
 ```bash
-zig build -Dtarget=aarch64-linux-gnu
+zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
 ```
+
+`-Dcpu=cortex_a78` keeps the ARMv8 CRC32C instructions (GB10's cores support them); without it the baseline target falls back to software CRC, about 14x slower per token.
 
 ### Lab machine access
 

@@ -51,85 +51,115 @@ pub const LayerOut = struct {
     moe_out: []f32,
 };
 
-/// Runs MoE block `l` on `h` ([tokens, d_model]) in place.
-pub fn layer(cfg: Config, f: tfref.File, l: usize, h: []f32, out: LayerOut) !void {
-    var name_buf: [64]u8 = undefined;
-    const w = struct {
-        fn get(file: tfref.File, buf: []u8, li: usize, field: []const u8) ![]align(1) const f32 {
-            return (try file.get(try std.fmt.bufPrint(buf, "layer{d}.{s}", .{ li, field }))).f32s();
-        }
-    };
-    const norm_w = try w.get(f, &name_buf, l, "norm_w");
-    const router_w = try w.get(f, &name_buf, l, "router_w");
-    const gate = try w.get(f, &name_buf, l, "gate");
-    const up = try w.get(f, &name_buf, l, "up");
-    const down = try w.get(f, &name_buf, l, "down");
+/// One layer's weights, as slices into the .tfref file.
+pub const Weights = struct {
+    norm_w: []align(1) const f32,
+    router_w: []align(1) const f32,
+    gate: []align(1) const f32,
+    up: []align(1) const f32,
+    down: []align(1) const f32,
 
+    pub fn load(f: tfref.File, l: usize) !Weights {
+        var buf: [64]u8 = undefined;
+        const get = struct {
+            fn get(file: tfref.File, b: []u8, li: usize, field: []const u8) ![]align(1) const f32 {
+                return (try file.get(try std.fmt.bufPrint(b, "layer{d}.{s}", .{ li, field }))).f32s();
+            }
+        }.get;
+        return .{
+            .norm_w = try get(f, &buf, l, "norm_w"),
+            .router_w = try get(f, &buf, l, "router_w"),
+            .gate = try get(f, &buf, l, "gate"),
+            .up = try get(f, &buf, l, "up"),
+            .down = try get(f, &buf, l, "down"),
+        };
+    }
+};
+
+/// Router side of one token: normalizes `row` into `n`, writes the router
+/// logits, and picks the top-k experts (indices and softmax weights).
+pub fn route(cfg: Config, w: Weights, row: []const f32, n: []f32, logits: []f32, idx: []i32, wts: []f32) void {
+    const d = cfg.d_model;
+    const e_count = cfg.experts;
+    std.debug.assert(d <= max_dim and e_count <= max_experts);
+    rmsnorm(row, w.norm_w, cfg.eps, n[0..d]);
+
+    for (logits, 0..) |*lg, e| {
+        var acc: f32 = 0;
+        for (0..d) |i| acc += n[i] * w.router_w[i * e_count + e];
+        lg.* = acc;
+    }
+    var probs: [max_experts]f32 = undefined;
+    var max: f32 = -std.math.inf(f32);
+    for (logits) |lg| max = @max(max, lg);
+    var sum: f32 = 0;
+    for (probs[0..e_count], logits) |*p, lg| {
+        p.* = @exp(lg - max);
+        sum += p.*;
+    }
+    for (probs[0..e_count]) |*p| p.* /= sum;
+
+    // Top-k by repeated selection, descending; ties go to the lower index.
+    var taken: [max_experts]bool = @splat(false);
+    for (0..cfg.top_k) |j| {
+        var best: usize = 0;
+        var best_p: f32 = -1;
+        for (probs[0..e_count], 0..) |p, e| {
+            if (!taken[e] and p > best_p) {
+                best = e;
+                best_p = p;
+            }
+        }
+        taken[best] = true;
+        idx[j] = @intCast(best);
+        wts[j] = best_p;
+    }
+}
+
+/// Expert side: out = (silu(n @ gate[e]) * (n @ up[e])) @ down[e].
+pub fn expert(cfg: Config, w: Weights, e: usize, n: []const f32, out: []f32) void {
     const d = cfg.d_model;
     const ff = cfg.d_ff;
-    const e_count = cfg.experts;
-    std.debug.assert(d <= max_dim and ff <= max_dim and e_count <= max_experts);
-
-    var n: [max_dim]f32 = undefined;
+    std.debug.assert(ff <= max_dim);
+    const g_e = w.gate[e * d * ff ..][0 .. d * ff];
+    const u_e = w.up[e * d * ff ..][0 .. d * ff];
+    const dn_e = w.down[e * ff * d ..][0 .. ff * d];
     var a: [max_dim]f32 = undefined;
+    for (0..ff) |k| {
+        var ga: f32 = 0;
+        var ub: f32 = 0;
+        for (0..d) |i| {
+            ga += n[i] * g_e[i * ff + k];
+            ub += n[i] * u_e[i * ff + k];
+        }
+        a[k] = silu(ga) * ub;
+    }
+    for (0..d) |i| {
+        var acc: f32 = 0;
+        for (0..ff) |k| acc += a[k] * dn_e[k * d + i];
+        out[i] = acc;
+    }
+}
+
+/// Runs MoE block `l` on `h` ([tokens, d_model]) in place.
+pub fn layer(cfg: Config, f: tfref.File, l: usize, h: []f32, out: LayerOut) !void {
+    const w = try Weights.load(f, l);
+    const d = cfg.d_model;
+    const k = cfg.top_k;
+    var n: [max_dim]f32 = undefined;
     var b: [max_dim]f32 = undefined;
-    var probs: [max_experts]f32 = undefined;
 
     for (0..cfg.tokens) |t| {
         const row = h[t * d ..][0..d];
-        rmsnorm(row, norm_w, cfg.eps, n[0..d]);
+        const idx = out.topk_idx[t * k ..][0..k];
+        const wts = out.topk_w[t * k ..][0..k];
+        route(cfg, w, row, n[0..d], out.router_logits[t * cfg.experts ..][0..cfg.experts], idx, wts);
 
-        const logits = out.router_logits[t * e_count ..][0..e_count];
-        for (logits, 0..) |*lg, e| {
-            var acc: f32 = 0;
-            for (0..d) |i| acc += n[i] * router_w[i * e_count + e];
-            lg.* = acc;
-        }
-        var max: f32 = -std.math.inf(f32);
-        for (logits) |lg| max = @max(max, lg);
-        var sum: f32 = 0;
-        for (probs[0..e_count], logits) |*p, lg| {
-            p.* = @exp(lg - max);
-            sum += p.*;
-        }
-        for (probs[0..e_count]) |*p| p.* /= sum;
-
-        // Top-k by repeated selection, descending; ties go to the lower index.
-        var taken: [max_experts]bool = @splat(false);
         const moe = out.moe_out[t * d ..][0..d];
         @memset(moe, 0);
-        for (0..cfg.top_k) |j| {
-            var best: usize = 0;
-            var best_p: f32 = -1;
-            for (probs[0..e_count], 0..) |p, e| {
-                if (!taken[e] and p > best_p) {
-                    best = e;
-                    best_p = p;
-                }
-            }
-            taken[best] = true;
-            out.topk_idx[t * cfg.top_k + j] = @intCast(best);
-            out.topk_w[t * cfg.top_k + j] = best_p;
-
-            // expert(n) = (silu(n @ gate) * (n @ up)) @ down
-            const g_e = gate[best * d * ff ..][0 .. d * ff];
-            const u_e = up[best * d * ff ..][0 .. d * ff];
-            const dn_e = down[best * ff * d ..][0 .. ff * d];
-            for (0..ff) |k| {
-                var ga: f32 = 0;
-                var ub: f32 = 0;
-                for (0..d) |i| {
-                    ga += n[i] * g_e[i * ff + k];
-                    ub += n[i] * u_e[i * ff + k];
-                }
-                a[k] = silu(ga) * ub;
-            }
-            for (0..d) |i| {
-                var acc: f32 = 0;
-                for (0..ff) |k| acc += a[k] * dn_e[k * d + i];
-                b[i] = acc;
-            }
-            for (moe, b[0..d]) |*m, v| m.* += best_p * v;
+        for (idx, wts) |e, p| {
+            expert(cfg, w, @intCast(e), n[0..d], b[0..d]);
+            for (moe, b[0..d]) |*m, v| m.* += p * v;
         }
         for (row, moe) |*x, m| x.* += m;
     }
@@ -153,7 +183,7 @@ pub fn head(cfg: Config, f: tfref.File, h: []const f32, logits: []f32) !void {
 /// torch.allclose-style check: |x - y| <= atol + rtol * |y| for every element.
 /// The absolute term covers near-zero values, where float32 summation-order
 /// differences are large relative to the value itself.
-fn allClose(x: []const f32, y: []align(1) const f32) bool {
+pub fn allClose(x: []const f32, y: []align(1) const f32) bool {
     const atol = 1e-5;
     const rtol = 1e-4;
     if (x.len != y.len) return false;

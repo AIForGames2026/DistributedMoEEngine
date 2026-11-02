@@ -37,6 +37,19 @@ pub const Link = struct {
         self.fd = -1;
     }
 
+    /// Close for the side that answered the goodbye (`Endpoint.finish`, rank
+    /// 1): wait for the peer to close first (or 5 s), so our answer is never
+    /// the last thing in flight before our FIN.
+    pub fn closeAfterPeer(self: *Link) void {
+        var scratch: [4096]u8 = undefined;
+        var pfd = [1]c.pollfd{.{ .fd = self.fd, .events = c.POLL.IN, .revents = 0 }};
+        while (c.poll(&pfd, 1, 5000) > 0) {
+            if (c.recv(self.fd, &scratch, scratch.len, 0) <= 0) break;
+        }
+        _ = c.close(self.fd);
+        self.fd = -1;
+    }
+
     /// Tells the peer we will send nothing more.
     pub fn shutdownSend(self: *Link) void {
         _ = c.shutdown(self.fd, 1); // SHUT_WR

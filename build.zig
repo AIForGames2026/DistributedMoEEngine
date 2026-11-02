@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
     });
     dispatch_mod.addIncludePath(b.path("include"));
     dispatch_mod.addCSourceFiles(.{ .files = &c_sources, .flags = &c_flags });
+    dispatch_mod.addAnonymousImport("moe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/moe_tiny.tfref") });
     const dispatch = b.addExecutable(.{ .name = "dispatch", .root_module = dispatch_mod });
     b.installArtifact(dispatch);
     const run_dispatch = b.addRunArtifact(dispatch);

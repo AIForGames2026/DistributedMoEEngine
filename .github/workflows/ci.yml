@@ -28,11 +28,17 @@ jobs:
         run: |
           zig build install -Doptimize=ReleaseFast
           zig-out/bin/dispatch shm
-          zig-out/bin/dispatch expert --port 7470 &
+          zig-out/bin/dispatch expert --port 7470 & expert=$!
           zig-out/bin/dispatch router --host 127.0.0.1 --port 7470
-          wait
+          wait $expert
+      - name: Two-process MoE vs PyTorch goldens (PoC check)
+        run: |
+          zig-out/bin/dispatch shm --moe
+          zig-out/bin/dispatch expert --port 7471 --moe & expert=$!
+          zig-out/bin/dispatch router --host 127.0.0.1 --port 7471 --moe
+          wait $expert
       - name: Cross-compile for DGX Spark (aarch64)
-        run: zig build -Dtarget=aarch64-linux-gnu
+        run: zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
 
   inspector:
     name: Inspector (web build)

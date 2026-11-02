@@ -206,10 +206,20 @@ pub const Endpoint = struct {
         }
     }
 
-    /// `sendBye` then `awaitBye`. Call on both sides before closing the link.
+    /// Ordered goodbye. Call on both sides before closing the link. Rank 0
+    /// says goodbye first and the other rank answers only after hearing it, so
+    /// when rank 0 sees the answer both sides have everything. A relayed TCP
+    /// path can drop the last bytes before a FIN; with this order, rank 0 has
+    /// nothing left in flight when it closes, and rank 1 closes after it
+    /// (`tcp.Link.closeAfterPeer`).
     pub fn finish(self: *Endpoint) Error!void {
-        try self.sendBye();
-        try self.awaitBye();
+        if (self.rank == 0) {
+            try self.sendBye();
+            try self.awaitBye();
+        } else {
+            try self.awaitBye();
+            try self.sendBye();
+        }
     }
 };
 

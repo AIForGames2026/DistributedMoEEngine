@@ -56,7 +56,9 @@ Prebuilt Linux binaries (x86_64 and aarch64) are on [GitHub Releases](https://gi
 
 ## 3. Demo video
 
-[Demo video (2 min)](VIDEO_LINK_HERE): the two-process MoE passing on shared memory and desktop to Spark, the inspector replaying routing at 144 FPS, and the platform probe answers.
+[Watch the demo video (4:20)](https://aiforgames2026.github.io/DistributedMoEEngine/media/poc-demo.mp4): the assumption and pass/fail criterion, then the two-process MoE check passing on the desktop, on the DGX Spark, and split between the two machines.
+
+The file is in the repo at [`web/public/media/poc-demo.mp4`](web/public/media/poc-demo.mp4) (H.264, 1080p, 23 MB); the link above plays it from GitHub Pages.
 
 ## 4. Playable build
 

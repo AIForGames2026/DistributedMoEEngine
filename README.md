@@ -6,7 +6,7 @@
 
 > **Status:** PoC **passed** ([POC.md](POC.md): assumption, criteria, evidence, scope update). Next: Alpha (due Nov 8, 2026).
 > **Live demo:** https://aiforgames2026.github.io/DistributedMoEEngine/
-> **PoC demo video:** [watch (2 min)](VIDEO_LINK_HERE)
+> **PoC demo video:** [watch (4:20)](https://aiforgames2026.github.io/DistributedMoEEngine/media/poc-demo.mp4) (file: [`web/public/media/poc-demo.mp4`](web/public/media/poc-demo.mp4))
 > **Engine builds:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) (Linux x86_64 and aarch64)
 > **Project board:** https://github.com/orgs/AIForGames2026/projects/3
 

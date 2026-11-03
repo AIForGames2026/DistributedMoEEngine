@@ -1,11 +1,16 @@
-//! Shared-memory backend (TASK-02). Both ranks map one memfd region holding a
+//! Shared-memory backend (TASK-02). Both ranks map one shared region holding a
 //! receive ring per rank and a single-producer, single-consumer immediate
-//! queue per rank. Create the `Pair` before `fork()` and each process uses its
-//! own `side`; tests use both sides in one process.
+//! queue per rank. On Linux the region is a memfd: create the `Pair` before
+//! `fork()` and each process uses its own `side`. Windows has no fork, so the
+//! region is a named mapping: the second process maps it with `Pair.open`.
+//! Tests use both sides in one process.
 const std = @import("std");
 const c = std.c;
 const wire = @import("../wire.zig");
 const transport = @import("../transport.zig");
+const win32 = @import("../win32.zig");
+
+const is_windows = @import("builtin").os.tag == .windows;
 
 const queue_len = 4096;
 const cache_line = 64;
@@ -90,17 +95,73 @@ pub const Side = struct {
 pub const Pair = struct {
     region: []align(4096) u8,
     sides: [2]Side,
+    /// Windows: the named mapping, open until `deinit`.
+    mapping: ?win32.HANDLE = null,
+    /// Windows: the mapping's name, for the other process's `open`.
+    name_buf: [64]u8 = undefined,
+    name_len: usize = 0,
+
+    fn regionLen(slots: u16) usize {
+        return rings_offset + 2 * @as(usize, slots) * @sizeOf(wire.Packet);
+    }
 
     /// Maps a zeroed shared region for two ranks with `slots` slots each.
     pub fn create(slots: u16) !Pair {
-        const len = rings_offset + 2 * @as(usize, slots) * @sizeOf(wire.Packet);
+        const len = regionLen(slots);
+        if (is_windows) {
+            const State = struct {
+                var count: u32 = 0;
+            };
+            var buf: [64]u8 = undefined;
+            const name_text = try std.fmt.bufPrint(&buf, "Local\\tensorfold-shm-{d}-{d}", .{
+                win32.GetCurrentProcessId(),
+                @atomicRmw(u32, &State.count, .Add, 1, .monotonic),
+            });
+            var wide: [64:0]u16 = undefined;
+            const h = win32.CreateFileMappingW(win32.INVALID_HANDLE_VALUE, null, win32.PAGE_READWRITE, @intCast(len >> 32), @truncate(len), widen(name_text, &wide)) orelse
+                return error.SystemResources;
+            return mapWindows(h, len, slots, name_text);
+        }
         const fd = c.memfd_create("tensorfold-shm", 0);
         if (fd < 0) return error.SystemResources;
         defer _ = c.close(fd);
         if (c.ftruncate(fd, @intCast(len)) != 0) return error.SystemResources;
         const ptr = c.mmap(null, len, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, fd, 0);
         if (ptr == c.MAP_FAILED) return error.SystemResources;
-        const region: [*]align(4096) u8 = @ptrCast(@alignCast(ptr));
+        return fromRegion(@ptrCast(@alignCast(ptr)), len, slots);
+    }
+
+    /// Windows only: maps the region another process made with `create`.
+    pub fn open(name: []const u8, slots: u16) !Pair {
+        if (!is_windows) @compileError("Pair.open is for Windows; Linux shares the region by fork");
+        var wide: [64:0]u16 = undefined;
+        const h = win32.OpenFileMappingW(win32.FILE_MAP_ALL_ACCESS, 0, widen(name, &wide)) orelse
+            return error.FileNotFound;
+        return mapWindows(h, regionLen(slots), slots, name);
+    }
+
+    /// The name to pass to `open` (Windows).
+    pub fn mappingName(self: *const Pair) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+
+    fn mapWindows(h: win32.HANDLE, len: usize, slots: u16, name_text: []const u8) !Pair {
+        errdefer _ = win32.CloseHandle(h);
+        const ptr = win32.MapViewOfFile(h, win32.FILE_MAP_ALL_ACCESS, 0, 0, len) orelse return error.SystemResources;
+        var pair = fromRegion(@ptrCast(@alignCast(ptr)), len, slots);
+        pair.mapping = h;
+        @memcpy(pair.name_buf[0..name_text.len], name_text);
+        pair.name_len = name_text.len;
+        return pair;
+    }
+
+    fn widen(text: []const u8, out: *[64:0]u16) [*:0]const u16 {
+        for (text, 0..) |ch, i| out[i] = ch;
+        out[text.len] = 0;
+        return out;
+    }
+
+    fn fromRegion(region: [*]align(4096) u8, len: usize, slots: u16) Pair {
         return .{
             .region = region[0..len],
             .sides = .{
@@ -115,7 +176,12 @@ pub const Pair = struct {
     }
 
     pub fn deinit(self: *Pair) void {
-        _ = c.munmap(@ptrCast(self.region.ptr), self.region.len);
+        if (is_windows) {
+            _ = win32.UnmapViewOfFile(self.region.ptr);
+            if (self.mapping) |h| _ = win32.CloseHandle(h);
+        } else {
+            _ = c.munmap(@ptrCast(self.region.ptr), self.region.len);
+        }
         self.* = undefined;
     }
 };

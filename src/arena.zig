@@ -3,6 +3,9 @@
 //! RDMA and io_uring buffers are carved from arenas and registered once.
 const std = @import("std");
 const posix = std.posix;
+const win32 = @import("win32.zig");
+
+const is_windows = @import("builtin").os.tag == .windows;
 
 pub const huge_page = 2 * 1024 * 1024;
 
@@ -29,24 +32,32 @@ pub const Arena = struct {
         const cap = std.mem.alignForward(usize, @max(min_bytes, 1), huge_page);
         // Over-map by one huge page so an aligned start always fits. Zig's
         // munmap cannot trim a mapping, so the slack stays mapped but untouched.
-        const mapping = try posix.mmap(
-            null,
-            cap + huge_page,
-            .{ .READ = true, .WRITE = true },
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        );
+        const mapping = try mapAnonymous(cap + huge_page);
         const start = std.mem.alignForward(usize, @intFromPtr(mapping.ptr), huge_page);
         const base: [*]align(huge_page) u8 = @ptrFromInt(start);
         // Huge pages are a hint; kernels without THP reject it and the arena still works.
-        posix.madvise(base, cap, posix.MADV.HUGEPAGE) catch {};
+        if (!is_windows) posix.madvise(base, cap, posix.MADV.HUGEPAGE) catch {};
         return .{ .mapping = mapping, .buf = base[0..cap] };
     }
 
     pub fn deinit(self: *Arena) void {
-        posix.munmap(self.mapping);
+        if (is_windows) {
+            _ = win32.VirtualFree(self.mapping.ptr, 0, win32.MEM_RELEASE);
+        } else {
+            posix.munmap(self.mapping);
+        }
         self.* = undefined;
+    }
+
+    /// Zeroed, private, read-write pages: mmap on Linux, VirtualAlloc on Windows.
+    fn mapAnonymous(len: usize) ![]align(std.heap.page_size_min) u8 {
+        if (is_windows) {
+            const ptr = win32.VirtualAlloc(null, len, win32.MEM_RESERVE | win32.MEM_COMMIT, win32.PAGE_READWRITE) orelse
+                return error.OutOfMemory;
+            const p: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(ptr));
+            return p[0..len];
+        }
+        return posix.mmap(null, len, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
     }
 
     pub fn capacity(self: *const Arena) usize {

@@ -50,7 +50,7 @@ zig-out/bin/dispatch expert --port 7470 --moe            # on gx10-03
 zig-out/bin/dispatch router --host <expert IPv4> --port 7470 --moe   # on the desktop
 ```
 
-Prebuilt Linux binaries (x86_64 and aarch64) are on [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases). The other checks (`zig build gate`, `io-test`, `io-bench`, `tools/probe/probe.py`) are in the [README](README.md#running-it).
+On Windows 11, `.\build.ps1` in PowerShell builds native `.exe` files and runs the same checks (see the [README](README.md#engine-on-windows-11-native)). Prebuilt Linux binaries (x86_64 and aarch64) are on [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases). The other checks (`zig build gate`, `io-test`, `io-bench`, `tools/probe/probe.py`) are in the [README](README.md#running-it).
 
 **What `--moe` does:** both processes embed the tiny MoE from [`tests/golden/moe_tiny.tfref`](tests/golden/) (2 layers, 8 experts, top-2, 16 tokens), written by the seeded PyTorch harness in [`tools/ref/ref_moe.py`](tools/ref/ref_moe.py). Rank 0 owns the norms, the router, and the LM head. Rank 1 owns every expert's FFN. For each layer, rank 0 routes every token, sends one 7,552-byte [wire-format](docs/wire-format.md) packet per (token, chosen expert), rank 1 runs the expert and sends the result back, and rank 0 folds the weighted results into the hidden state. At the end rank 0 compares routing, hidden states, and logits against the PyTorch goldens and prints PASS or exits with an error. Code: [`src/dispatch.zig`](src/dispatch.zig) (`moeRouter`, `moeExpert`), [`src/moe_ref.zig`](src/moe_ref.zig) (`route`, `expert`).
 
@@ -63,7 +63,7 @@ The file is in the repo at [`web/public/media/poc-demo.mp4`](web/public/media/po
 ## 4. Playable build
 
 - **Browser:** the WebGL inspector at https://aiforgames2026.github.io/DistributedMoEEngine/ plays telemetry traces of the same dispatch/compute/combine flow, with timing from the measured numbers below. Nothing to install.
-- **Engine:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) has Linux ELF binaries for x86_64 (desktop, WSL2) and aarch64 (DGX Spark) with SHA-256 sums. No Windows `.exe`.
+- **Engine:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) has Linux ELF binaries for x86_64 (desktop, WSL2) and aarch64 (DGX Spark) with SHA-256 sums. On Windows 11, `.\build.ps1` builds a native `dispatch.exe` that runs the same PoC check (added Nov 3, after the PoC release).
 
 **Why the engine can't run in a browser:** it is the thing being tested, and it is made of what a browser sandbox forbids: raw sockets between machines, `fork` and shared memory between processes, `io_uring` with `O_DIRECT` on an NVMe drive, and (from Alpha) CUDA and RDMA verbs on the ConnectX-7. A WebAssembly build would have none of those, so it would test nothing. The inspector is the web part of the project by design (Plan.md section 1: visitors never download anything).
 

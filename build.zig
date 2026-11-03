@@ -17,6 +17,8 @@ pub fn build(b: *std.Build) void {
     engine.addCSourceFiles(.{ .files = &c_sources, .flags = &c_flags });
     // Golden outputs from tools/ref/ref_moe.py, embedded for the reference test.
     engine.addAnonymousImport("moe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/moe_tiny.tfref") });
+    // The TCP transport uses Winsock on Windows.
+    if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 
     const exe = b.addExecutable(.{ .name = "tensorfold", .root_module = engine });
     b.installArtifact(exe);
@@ -48,6 +50,7 @@ pub fn build(b: *std.Build) void {
     dispatch_mod.addIncludePath(b.path("include"));
     dispatch_mod.addCSourceFiles(.{ .files = &c_sources, .flags = &c_flags });
     dispatch_mod.addAnonymousImport("moe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/moe_tiny.tfref") });
+    if (target.result.os.tag == .windows) dispatch_mod.linkSystemLibrary("ws2_32", .{});
     const dispatch = b.addExecutable(.{ .name = "dispatch", .root_module = dispatch_mod });
     b.installArtifact(dispatch);
     const run_dispatch = b.addRunArtifact(dispatch);

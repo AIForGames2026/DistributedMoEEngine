@@ -7,11 +7,15 @@
 //! LM head, and rank 1 owns every expert FFN. Rank 0 checks the routing and
 //! final logits against the PyTorch goldens (the PoC's pass/fail check).
 //!
-//!   dispatch shm [--packets N] [--slots S] [--moe]        both ranks, forked
+//!   dispatch shm [--packets N] [--slots S] [--moe]        both ranks, two processes
 //!   dispatch expert --port P [--packets N] [--slots S] [--moe]   TCP server, rank 1
 //!   dispatch router --host IP --port P [--packets N] [--slots S] [--moe]
+//!
+//! On Linux `shm` forks. Windows has no fork, so `shm` starts this program
+//! again as `dispatch shm-expert --name <mapping> ...` (internal) for rank 1.
 const std = @import("std");
 const c = std.c;
+const win32 = @import("win32.zig");
 const wire = @import("wire.zig");
 const transport = @import("transport.zig");
 const Arena = @import("arena.zig").Arena;
@@ -25,7 +29,11 @@ const Options = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 7470,
     moe: bool = false,
+    /// `shm-expert` only: the shared mapping's name.
+    name: []const u8 = "",
 };
+
+const is_windows = @import("builtin").os.tag == .windows;
 
 const combine_salt = 1;
 
@@ -40,7 +48,8 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     };
 
-    if (std.mem.eql(u8, opts.mode, "shm")) return runShm(opts);
+    if (std.mem.eql(u8, opts.mode, "shm")) return if (is_windows) runShmSpawn(init, opts) else runShmFork(opts);
+    if (is_windows and std.mem.eql(u8, opts.mode, "shm-expert")) return runShmExpert(opts);
 
     var arena = try Arena.init(@as(usize, opts.slots) * @sizeOf(wire.Packet));
     defer arena.deinit();
@@ -50,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
         const l = try transport.tcp.listen(opts.port);
         std.debug.print("expert: listening on port {d}\n", .{l.port});
         const fd = try transport.tcp.acceptOn(l.fd);
-        _ = c.close(l.fd);
+        transport.tcp.closeSocket(l.fd);
         var link = transport.tcp.Link.init(fd, ring);
         defer link.closeAfterPeer();
         var ep = transport.Endpoint.init(link.backend(), 1, opts.slots);
@@ -72,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn parseArgs(init: std.process.Init) !Options {
     var opts: Options = .{};
-    var it = init.minimal.args.iterate();
+    var it = try init.minimal.args.iterateAllocator(init.arena.allocator());
     _ = it.next();
     opts.mode = it.next() orelse return error.Usage;
     while (it.next()) |arg| {
@@ -89,13 +98,15 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.host = value;
         } else if (std.mem.eql(u8, arg, "--port")) {
             opts.port = try std.fmt.parseInt(u16, value, 10);
+        } else if (std.mem.eql(u8, arg, "--name")) {
+            opts.name = value;
         } else return error.Usage;
     }
     if (opts.slots == 0) return error.Usage;
     return opts;
 }
 
-fn runShm(opts: Options) !void {
+fn runShmFork(opts: Options) !void {
     var pair = try transport.shm.Pair.create(opts.slots);
     defer pair.deinit();
 
@@ -116,6 +127,47 @@ fn runShm(opts: Options) !void {
     _ = c.waitpid(pid, &status, 0);
     try result;
     if (status != 0) return error.ExpertFailed;
+}
+
+/// Windows `shm`: rank 1 is this program started again, mapping the region
+/// by name. Both ranks then run exactly as they do after a fork.
+fn runShmSpawn(init: std.process.Init, opts: Options) !void {
+    var pair = try transport.shm.Pair.create(opts.slots);
+    defer pair.deinit();
+
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe = exe_buf[0..try std.process.executablePath(init.io, &exe_buf)];
+    var slots_buf: [8]u8 = undefined;
+    var packets_buf: [24]u8 = undefined;
+    var argv_buf: [10][]const u8 = undefined;
+    var argv: std.ArrayList([]const u8) = .initBuffer(&argv_buf);
+    argv.appendSliceAssumeCapacity(&.{
+        exe,         "shm-expert",
+        "--name",    pair.mappingName(),
+        "--slots",   try std.fmt.bufPrint(&slots_buf, "{d}", .{opts.slots}),
+        "--packets", try std.fmt.bufPrint(&packets_buf, "{d}", .{opts.packets}),
+    });
+    if (opts.moe) argv.appendAssumeCapacity("--moe");
+    var child = try std.process.spawn(init.io, .{ .argv = argv.items });
+
+    var ep = transport.Endpoint.init(pair.side(0).backend(), 0, opts.slots);
+    const result = if (opts.moe) moeRouter(&ep, "shm") else routerReport(&ep, opts, "shm");
+    if (result) |_| {
+        if (!(try child.wait(init.io)).success()) return error.ExpertFailed;
+    } else |err| {
+        // A failed router leaves the expert waiting for packets that never come.
+        child.kill(init.io);
+        return err;
+    }
+}
+
+/// Windows `shm-expert`: rank 1 of `runShmSpawn`.
+fn runShmExpert(opts: Options) !void {
+    var pair = try transport.shm.Pair.open(opts.name, opts.slots);
+    defer pair.deinit();
+    var ep = transport.Endpoint.init(pair.side(1).backend(), 1, opts.slots);
+    if (opts.moe) return moeExpert(&ep);
+    try expert(&ep, opts.packets);
 }
 
 /// Rank 1: receive each dispatch, check it, answer with a combine.
@@ -330,6 +382,7 @@ fn argmax(x: []align(1) const f32) usize {
 }
 
 fn nowNs() u64 {
+    if (is_windows) return win32.nowNs();
     var ts: c.timespec = undefined;
     _ = c.clock_gettime(c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));

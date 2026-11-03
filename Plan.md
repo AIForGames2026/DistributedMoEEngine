@@ -298,7 +298,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 TASK-20 is `should` but untagged: it is never cut, only reduced to a minimal build guide.
 
-**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist), OpenAI-compatible REST server, approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, native Windows or macOS engine builds.
+**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist), OpenAI-compatible REST server, approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
 
 ---
 

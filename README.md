@@ -7,7 +7,7 @@
 > **Status:** PoC **passed** ([POC.md](POC.md): assumption, criteria, evidence, scope update). Next: Alpha (due Nov 8, 2026).
 > **Live demo:** https://aiforgames2026.github.io/DistributedMoEEngine/
 > **PoC demo video:** [watch (4:20)](https://aiforgames2026.github.io/DistributedMoEEngine/media/poc-demo.mp4) (file: [`web/public/media/poc-demo.mp4`](web/public/media/poc-demo.mp4))
-> **Engine builds:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) (Linux x86_64 and aarch64)
+> **Engine builds:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) (Linux x86_64 and aarch64); native Windows 11 build with [`build.ps1`](#engine-on-windows-11-native)
 > **Project board:** https://github.com/orgs/AIForGames2026/projects/3
 
 ## Pitch
@@ -27,7 +27,7 @@ TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference
 
 **The PoC check:** `dispatch --moe` splits a real (tiny, seeded) MoE across two engine processes: one runs the router, the other runs every expert, and they talk only through 7,552-byte wire-format packets. Output logits match PyTorch to 7.2e-7 with identical routing and top-1 tokens, over shared memory, TCP loopback, and desktop to Spark. See [POC.md](POC.md).
 
-Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory and TCP, verified desktop to Spark), the io_uring expert reader (7.2 GB/s, matching `fio`), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and cross-compiles for the Sparks (aarch64).
+Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory and TCP, verified desktop to Spark), the io_uring expert reader (7.2 GB/s, matching `fio`), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows and cross-compiles for the Sparks (aarch64).
 
 ## Links
 
@@ -154,6 +154,22 @@ zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
 
 `-Dcpu=cortex_a78` keeps the ARMv8 CRC32C instructions (GB10's cores support them); without it the baseline target falls back to software CRC, about 14x slower per token.
 
+### Engine on Windows 11 (native)
+
+`dispatch.exe` and `tensorfold.exe` also build natively for Windows 11 x86_64, enough to run the PoC check without WSL2. From PowerShell (5.1 or 7) in the repo root:
+
+```powershell
+.\build.ps1
+```
+
+It finds Zig 0.17.0 on PATH or in `~\tools\zig` (installing it there with `tools\setup\install-zig.ps1`, checksum verified, no admin, if missing), runs the unit tests, builds ReleaseFast into `zig-out\bin`, and runs the dispatch and `--moe` checks over shared memory and TCP loopback. `-SkipChecks` stops after the build; `-Package` also writes a zip and its SHA-256 to `dist\`. If PowerShell refuses to run scripts, use `powershell -ExecutionPolicy Bypass -File .\build.ps1`.
+
+```powershell
+.\zig-out\bin\dispatch.exe shm --moe
+```
+
+Windows has no `fork`, so in `shm` mode the program starts a second copy of itself for rank 1, which maps the same named shared memory. TCP mode is the same as on Linux, and Windows and Linux processes can be each other's peer. The io_uring reader, the toolchain gate, CUDA, and RDMA stay Linux only.
+
 ### Lab machine access
 
 Lab machines are reached over Tailscale with SSH keys, never passwords stored in the repo. One-time setup from Git Bash or WSL2:
@@ -211,7 +227,7 @@ src/                 Zig engine core (entry point, arena, wire format, transport
 tests/               Plain C tests of the public ABI; golden/ holds PyTorch reference outputs
 tools/probe/         Platform probe (probe.py writes bench/platform/<host>-<date>.json)
 tools/ref/           PyTorch reference harness for the golden files (testing only)
-tools/setup/         Zig installer and WSL2 package setup
+tools/setup/         Zig installers (Linux, Windows) and WSL2 package setup
 web/                 WebGL inspector (Vite + Three.js) and trace generator
 bench/platform/      Hardware probe results
 docs/                Pitch, wire format, telemetry schema, images, and (later) whitepaper

@@ -3,10 +3,18 @@
 //! frame header carrying the immediate, followed by the packet for writes.
 //! The receiver reads the packet straight into the slot named by the
 //! immediate before surfacing the immediate, matching RDMA's ordering.
+//! Runs on Linux (BSD sockets) and Windows (Winsock); `sock` below hides the
+//! difference.
 const std = @import("std");
 const c = std.c;
 const wire = @import("../wire.zig");
 const transport = @import("../transport.zig");
+const win32 = @import("../win32.zig");
+
+const is_windows = @import("builtin").os.tag == .windows;
+
+/// A connected or listening socket.
+pub const Socket = if (is_windows) win32.SOCKET else c.fd_t;
 
 const Frame = extern struct {
     imm: u32,
@@ -15,11 +23,11 @@ const Frame = extern struct {
 };
 
 pub const Link = struct {
-    fd: c.fd_t,
+    fd: Socket,
     ring: []wire.Packet,
 
     /// `ring` is the local receive ring, normally carved from an `Arena`.
-    pub fn init(fd: c.fd_t, ring: []wire.Packet) Link {
+    pub fn init(fd: Socket, ring: []wire.Packet) Link {
         return .{ .fd = fd, .ring = ring };
     }
 
@@ -28,31 +36,31 @@ pub const Link = struct {
     /// kernel send a reset, which destroys data the peer has not read yet.
     pub fn close(self: *Link) void {
         self.shutdownSend();
-        var scratch: [4096]u8 = undefined;
-        var pfd = [1]c.pollfd{.{ .fd = self.fd, .events = c.POLL.IN, .revents = 0 }};
-        while (c.poll(&pfd, 1, 5000) > 0) {
-            if (c.recv(self.fd, &scratch, scratch.len, 0) <= 0) break;
-        }
-        _ = c.close(self.fd);
-        self.fd = -1;
+        self.drainAndClose();
     }
 
     /// Close for the side that answered the goodbye (`Endpoint.finish`, rank
     /// 1): wait for the peer to close first (or 5 s), so our answer is never
     /// the last thing in flight before our FIN.
     pub fn closeAfterPeer(self: *Link) void {
+        self.drainAndClose();
+    }
+
+    /// Discards incoming bytes until the peer closes (or 5 s of silence),
+    /// then closes the socket.
+    fn drainAndClose(self: *Link) void {
         var scratch: [4096]u8 = undefined;
-        var pfd = [1]c.pollfd{.{ .fd = self.fd, .events = c.POLL.IN, .revents = 0 }};
-        while (c.poll(&pfd, 1, 5000) > 0) {
-            if (c.recv(self.fd, &scratch, scratch.len, 0) <= 0) break;
+        while (sock.waitReadable(self.fd, 5000) catch false) {
+            const n = sock.recv(self.fd, &scratch) catch break;
+            if (n == 0) break;
         }
-        _ = c.close(self.fd);
-        self.fd = -1;
+        sock.close(self.fd);
+        self.fd = undefined;
     }
 
     /// Tells the peer we will send nothing more.
     pub fn shutdownSend(self: *Link) void {
-        _ = c.shutdown(self.fd, 1); // SHUT_WR
+        sock.shutdownSend(self.fd);
     }
 
     pub fn backend(self: *Link) transport.Backend {
@@ -68,34 +76,26 @@ pub const Link = struct {
 
     fn sendAll(self: *Link, bytes: []const u8, more: bool) transport.Error!void {
         var off: usize = 0;
-        const flags: u32 = c.MSG.NOSIGNAL | if (more) @as(u32, c.MSG.MORE) else 0;
         while (off < bytes.len) {
-            const n = c.send(self.fd, bytes[off..].ptr, bytes.len - off, flags);
-            if (n < 0) {
-                const e = c.errno(n);
-                if (e == .INTR) continue;
-                std.log.err("tcp send: {t}", .{e});
+            off += sock.send(self.fd, bytes[off..], more) catch |err| {
+                std.log.err("tcp send: {t}", .{err});
                 return error.ConnectionClosed;
-            }
-            off += @intCast(n);
+            };
         }
     }
 
     fn recvAll(self: *Link, bytes: []u8) transport.Error!void {
         var off: usize = 0;
         while (off < bytes.len) {
-            const n = c.recv(self.fd, bytes[off..].ptr, bytes.len - off, 0);
+            const n = sock.recv(self.fd, bytes[off..]) catch |err| {
+                std.log.err("tcp recv: {t}", .{err});
+                return error.ConnectionClosed;
+            };
             if (n == 0) {
                 std.log.err("tcp recv: peer closed with {d} of {d} bytes read", .{ off, bytes.len });
                 return error.ConnectionClosed;
             }
-            if (n < 0) {
-                const e = c.errno(n);
-                if (e == .INTR) continue;
-                std.log.err("tcp recv: {t}", .{e});
-                return error.ConnectionClosed;
-            }
-            off += @intCast(n);
+            off += n;
         }
     }
 
@@ -114,10 +114,7 @@ pub const Link = struct {
     }
 
     fn readable(self: *Link) transport.Error!bool {
-        var pfd = [1]c.pollfd{.{ .fd = self.fd, .events = c.POLL.IN, .revents = 0 }};
-        const rc = c.poll(&pfd, 1, 0);
-        if (rc < 0) return if (c.errno(rc) == .INTR) false else error.Unexpected;
-        return rc > 0;
+        return sock.waitReadable(self.fd, 0) catch error.Unexpected;
     }
 
     fn pollCompletions(ptr: *anyopaque, out: []u32) transport.Error!usize {
@@ -151,61 +148,214 @@ pub fn parseIp4(text: []const u8) !u32 {
     return @bitCast(addr); // already network byte order in memory
 }
 
-fn sockaddr(addr: u32, port: u16) c.sockaddr.in {
-    return .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
-}
-
-fn tune(fd: c.fd_t) void {
-    const one: c_int = 1;
-    _ = c.setsockopt(fd, c.IPPROTO.TCP, c.TCP.NODELAY, &one, @sizeOf(c_int));
-}
-
 /// Listens on `port` on all interfaces; port 0 picks a free port. Returns the
 /// listening socket and the bound port. Accept a peer with `acceptOn`.
-pub fn listen(port: u16) !struct { fd: c.fd_t, port: u16 } {
-    const lfd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
-    if (lfd < 0) return error.SystemResources;
-    errdefer _ = c.close(lfd);
-    const one: c_int = 1;
-    _ = c.setsockopt(lfd, c.SOL.SOCKET, c.SO.REUSEADDR, &one, @sizeOf(c_int));
-    var sa = sockaddr(0, port);
-    if (c.bind(lfd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) != 0) return error.AddressInUse;
-    if (c.listen(lfd, 1) != 0) return error.SystemResources;
-    return .{ .fd = lfd, .port = try boundPort(lfd) };
+pub fn listen(port: u16) !struct { fd: Socket, port: u16 } {
+    const lfd = try sock.open();
+    errdefer sock.close(lfd);
+    try sock.bindListen(lfd, 0, port);
+    return .{ .fd = lfd, .port = try sock.boundPort(lfd) };
 }
 
-pub fn acceptOn(lfd: c.fd_t) !c.fd_t {
-    const fd = c.accept(lfd, null, null);
-    if (fd < 0) return error.ConnectionRefused;
-    tune(fd);
+pub fn acceptOn(lfd: Socket) !Socket {
+    const fd = try sock.accept(lfd);
+    sock.noDelay(fd);
     return fd;
 }
 
-fn boundPort(fd: c.fd_t) !u16 {
-    var sa: c.sockaddr.in = undefined;
-    var len: c.socklen_t = @sizeOf(c.sockaddr.in);
-    if (c.getsockname(fd, @ptrCast(&sa), &len) != 0) return error.Unexpected;
-    return std.mem.bigToNative(u16, sa.port);
+/// Closes a socket that never became a `Link` (a listener).
+pub fn closeSocket(fd: Socket) void {
+    sock.close(fd);
 }
 
 /// Connects to `host:port`, retrying for up to `retries` attempts 100 ms apart
 /// so the client can start before the server.
-pub fn connect(host: []const u8, port: u16, retries: u32) !c.fd_t {
-    var sa = sockaddr(try parseIp4(host), port);
+pub fn connect(host: []const u8, port: u16, retries: u32) !Socket {
+    const addr = try parseIp4(host);
     var attempt: u32 = 0;
     while (true) : (attempt += 1) {
-        const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
-        if (fd < 0) return error.SystemResources;
-        if (c.connect(fd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) == 0) {
-            tune(fd);
+        const fd = try sock.open();
+        if (sock.connect(fd, addr, port)) {
+            sock.noDelay(fd);
             return fd;
+        } else |_| {
+            sock.close(fd);
         }
-        _ = c.close(fd);
         if (attempt + 1 >= retries) return error.ConnectionRefused;
-        const ts: c.timespec = .{ .sec = 0, .nsec = 100 * std.time.ns_per_ms };
-        _ = c.nanosleep(&ts, null);
+        sock.sleepMs(100);
     }
 }
+
+/// The socket calls `Link` needs, on BSD sockets or Winsock.
+const sock = if (is_windows) struct {
+    const ws = win32.ws2;
+    var started = std.atomic.Value(bool).init(false);
+
+    fn open() !Socket {
+        if (!started.swap(true, .acq_rel)) try win32.startWinsock();
+        const fd = win32.socket(ws.AF.INET, ws.SOCK.STREAM, ws.IPPROTO.TCP);
+        if (fd == win32.INVALID_SOCKET) return error.SystemResources;
+        return fd;
+    }
+
+    fn close(fd: Socket) void {
+        _ = win32.closesocket(fd);
+    }
+
+    fn lastError() error{ ConnectionResetByPeer, ConnectionAborted, SocketNotConnected, Unexpected } {
+        return switch (win32.WSAGetLastError()) {
+            10054 => error.ConnectionResetByPeer, // WSAECONNRESET
+            10053 => error.ConnectionAborted, // WSAECONNABORTED
+            10057 => error.SocketNotConnected, // WSAENOTCONN
+            else => |code| {
+                std.log.err("winsock error {d}", .{code});
+                return error.Unexpected;
+            },
+        };
+    }
+
+    fn send(fd: Socket, bytes: []const u8, more: bool) !usize {
+        _ = more; // Winsock has no MSG_MORE; frames are small and NODELAY is set
+        const n = win32.send(fd, bytes.ptr, @intCast(@min(bytes.len, std.math.maxInt(c_int))), 0);
+        if (n < 0) return lastError();
+        return @intCast(n);
+    }
+
+    fn recv(fd: Socket, bytes: []u8) !usize {
+        while (true) {
+            const n = win32.recv(fd, bytes.ptr, @intCast(@min(bytes.len, std.math.maxInt(c_int))), 0);
+            if (n >= 0) return @intCast(n);
+            if (win32.WSAGetLastError() != win32.WSAEINTR) return lastError();
+        }
+    }
+
+    fn waitReadable(fd: Socket, timeout_ms: c_int) !bool {
+        var pfd = [1]win32.WSAPOLLFD{.{ .fd = fd, .events = win32.POLLIN, .revents = 0 }};
+        const rc = win32.WSAPoll(&pfd, 1, timeout_ms);
+        if (rc < 0) return lastError();
+        return rc > 0;
+    }
+
+    fn shutdownSend(fd: Socket) void {
+        _ = win32.shutdown(fd, win32.SD_SEND);
+    }
+
+    fn noDelay(fd: Socket) void {
+        const one: c_int = 1;
+        _ = win32.setsockopt(fd, ws.IPPROTO.TCP, ws.TCP.NODELAY, &one, @sizeOf(c_int));
+    }
+
+    fn bindListen(fd: Socket, addr: u32, port: u16) !void {
+        // No SO_REUSEADDR: on Windows it lets another socket take over a bound port.
+        const sa: ws.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
+        if (win32.bind(fd, &sa, @sizeOf(ws.sockaddr.in)) != 0) return error.AddressInUse;
+        if (win32.listen(fd, 1) != 0) return error.SystemResources;
+    }
+
+    fn boundPort(fd: Socket) !u16 {
+        var sa: ws.sockaddr.in = undefined;
+        var len: c_int = @sizeOf(ws.sockaddr.in);
+        if (win32.getsockname(fd, &sa, &len) != 0) return error.Unexpected;
+        return std.mem.bigToNative(u16, sa.port);
+    }
+
+    fn accept(lfd: Socket) !Socket {
+        const fd = win32.accept(lfd, null, null);
+        if (fd == win32.INVALID_SOCKET) return error.ConnectionRefused;
+        return fd;
+    }
+
+    fn connect(fd: Socket, addr: u32, port: u16) !void {
+        const sa: ws.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
+        if (win32.connect(fd, &sa, @sizeOf(ws.sockaddr.in)) != 0) return error.ConnectionRefused;
+    }
+
+    fn sleepMs(ms: u32) void {
+        win32.Sleep(ms);
+    }
+} else struct {
+    fn open() !Socket {
+        const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
+        if (fd < 0) return error.SystemResources;
+        return fd;
+    }
+
+    fn close(fd: Socket) void {
+        _ = c.close(fd);
+    }
+
+    fn send(fd: Socket, bytes: []const u8, more: bool) !usize {
+        const flags: u32 = c.MSG.NOSIGNAL | if (more) @as(u32, c.MSG.MORE) else 0;
+        while (true) {
+            const n = c.send(fd, bytes.ptr, bytes.len, flags);
+            if (n >= 0) return @intCast(n);
+            const e = c.errno(n);
+            if (e != .INTR) {
+                std.log.err("errno {t}", .{e});
+                return error.Unexpected;
+            }
+        }
+    }
+
+    fn recv(fd: Socket, bytes: []u8) !usize {
+        while (true) {
+            const n = c.recv(fd, bytes.ptr, bytes.len, 0);
+            if (n >= 0) return @intCast(n);
+            const e = c.errno(n);
+            if (e != .INTR) {
+                std.log.err("errno {t}", .{e});
+                return error.Unexpected;
+            }
+        }
+    }
+
+    fn waitReadable(fd: Socket, timeout_ms: c_int) !bool {
+        var pfd = [1]c.pollfd{.{ .fd = fd, .events = c.POLL.IN, .revents = 0 }};
+        const rc = c.poll(&pfd, 1, timeout_ms);
+        if (rc < 0) return if (c.errno(rc) == .INTR) false else error.Unexpected;
+        return rc > 0;
+    }
+
+    fn shutdownSend(fd: Socket) void {
+        _ = c.shutdown(fd, 1); // SHUT_WR
+    }
+
+    fn noDelay(fd: Socket) void {
+        const one: c_int = 1;
+        _ = c.setsockopt(fd, c.IPPROTO.TCP, c.TCP.NODELAY, &one, @sizeOf(c_int));
+    }
+
+    fn bindListen(fd: Socket, addr: u32, port: u16) !void {
+        const one: c_int = 1;
+        _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &one, @sizeOf(c_int));
+        var sa: c.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
+        if (c.bind(fd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) != 0) return error.AddressInUse;
+        if (c.listen(fd, 1) != 0) return error.SystemResources;
+    }
+
+    fn boundPort(fd: Socket) !u16 {
+        var sa: c.sockaddr.in = undefined;
+        var len: c.socklen_t = @sizeOf(c.sockaddr.in);
+        if (c.getsockname(fd, @ptrCast(&sa), &len) != 0) return error.Unexpected;
+        return std.mem.bigToNative(u16, sa.port);
+    }
+
+    fn accept(lfd: Socket) !Socket {
+        const fd = c.accept(lfd, null, null);
+        if (fd < 0) return error.ConnectionRefused;
+        return fd;
+    }
+
+    fn connect(fd: Socket, addr: u32, port: u16) !void {
+        var sa: c.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
+        if (c.connect(fd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) != 0) return error.ConnectionRefused;
+    }
+
+    fn sleepMs(ms: u32) void {
+        const ts: c.timespec = .{ .sec = 0, .nsec = @as(c_long, ms) * std.time.ns_per_ms };
+        _ = c.nanosleep(&ts, null);
+    }
+};
 
 test "parseIp4" {
     try std.testing.expectEqual(@as(u32, @bitCast([4]u8{ 100, 119, 15, 36 })), try parseIp4("100.119.15.36"));
@@ -214,7 +364,7 @@ test "parseIp4" {
 
 test "TCP loopback carries writes and credits like shared memory" {
     const l = try listen(0);
-    defer _ = c.close(l.fd);
+    defer closeSocket(l.fd);
     const client_fd = try connect("127.0.0.1", l.port, 1);
     const server_fd = try acceptOn(l.fd);
 

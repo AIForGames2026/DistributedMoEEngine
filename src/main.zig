@@ -14,7 +14,7 @@ extern fn tf_version() c_uint;
 pub fn main(init: std.process.Init) !void {
     var n: usize = 1024;
     var first_kernel = false;
-    var it = init.minimal.args.iterate();
+    var it = try init.minimal.args.iterateAllocator(init.arena.allocator());
     _ = it.next();
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--first-kernel")) {

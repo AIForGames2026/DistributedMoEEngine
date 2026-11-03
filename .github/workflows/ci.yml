@@ -40,6 +40,18 @@ jobs:
       - name: Cross-compile for DGX Spark (aarch64)
         run: zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
 
+  windows:
+    name: Engine (Windows x86_64)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Unit tests, build, and PoC checks (build.ps1)
+        shell: powershell
+        run: .\build.ps1 -Port 7471
+
   inspector:
     name: Inspector (web build)
     runs-on: ubuntu-24.04

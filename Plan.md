@@ -212,6 +212,13 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Store experts losslessly compressed on NVMe and decompress them into CUDA-accessible memory before the FP4 kernel consumes them. Use the hardware Decompression Engine only if TASK-05 finds it on GB10 (NVIDIA documents it for B200/B300/GB200/GB300, not GB10), selecting `NVCOMP_DECOMPRESS_BACKEND_HARDWARE` so incompatible buffers fail instead of silently falling back. Otherwise use SM-based nvCOMP. The pipeline ends in device memory buffers; there is no documented NVMe to DE to TMEM path.
 - **Acceptance Criteria**: Done when the four-way benchmark (NVMe only, GEMM only, NVMe + GEMM, NVMe + decompress + GEMM) is recorded on real NVFP4 expert weights with compression ratio, compressed-input and output GB/s, GEMM slowdown, and end-to-end expert-ready latency, and compression is enabled by default only if it improves expert-ready latency by at least 10% over raw reads.
 
+#### [TASK-22] CPU-Only Expert Nodes
+- **Milestone**: Beta (Nov 22)
+- **Status**: Backlog
+- **Priority**: `could` | **Area**: `code` | **Tag**: `cut-1`
+- **Description**: Added Nov 3. Let a machine with no NVIDIA GPU (any x86_64 or ARM Linux or Windows box, starting with the desktop's i7-12700K) join as an expert node that runs its experts on the CPU. The PoC expert already does this for the synthetic MoE (`moe_ref.expert` behind `dispatch --moe`, over TCP, on Linux and native Windows); this task extends it to real weights: a per-process `cpu` backend flag in the placement manifest, CPU dequantization of the TASK-08 formats (Q8_0, MXFP4, NVFP4) to FP32 at load time, and a tiled CPU expert FFN. The wire format and transport do not change. This is the only supported way for non-NVIDIA hardware to take part (Section 4).
+- **Acceptance Criteria**: Done when the TASK-10 small public MoE runs split between a GPU process on `gx10-03` and a CPU-only expert process on the desktop over TCP, with logits within TASK-10's tolerance of the PyTorch reference and identical top-1 tokens, and the CPU process's per-expert latency and tokens/second are recorded in `bench/` (labeled as desktop CPU results).
+
 ---
 
 ### Milestone 4: Release Candidate (Target: Nov 29)
@@ -284,21 +291,21 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, shown in a browser replay. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 18, 19 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. | 12, 13, 15b, 16b |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. | 12, 13, 15b, 16b, 22 |
 
-**If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, and live telemetry.
+**If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, live telemetry, and CPU-only expert nodes.
 
 **Cut lines.** Cuts are applied in order. A cut task moves to `Backlog` with a `cut` note and is listed as future work in TASK-19.
 
 | Cut | Tag | Name | Tasks dropped | Trigger |
 |---|---|---|---|---|
-| **First cut** | `cut-1` | **Stretch** | 12, 13, 15b, 16b | Alpha (`v0.2.0-alpha`) not tagged by Tue Nov 10. TASK-15b alone drops if neither `gx10-01` nor `gx10-02` is free by Sun Nov 22. |
+| **First cut** | `cut-1` | **Stretch** | 12, 13, 15b, 16b, 22 | Alpha (`v0.2.0-alpha`) not tagged by Tue Nov 10. TASK-15b alone drops if neither `gx10-01` nor `gx10-02` is free by Sun Nov 22. |
 | **Second cut** | `cut-2` | **Speculation & Swarm** | 09, 11, 14, 17 (engine runs with resident experts and a static manifest) | TASK-11 not in `Review` by Wed Nov 18 |
 | **Emergency** | (none) | **TCP Floor** | Replace TASK-07 RDMA with the TASK-02 shared-memory and TCP backends for all later tasks; report those numbers as such | RDMA loopback on `gx10-03` not passing by Wed Nov 4 |
 
 TASK-20 is `should` but untagged: it is never cut, only reduced to a minimal build guide.
 
-**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist), OpenAI-compatible REST server, approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
+**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist), OpenAI-compatible REST server, approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends (AMD ROCm/HIP, Apple Metal, Intel; non-NVIDIA machines join only as CPU expert nodes, TASK-22), macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
 
 ---
 
@@ -308,7 +315,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b) |
+| **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22 |
 | **To Do** | TASK-07, TASK-08, TASK-21 |
 | **In Progress** | TASK-10 (synthetic two-process CPU slice passes) |
 | **Review** | (none) |
@@ -316,7 +323,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17 | 11 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22 | 12 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b | 3 |
@@ -326,7 +333,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 13 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 4 | all tagged `cut-1` |
+| `could` | 5 | all tagged `cut-1` |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 
@@ -363,6 +370,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-18 | 16 | Final |
 | TASK-19 | 15 | Final |
 | TASK-20 | all code tasks | Final |
+| TASK-22 | 08, 10 | 15 (optional CPU node in the cross-machine run) |
 
 **Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-15 → TASK-16 → TASK-18.
 

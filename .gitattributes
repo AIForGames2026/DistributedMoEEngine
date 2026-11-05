@@ -1,3 +1,7 @@
 *.sh text eol=lf
 *.tfref binary
 *.mp4 binary
+*.gguf binary
+*.safetensors binary
+# Fixture inputs are compared byte for byte by tools/ref/ref_quant.py --check
+tests/golden/*.json text eol=lf

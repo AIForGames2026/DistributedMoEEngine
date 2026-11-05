@@ -37,6 +37,15 @@ jobs:
           zig-out/bin/dispatch expert --port 7471 --moe & expert=$!
           zig-out/bin/dispatch router --host 127.0.0.1 --port 7471 --moe
           wait $expert
+      - name: Expert loader on the fixtures (TASK-08, io_uring O_DIRECT)
+        run: |
+          zig build tfload -Doptimize=ReleaseFast
+          t="$RUNNER_TEMP/tfload"
+          mkdir -p "$t" && cp tests/golden/quant_tiny.* tests/golden/nvfp4_tiny.* "$t"/
+          zig-out/bin/tfload index "$t/quant_tiny.gguf"
+          zig-out/bin/tfload load "$t/quant_tiny.gguf" --experts 1-2 --golden "$t/quant_tiny.tfref"
+          zig-out/bin/tfload index "$t/nvfp4_tiny.safetensors" --config "$t/nvfp4_tiny.config.json"
+          zig-out/bin/tfload load "$t/nvfp4_tiny.safetensors" --config "$t/nvfp4_tiny.config.json" --experts 0-3 --golden "$t/nvfp4_tiny.tfref"
       - name: Build with the RDMA transport (compile and link only; runners have no RDMA device)
         run: zig build install -Drdma=true --prefix zig-out-rdma
       - name: Cross-compile for DGX Spark (aarch64)

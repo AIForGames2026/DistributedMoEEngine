@@ -18,8 +18,15 @@ web/dist/
 # Model weights and large benchmark scratch data
 *.gguf
 *.safetensors
+# ...except the tiny loader fixtures (tools/ref/ref_quant.py)
+!tests/golden/*.gguf
+!tests/golden/*.safetensors
+*.tfsum
 models/
 bench/scratch/
+
+# Python bytecode (tools/ref)
+__pycache__/
 
 # Credentials (never commit)
 *.pem

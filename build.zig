@@ -17,6 +17,12 @@ pub fn build(b: *std.Build) void {
     engine.addCSourceFiles(.{ .files = &c_sources, .flags = &c_flags });
     // Golden outputs from tools/ref/ref_moe.py, embedded for the reference test.
     engine.addAnonymousImport("moe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/moe_tiny.tfref") });
+    // Quantized-format fixture and its golden values from tools/ref/ref_quant.py.
+    engine.addAnonymousImport("quant_tiny.gguf", .{ .root_source_file = b.path("tests/golden/quant_tiny.gguf") });
+    engine.addAnonymousImport("quant_tiny.tfref", .{ .root_source_file = b.path("tests/golden/quant_tiny.tfref") });
+    engine.addAnonymousImport("nvfp4_tiny.safetensors", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.safetensors") });
+    engine.addAnonymousImport("nvfp4_tiny.config.json", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.config.json") });
+    engine.addAnonymousImport("nvfp4_tiny.tfref", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.tfref") });
     // The TCP transport uses Winsock on Windows.
     if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 
@@ -112,6 +118,19 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
             p.step.dependOn(&install.step);
         }
     }
+
+    // Expert loader tool (TASK-08): GGUF / safetensors through the reader.
+    const tfload_mod = b.createModule(.{
+        .root_source_file = b.path("src/tfload.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    tfload_mod.addIncludePath(b.path("include"));
+    tfload_mod.addCSourceFiles(.{ .files = &(c_sources ++ [_][]const u8{"csrc/io/uring_reader.c"}), .flags = &c_flags });
+    linkUring(b, tfload_mod, uring);
+    const tfload = b.addExecutable(.{ .name = "tfload", .root_module = tfload_mod });
+    b.step("tfload", "Build the expert loader tool (needs liburing)").dependOn(&b.addInstallArtifact(tfload, .{}).step);
 }
 
 /// Toolchain gate (TASK-01): links liburing and the CUDA runtime, so it is a

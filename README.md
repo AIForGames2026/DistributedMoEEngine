@@ -27,7 +27,7 @@ TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference
 
 **The PoC check:** `dispatch --moe` splits a real (tiny, seeded) MoE across two engine processes: one runs the router, the other runs every expert, and they talk only through 7,552-byte wire-format packets. Output logits match PyTorch to 7.2e-7 with identical routing and top-1 tokens, over shared memory, TCP loopback, and desktop to Spark. See [POC.md](POC.md).
 
-Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory, TCP verified desktop to Spark, and RoCE v2 RDMA at 102 Gb/s on `gx10-03`), the io_uring expert reader (7.2 GB/s, matching `fio`), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows, builds the RDMA transport, and cross-compiles for the Sparks (aarch64).
+Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory, TCP verified desktop to Spark, and RoCE v2 RDMA at 102 Gb/s on `gx10-03`), the io_uring expert reader (7.2 GB/s, matching `fio`), an expert loader for GGUF and NVFP4 checkpoints (owned experts only, 7.0 GB/s on OLMoE-1B-7B), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows, builds the RDMA transport, and cross-compiles for the Sparks (aarch64).
 
 ## Links
 
@@ -115,12 +115,22 @@ zig build io-bench -Doptimize=ReleaseFast && zig-out/bin/uring_bench mk /tmp/exp
 Reference harness (TASK-06, testing only): regenerates `tests/golden/moe_tiny.tfref` from a fixed seed, or checks that the committed file still matches. Needs PyTorch (CPU build), for example in a virtual environment:
 
 ```bash
-python3 -m venv ~/tools/ref-venv && ~/tools/ref-venv/bin/pip install -r tools/ref/requirements.txt --index-url https://download.pytorch.org/whl/cpu
+python3 -m venv ~/tools/ref-venv && ~/tools/ref-venv/bin/pip install -r tools/ref/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
 ```bash
 ~/tools/ref-venv/bin/python tools/ref/ref_moe.py --check
 ```
+
+`tools/ref/ref_quant.py --check` does the same for the expert loader's fixtures (TASK-08): a GGUF file with Q8_0, MXFP4, and NVFP4 expert tensors written with llama.cpp's gguf-py, and a ModelOpt NVFP4 safetensors checkpoint.
+
+Expert loader (TASK-08): `tfload` reads only the experts a process owns from a GGUF or ModelOpt NVFP4 safetensors checkpoint, through the io_uring reader, and checks each one against a CRC32C index written once by `tfload index`. For example, with allenai's [OLMoE-1B-7B-0924-Instruct Q8_0 GGUF](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct-GGUF) (7.4 GB) in `~/models`:
+
+```bash
+zig build tfload -Doptimize=ReleaseFast && zig-out/bin/tfload index ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf && zig-out/bin/tfload load ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --experts 0-31
+```
+
+Add `--golden FILE.tfref` (from `ref_quant.py --model ... --out FILE.tfref`) to compare the dequantized experts with llama.cpp's own dequantizer. Results: [`bench/storage/gx10-03-2026-11-05.md`](bench/storage/gx10-03-2026-11-05.md).
 
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 

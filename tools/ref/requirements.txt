@@ -1,4 +1,7 @@
-# tools/ref only (testing). CPU build is enough:
-#   pip install -r tools/ref/requirements.txt --index-url https://download.pytorch.org/whl/cpu
+# tools/ref only (testing). CPU build of PyTorch is enough:
+#   pip install -r tools/ref/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.9.0
 numpy
+# ref_quant.py (TASK-08): llama.cpp's GGUF reader and writer, and safetensors
+gguf==0.19.0
+safetensors==0.8.0

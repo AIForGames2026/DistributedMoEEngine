@@ -70,6 +70,10 @@ test {
     _ = @import("transport.zig");
     _ = @import("tfref.zig");
     _ = @import("moe_ref.zig");
+    _ = @import("quant.zig");
+    _ = @import("gguf.zig");
+    _ = @import("safetensors.zig");
+    _ = @import("loader.zig");
 }
 
 test "C ABI reports version 0.1.0" {

@@ -154,10 +154,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-08] Quantized Expert Loader (GGUF + NVFP4)
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Backlog
+- **Status**: Review
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement a model loader that parses GGUF (Q8_0 and MXFP4 tensor types) and NVFP4 checkpoints (E2M1 values, E4M3 scale per 16 values, FP32 tensor scale) and loads only the experts this engine process owns, reading through the TASK-03 `io_uring` path.
 - **Acceptance Criteria**: Done when the engine parses a multi-expert model chunk, loads only this process's experts into memory, validates tensor shapes and checksums against the file metadata, and dequantized values match the reference harness within format tolerance.
+  - **Results (Nov 5)**: all acceptance checks pass. `src/gguf.zig` and `src/safetensors.zig` parse the headers; `src/quant.zig` decodes F32, F16, BF16, Q8_0, MXFP4, NVFP4 (GGUF blocks), and ModelOpt NVFP4 (E4M3 per 16 values plus the f32 `weight_scale_2`); `src/loader.zig` checks every expert tensor's shape against the model metadata (GGUF keys or `config.json`), plans aligned reads of only the owned experts, and checks each against a CRC32C index; `tfload` (`zig build tfload`) runs it through the io_uring reader. On `gx10-03`, half of OLMoE-1B-7B-0924-Instruct Q8_0 (experts 0 to 31, 3.42 GB of 7.36 GB) loads at 7.0 GB/s (97% of `fio`) with every expert's CRC32C checked in 0.13 s; 18 sampled expert weights are bit-identical to llama.cpp's gguf-py dequantizer. MXFP4, GGUF NVFP4, and ModelOpt NVFP4 are bit-identical on fixtures from `tools/ref/ref_quant.py` (unit tests and CI). Deviations: neither format stores checksums, so the index is a sidecar (`MODEL.tfsum`, written once by `tfload index`; the file is checked once against Hugging Face's SHA-256 at download); safetensors support is single-file (sharded checkpoints not yet); no public OLMoE checkpoint uses MXFP4 or NVFP4, so those formats are checked on fixtures only. See `bench/storage/gx10-03-2026-11-05.md`.
 
 #### [TASK-10] Top-k Expert Gating & First Two-Process Forward Pass
 - **Milestone**: Alpha (Nov 8)
@@ -167,6 +168,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Acceptance Criteria**: Done when a token sequence completes a forward pass split across 2 engine processes (on `gx10-03` over RDMA, and between the desktop and `gx10-03` over TCP) for the TASK-06 synthetic MoE and one small public MoE (for example OLMoE-1B-7B), with output logits matching the PyTorch reference within a documented tolerance (target: max abs error at or below 1e-2 in FP8 paths) and identical top-1 next tokens on the golden prompts.
   - **Progress (Nov 2, PoC core check)**: the TASK-06 synthetic MoE runs split across 2 processes on CPU (`dispatch --moe`: rank 0 routes, rank 1 owns every expert) over shared memory, TCP loopback, and TCP desktop to `gx10-03`. Routing identical, logits max abs error 7.15e-7, top-1 16/16 on every path. Left: GPU kernels, the RDMA path (needs TASK-07), and OLMoE-1B-7B (needs TASK-08). See `POC.md` and `bench/transport/2026-11-02.md`.
   - **Progress (Nov 5)**: the same synthetic MoE now also passes over RDMA on `gx10-03` (`dispatch rdma --moe`, 20 of 20 runs, logits max abs error 7.15e-7, top-1 16/16). Left: GPU kernels and OLMoE-1B-7B (needs TASK-08).
+  - **Progress (Nov 5)**: TASK-08 loads OLMoE-1B-7B's experts (Q8_0, owned experts only). Left: GPU kernels, and running the OLMoE expert FFNs from the loaded weights (attention, norms, and router weights still need loading too).
 
 #### [TASK-21] Direct Desktop-to-Spark Network Path
 - **Milestone**: Alpha (Nov 8)
@@ -318,9 +320,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | Column | Tasks |
 |---|---|
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22 |
-| **To Do** | TASK-08, TASK-21 |
+| **To Do** | TASK-21 |
 | **In Progress** | TASK-10 (synthetic two-process CPU slice passes over shared memory, TCP, and RDMA) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |

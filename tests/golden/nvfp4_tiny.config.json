@@ -1,0 +1,14 @@
+{
+  "architectures": [
+    "OlmoeForCausalLM"
+  ],
+  "num_hidden_layers": 2,
+  "num_experts": 4,
+  "hidden_size": 64,
+  "intermediate_size": 128,
+  "quantization_config": {
+    "quant_method": "modelopt",
+    "quant_algo": "NVFP4",
+    "group_size": 16
+  }
+}

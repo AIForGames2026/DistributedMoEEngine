@@ -46,8 +46,10 @@ jobs:
           zig-out/bin/tfload load "$t/quant_tiny.gguf" --experts 1-2 --golden "$t/quant_tiny.tfref"
           zig-out/bin/tfload index "$t/nvfp4_tiny.safetensors" --config "$t/nvfp4_tiny.config.json"
           zig-out/bin/tfload load "$t/nvfp4_tiny.safetensors" --config "$t/nvfp4_tiny.config.json" --experts 0-3 --golden "$t/nvfp4_tiny.tfref"
+      - name: Build OLMoE forward pass (TASK-10; the unit tests run a tiny OLMoE)
+        run: zig build olmoe -Doptimize=ReleaseFast
       - name: Build with the RDMA transport (compile and link only; runners have no RDMA device)
-        run: zig build install -Drdma=true --prefix zig-out-rdma
+        run: zig build install olmoe -Drdma=true --prefix zig-out-rdma
       - name: Cross-compile for DGX Spark (aarch64)
         run: zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
 

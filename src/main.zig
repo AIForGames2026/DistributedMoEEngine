@@ -74,6 +74,7 @@ test {
     _ = @import("gguf.zig");
     _ = @import("safetensors.zig");
     _ = @import("loader.zig");
+    _ = @import("olmoe.zig");
 }
 
 test "C ABI reports version 0.1.0" {

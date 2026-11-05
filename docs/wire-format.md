@@ -15,7 +15,7 @@ One packet carries one token's hidden state to one expert (dispatch) or one expe
 | `0x0010` | 2 | `src_rank` | `u16` | Sending node |
 | `0x0012` | 2 | `layer` | `u16` | Target layer |
 | `0x0014` | 2 | `expert` | `u16` | Target expert (global index) |
-| `0x0016` | 2 | `flags` | `u16` | Reserved, 0 in v0 |
+| `0x0016` | 2 | `flags` | `u16` | Payload encoding (bits 0 to 1) and chunk (bits 2 to 5); see below. 0 means the default: FP8, one packet |
 | `0x0018` | 4 | `gate_weight` | `f32` | Top-k gate weight, applied on combine |
 | `0x001C` | 4 | `payload_len` | `u32` | Valid bytes in `payload` |
 | `0x0020` | 7,168 | `payload` | `fp8_e4m3[7168]` | Hidden state; unused tail bytes are zero |
@@ -31,6 +31,18 @@ One packet carries one token's hidden state to one expert (dispatch) or one expe
 - **7,168-byte payload.** This fits DeepSeek-V3-class hidden sizes (7,168) at one byte per element. Smaller models, like OLMoE-1B-7B (2,048), set `payload_len` and leave the rest zero. The engine can shrink the slot size per model later; that becomes v1.
 - **Full 64-bit generation.** An 8-bit epoch wraps after 256 reuses of a slot, which happens within seconds. The full value lives in the header. The tail repeats its low 32 bits and is written last, so a receiver that polls memory (instead of waiting for a completion) can tell a fully placed packet from a stale one.
 - **CRC32C** (Castagnoli, the iSCSI polynomial) covers everything before the tail. Check value: `CRC32C("123456789") = 0xE3069283`.
+
+### Payload encodings (`flags`, added Nov 5 for TASK-10)
+
+The packet layout is unchanged; `flags`, reserved until now, says how `payload` holds the hidden state. A packet with `flags` 0 is exactly the original v0 packet.
+
+| Bits | Field | Values |
+|---|---|---|
+| 0 to 1 | encoding | 0: FP8 E4M3 ("e4m3fn") with one E8M0 scale per 32 values in `scales`, up to 7,168 values. 1: bfloat16, up to 3,584. 2: float32, exact, up to 1,792 |
+| 2 to 5 | chunk | For a vector larger than one packet holds: chunk *i* carries values *i* x max to (*i* + 1) x max. The chunks of one vector are sent back to back |
+| 6 to 15 | reserved | 0 |
+
+`payload_len` is the byte count of this packet's values. The FP8 block scale is the smallest power of two that keeps the block within 448, E4M3's largest value; values round to nearest even. Measured on OLMoE-1B-7B (2,048 values): FP8 and BF16 each fit one packet but round the hidden state, while F32 takes two packets and is exact ([`bench/olmoe/2026-11-05.md`](../bench/olmoe/2026-11-05.md)). The code is in `src/wire.zig` (`encodePayload`, `encodeChunk`).
 
 ## Immediate data (32 bits)
 

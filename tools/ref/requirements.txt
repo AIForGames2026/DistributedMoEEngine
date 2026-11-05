@@ -5,3 +5,5 @@ numpy
 # ref_quant.py (TASK-08): llama.cpp's GGUF reader and writer, and safetensors
 gguf==0.19.0
 safetensors==0.8.0
+# ref_olmoe.py (TASK-10): Hugging Face's own OLMoE implementation and tokenizer
+transformers==4.57.1

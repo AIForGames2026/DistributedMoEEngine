@@ -162,13 +162,14 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-10] Top-k Expert Gating & First Two-Process Forward Pass
 - **Milestone**: Alpha (Nov 8)
-- **Status**: In Progress
+- **Status**: Review
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement the gating router (softmax over top-k logits, starting with k = 1 and generalizing to k = 8) that sends each token to local or remote experts, runs the expert FFN, and combines weighted results. Combine writes each expert contribution to its own slot and reduces locally; overlapping RDMA writes do not sum. Expert placement comes from a static manifest file until TASK-09 lands.
 - **Acceptance Criteria**: Done when a token sequence completes a forward pass split across 2 engine processes (on `gx10-03` over RDMA, and between the desktop and `gx10-03` over TCP) for the TASK-06 synthetic MoE and one small public MoE (for example OLMoE-1B-7B), with output logits matching the PyTorch reference within a documented tolerance (target: max abs error at or below 1e-2 in FP8 paths) and identical top-1 next tokens on the golden prompts.
   - **Progress (Nov 2, PoC core check)**: the TASK-06 synthetic MoE runs split across 2 processes on CPU (`dispatch --moe`: rank 0 routes, rank 1 owns every expert) over shared memory, TCP loopback, and TCP desktop to `gx10-03`. Routing identical, logits max abs error 7.15e-7, top-1 16/16 on every path. Left: GPU kernels, the RDMA path (needs TASK-07), and OLMoE-1B-7B (needs TASK-08). See `POC.md` and `bench/transport/2026-11-02.md`.
   - **Progress (Nov 5)**: the same synthetic MoE now also passes over RDMA on `gx10-03` (`dispatch rdma --moe`, 20 of 20 runs, logits max abs error 7.15e-7, top-1 16/16). Left: GPU kernels and OLMoE-1B-7B (needs TASK-08).
   - **Progress (Nov 5)**: TASK-08 loads OLMoE-1B-7B's experts (Q8_0, owned experts only). Left: GPU kernels, and running the OLMoE expert FFNs from the loaded weights (attention, norms, and router weights still need loading too).
+  - **Results (Nov 5)**: all acceptance checks pass. `src/olmoe.zig` runs OLMoE-1B-7B (attention with QK norm, rotary embeddings, softmax-then-top-8 routing, SwiGLU experts) from the Q8_0 GGUF; `olmoe` (`zig build olmoe`) splits it across two processes, rank 0 holding everything but experts 32 to 63, which rank 1 holds, from a static placement manifest (`--placement`, default: halves). Against transformers' `OlmoeForCausalLM` on the same weights (`tools/ref/ref_olmoe.py`), three golden prompts give logits within 3.77e-5 (target 1e-2), every top-1 token identical (43/43), and every routing choice identical, over RDMA on `gx10-03` and over TCP from the desktop to `gx10-03`, as well as over shared memory and in one process; the synthetic MoE passed on all paths earlier. With `--gpu` (`-Dgpu=true`), every Q8_0 matmul runs on CUDA (`csrc/cuda/kernels.cu`): the 17-token prompt takes 0.41 s on the RTX 5070 Ti (CPU 4.5 s) and 0.67 s split over RDMA on GB10 with the weights used in place (CPU 2.9 s), with the same accuracy. A tiny random OLMoE with transformers' outputs (`ref_olmoe.py --tiny`) checks the whole forward pass in the unit tests and CI. Notes: the 1e-2 target is met with float32 payloads, sent as two packets per expert call (`flags` now numbers payload encodings and chunks; `docs/wire-format.md`); FP8 (the wire format's default) and BF16 keep every top-1 token but put the logits off by up to 2.1 and 0.35. On the GPU, norms, attention scores, and routing still run on the CPU. One unexplained GPU failure (the first run on `gx10-03`, likely NaNs) in 16 GPU runs. Prompts are processed whole (prefill); there is no KV cache or token-by-token generation yet (needed for TASK-15). See `bench/olmoe/2026-11-05.md`.
 
 #### [TASK-21] Direct Desktop-to-Spark Network Path
 - **Milestone**: Alpha (Nov 8)
@@ -321,8 +322,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22 |
 | **To Do** | TASK-21 |
-| **In Progress** | TASK-10 (synthetic two-process CPU slice passes over shared memory, TCP, and RDMA) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`) |
+| **In Progress** | (none) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |

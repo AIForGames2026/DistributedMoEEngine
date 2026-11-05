@@ -23,6 +23,9 @@ pub fn build(b: *std.Build) void {
     engine.addAnonymousImport("nvfp4_tiny.safetensors", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.safetensors") });
     engine.addAnonymousImport("nvfp4_tiny.config.json", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.config.json") });
     engine.addAnonymousImport("nvfp4_tiny.tfref", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.tfref") });
+    // Tiny random OLMoE and transformers' outputs for it (tools/ref/ref_olmoe.py --tiny).
+    engine.addAnonymousImport("olmoe_tiny.gguf", .{ .root_source_file = b.path("tests/golden/olmoe_tiny.gguf") });
+    engine.addAnonymousImport("olmoe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/olmoe_tiny.tfref") });
     // The TCP transport uses Winsock on Windows.
     if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 
@@ -81,8 +84,9 @@ pub fn build(b: *std.Build) void {
     b.step("startup", "Time process start to first kernel (median of 20)").dependOn(&run_startup.step);
 
     const uring = b.option([]const u8, "uring", "liburing install prefix, if not in system paths");
-    addIo(b, target, optimize, uring);
-    addGate(b, target, optimize, uring);
+    const cuda = b.option([]const u8, "cuda", "CUDA toolkit root (default /usr/local/cuda)") orelse "/usr/local/cuda";
+    addIo(b, target, optimize, uring, rdma, cuda);
+    addGate(b, target, optimize, uring, cuda);
 }
 
 /// Links liburing, from `prefix` if given, else from the system paths.
@@ -98,7 +102,7 @@ fn linkUring(b: *std.Build, mod: *std.Build.Module, prefix: ?[]const u8) void {
 
 /// io_uring expert reader (TASK-03): its unit test and bench need liburing,
 /// so they live in their own step, like the gate.
-fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, uring: ?[]const u8) void {
+fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, uring: ?[]const u8, rdma: bool, cuda: []const u8) void {
     const io_test = b.step("io-test", "Run the io_uring reader unit test (needs liburing)");
     const io_bench = b.step("io-bench", "Build tools/bench/uring_bench (needs liburing)");
     const programs = [_]struct { name: []const u8, src: []const u8, step: *std.Build.Step }{
@@ -131,13 +135,51 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
     linkUring(b, tfload_mod, uring);
     const tfload = b.addExecutable(.{ .name = "tfload", .root_module = tfload_mod });
     b.step("tfload", "Build the expert loader tool (needs liburing)").dependOn(&b.addInstallArtifact(tfload, .{}).step);
+
+    // OLMoE forward pass (TASK-10): loads through the same reader.
+    const olmoe_mod = b.createModule(.{
+        .root_source_file = b.path("src/olmoe_run.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    olmoe_mod.addIncludePath(b.path("include"));
+    olmoe_mod.addCSourceFiles(.{ .files = &(c_sources ++ [_][]const u8{"csrc/io/uring_reader.c"}), .flags = &c_flags });
+    linkUring(b, olmoe_mod, uring);
+    const gpu = b.option(bool, "gpu", "Build olmoe with CUDA matmuls (needs nvcc and the driver)") orelse false;
+    const olmoe_options = b.addOptions();
+    olmoe_options.addOption(bool, "rdma", rdma);
+    olmoe_options.addOption(bool, "gpu", gpu);
+    olmoe_mod.addOptions("build_options", olmoe_options);
+    if (rdma) {
+        olmoe_mod.addCSourceFile(.{ .file = b.path("csrc/tf_rdma.c"), .flags = &c_flags });
+        olmoe_mod.linkSystemLibrary("ibverbs", .{});
+    }
+    if (gpu) {
+        // Kernels for the RTX 5070 Ti (sm_120) and GB10 (sm_121), plus PTX
+        // for anything newer; loaded at run time through the driver API.
+        const nvcc = b.addSystemCommand(&.{
+            b.pathJoin(&.{ cuda, "bin", "nvcc" }), "-fatbin",                      "-O3",
+            "-gencode",                            "arch=compute_120,code=sm_120", "-gencode",
+            "arch=compute_121,code=sm_121",        "-gencode",                     "arch=compute_120,code=compute_120",
+            "-o",
+        });
+        const fatbin = nvcc.addOutputFileArg("kernels.fatbin");
+        nvcc.addFileArg(b.path("csrc/cuda/kernels.cu"));
+        olmoe_mod.addAnonymousImport("kernels.fatbin", .{ .root_source_file = fatbin });
+        olmoe_mod.addCSourceFile(.{ .file = b.path("csrc/tf_gpu.c"), .flags = &c_flags });
+        olmoe_mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "include" }) });
+        // Link against the toolkit's stub; the driver's libcuda loads at run time.
+        olmoe_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "lib64", "stubs" }) });
+        olmoe_mod.linkSystemLibrary("cuda", .{});
+    }
+    const olmoe = b.addExecutable(.{ .name = "olmoe", .root_module = olmoe_mod });
+    b.step("olmoe", "Build the OLMoE forward-pass tool (needs liburing)").dependOn(&b.addInstallArtifact(olmoe, .{}).step);
 }
 
 /// Toolchain gate (TASK-01): links liburing and the CUDA runtime, so it is a
 /// separate step that only machines with both installed need to build.
-fn addGate(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, uring: ?[]const u8) void {
-    const cuda = b.option([]const u8, "cuda", "CUDA toolkit root (default /usr/local/cuda)") orelse "/usr/local/cuda";
-
+fn addGate(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, uring: ?[]const u8, cuda: []const u8) void {
     const gate = b.createModule(.{
         .root_source_file = b.path("src/gate.zig"),
         .target = target,

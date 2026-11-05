@@ -27,7 +27,7 @@ TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference
 
 **The PoC check:** `dispatch --moe` splits a real (tiny, seeded) MoE across two engine processes: one runs the router, the other runs every expert, and they talk only through 7,552-byte wire-format packets. Output logits match PyTorch to 7.2e-7 with identical routing and top-1 tokens, over shared memory, TCP loopback, and desktop to Spark. See [POC.md](POC.md).
 
-Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory, TCP verified desktop to Spark, and RoCE v2 RDMA at 102 Gb/s on `gx10-03`), the io_uring expert reader (7.2 GB/s, matching `fio`), an expert loader for GGUF and NVFP4 checkpoints (owned experts only, 7.0 GB/s on OLMoE-1B-7B), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows, builds the RDMA transport, and cross-compiles for the Sparks (aarch64).
+Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory, TCP verified desktop to Spark, and RoCE v2 RDMA at 102 Gb/s on `gx10-03`), the io_uring expert reader (7.2 GB/s, matching `fio`), an expert loader for GGUF and NVFP4 checkpoints (owned experts only, 7.0 GB/s on OLMoE-1B-7B), an OLMoE-1B-7B forward pass split across two processes (over RDMA, TCP, or shared memory, on CPU or CUDA) that matches Hugging Face transformers, and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows, builds the RDMA transport, and cross-compiles for the Sparks (aarch64).
 
 ## Links
 
@@ -131,6 +131,20 @@ zig build tfload -Doptimize=ReleaseFast && zig-out/bin/tfload index ~/models/olm
 ```
 
 Add `--golden FILE.tfref` (from `ref_quant.py --model ... --out FILE.tfref`) to compare the dequantized experts with llama.cpp's own dequantizer. Results: [`bench/storage/gx10-03-2026-11-05.md`](bench/storage/gx10-03-2026-11-05.md).
+
+OLMoE-1B-7B forward pass (TASK-10): `olmoe` runs the model split across two processes, rank 0 with attention, router, LM head, and experts 0 to 31, rank 1 with experts 32 to 63, and compares the output with Hugging Face transformers on the same weights. Make the reference once (needs the model's `config.json` and `tokenizer.json` from [allenai/OLMoE-1B-7B-0924-Instruct](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct)):
+
+```bash
+~/tools/ref-venv/bin/python tools/ref/ref_olmoe.py --gguf ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --config ~/models/config.json --tokenizer ~/models/tokenizer.json --out ~/models/olmoe_forward.tfref
+```
+
+Then, for example over RDMA with CUDA matmuls (drop `-Dgpu=true` and `--gpu` for CPU only; `shm`, `local`, and `expert` / `router` over TCP work the same way):
+
+```bash
+zig build olmoe -Doptimize=ReleaseFast -Drdma=true -Dgpu=true && zig-out/bin/olmoe rdma ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --golden ~/models/olmoe_forward.tfref --payload f32 --gpu
+```
+
+`--payload f32` is exact (two packets per expert call); `bf16` and `fp8` (the default) are smaller but round the hidden state. Results: [`bench/olmoe/2026-11-05.md`](bench/olmoe/2026-11-05.md). A tiny random OLMoE (`ref_olmoe.py --tiny`, in `tests/golden/`) runs the same forward pass in `zig build test`.
 
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 

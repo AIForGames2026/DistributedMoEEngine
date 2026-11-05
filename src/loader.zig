@@ -228,14 +228,18 @@ pub const Plan = struct {
     }
 
     pub fn make(gpa: std.mem.Allocator, weights: []const ExpertWeight, alignment: u64, max_gap: u64, file_bytes: u64) Error!Plan {
-        std.debug.assert(std.math.isPowerOfTwo(alignment));
         var ranges: std.ArrayList(Range) = .empty;
         defer ranges.deinit(gpa);
+        for (weights) |w| for (w.parts) |r| if (r.len > 0) try ranges.append(gpa, r);
+        return fromRanges(gpa, ranges.items, alignment, max_gap, file_bytes);
+    }
+
+    /// Like `make`, for any byte ranges (the order of `ranges` is changed).
+    pub fn fromRanges(gpa: std.mem.Allocator, ranges_in: []Range, alignment: u64, max_gap: u64, file_bytes: u64) Error!Plan {
+        std.debug.assert(std.math.isPowerOfTwo(alignment));
         var wanted: u64 = 0;
-        for (weights) |w| for (w.parts) |r| if (r.len > 0) {
-            try ranges.append(gpa, r);
-            wanted += r.len;
-        };
+        for (ranges_in) |r| wanted += r.len;
+        const ranges: struct { items: []Range } = .{ .items = ranges_in };
         std.mem.sort(Range, ranges.items, {}, struct {
             fn lt(_: void, a: Range, b: Range) bool {
                 return a.offset < b.offset;

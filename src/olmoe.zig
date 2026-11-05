@@ -1,0 +1,500 @@
+//! OLMoE forward pass on CPU (TASK-10), matching Hugging Face's
+//! OlmoeForCausalLM: per layer, pre-norm attention with RMSNorm on the full
+//! query and key projections (QK norm), rotary embeddings in the rotate-half
+//! (NeoX) layout, causal softmax attention; then a pre-norm sparse MoE block
+//! that takes the softmax over all experts, keeps the top k without
+//! renormalizing, and sums the chosen SwiGLU experts' outputs weighted by
+//! those probabilities. Final RMSNorm, then the LM head.
+//!
+//! Weights stay in their GGUF block format and are dequantized one row at a
+//! time. The MoE block calls experts through `Moe`, so a process can run the
+//! experts it owns and send the rest to a peer (`olmoe_run.zig`).
+const std = @import("std");
+const quant = @import("quant.zig");
+const gguf = @import("gguf.zig");
+const loader = @import("loader.zig");
+
+pub const Config = struct {
+    layers: usize,
+    d_model: usize,
+    heads: usize,
+    head_dim: usize,
+    d_ff: usize,
+    experts: usize,
+    top_k: usize,
+    vocab: usize,
+    eps: f32,
+    rope_theta: f32,
+
+    pub fn fromGguf(h: gguf.Header) !Config {
+        const arch = h.getString("general.architecture") orelse return error.NotOlmoe;
+        if (!std.mem.eql(u8, arch, "olmoe")) return error.NotOlmoe;
+        const int = struct {
+            fn f(hh: gguf.Header, key: []const u8) !usize {
+                return @intCast(hh.getInt(key) orelse return error.MissingKey);
+            }
+        }.f;
+        const float = struct {
+            fn f(hh: gguf.Header, key: []const u8, default: f32) f32 {
+                const v = hh.get(key) orelse return default;
+                return switch (v) {
+                    .float => |x| @floatCast(x),
+                    else => default,
+                };
+            }
+        }.f;
+        const d = try int(h, "olmoe.embedding_length");
+        const heads = try int(h, "olmoe.attention.head_count");
+        if (try int(h, "olmoe.attention.head_count_kv") != heads) return error.Unsupported; // OLMoE-1B-7B has no GQA
+        const embd = h.tensor("token_embd.weight") orelse return error.MissingTensor;
+        return .{
+            .layers = try int(h, "olmoe.block_count"),
+            .d_model = d,
+            .heads = heads,
+            .head_dim = d / heads,
+            .d_ff = @intCast(h.getInt("olmoe.expert_feed_forward_length") orelse h.getInt("olmoe.feed_forward_length") orelse return error.MissingKey),
+            .experts = try int(h, "olmoe.expert_count"),
+            .top_k = try int(h, "olmoe.expert_used_count"),
+            .vocab = @intCast(embd.dims[1]),
+            .eps = float(h, "olmoe.attention.layer_norm_rms_epsilon", 1e-5),
+            .rope_theta = float(h, "olmoe.rope.freq_base", 10000),
+        };
+    }
+};
+
+/// Set by a caller with a GPU (`gpu.zig`): runs a matmul there and returns
+/// true, or returns false (unsupported format, say) to use the CPU path.
+pub var gpu_matmul: ?*const fn (m: Mat, x: []const f32, n: usize, y: []f32) bool = null;
+
+/// A row-major weight in a ggml block format: `rows` rows of `cols` values.
+pub const Mat = struct {
+    format: quant.Format,
+    rows: usize,
+    cols: usize,
+    bytes: []const u8,
+
+    pub fn rowBytes(self: Mat) usize {
+        return self.cols / self.format.blockValues() * self.format.blockBytes();
+    }
+
+    /// One row, dequantized into `out` (`cols` values).
+    pub fn row(self: Mat, r: usize, out: []f32) void {
+        const rb = self.rowBytes();
+        quant.dequantize(self.format, self.bytes[r * rb ..][0..rb], out[0..self.cols]) catch unreachable;
+    }
+
+    /// y[t][r] = sum over c of W[r][c] * x[t][c], for `n` inputs (x is n x cols,
+    /// y is n x rows). Each row is dequantized once and used for every input.
+    pub fn matmul(self: Mat, x: []const f32, n: usize, y: []f32, scratch: []f32) void {
+        std.debug.assert(x.len >= n * self.cols and y.len >= n * self.rows and scratch.len >= self.cols);
+        if (gpu_matmul) |f| if (f(self, x[0 .. n * self.cols], n, y[0 .. n * self.rows])) return;
+        for (0..self.rows) |r| {
+            self.row(r, scratch);
+            for (0..n) |t| y[t * self.rows + r] = dot(scratch[0..self.cols], x[t * self.cols ..][0..self.cols]);
+        }
+    }
+};
+
+pub fn dot(a: []const f32, b: []const f32) f32 {
+    const V = @Vector(16, f32);
+    var acc: V = @splat(0);
+    var i: usize = 0;
+    while (i + 16 <= a.len) : (i += 16) {
+        const va: V = a[i..][0..16].*;
+        const vb: V = b[i..][0..16].*;
+        acc += va * vb;
+    }
+    var s = @reduce(.Add, acc);
+    while (i < a.len) : (i += 1) s += a[i] * b[i];
+    return s;
+}
+
+pub fn rmsnorm(x: []const f32, w: []const f32, eps: f32, out: []f32) void {
+    var ss: f32 = 0;
+    for (x) |v| ss += v * v;
+    const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(x.len)) + eps);
+    for (out[0..x.len], x, w) |*o, v, g| o.* = v * inv * g;
+}
+
+fn silu(x: f32) f32 {
+    return x / (1.0 + @exp(-x));
+}
+
+/// Rotary embedding in place on each `head_dim` slice of `x` (one token,
+/// all heads): pairs are (i, i + head_dim / 2), as in rotate_half.
+pub fn rope(x: []f32, heads: usize, head_dim: usize, pos: usize, theta: f32) void {
+    const half = head_dim / 2;
+    for (0..half) |i| {
+        const inv_freq = 1.0 / std.math.pow(f32, theta, @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(head_dim)));
+        const angle = @as(f32, @floatFromInt(pos)) * inv_freq;
+        const cs = @cos(angle);
+        const sn = @sin(angle);
+        for (0..heads) |h| {
+            const v = x[h * head_dim ..];
+            const a = v[i];
+            const b = v[i + half];
+            v[i] = a * cs - b * sn;
+            v[i + half] = b * cs + a * sn;
+        }
+    }
+}
+
+/// One expert's SwiGLU: down(silu(gate x) * up x), for one token.
+pub const Expert = struct {
+    gate: Mat,
+    up: Mat,
+    down: Mat,
+
+    /// `scratch` needs 3 * d_ff + max(d_model, d_ff) values.
+    pub fn forward(self: Expert, x: []const f32, out: []f32, scratch: []f32) void {
+        const f = self.gate.rows;
+        const g = scratch[0..f];
+        const u = scratch[f..][0..f];
+        const row = scratch[2 * f ..][0..@max(self.gate.cols, f)];
+        self.gate.matmul(x, 1, g, row);
+        self.up.matmul(x, 1, u, row);
+        for (g, u) |*a, b| a.* = silu(a.*) * b;
+        self.down.matmul(g, 1, out, row);
+    }
+};
+
+/// How the MoE block reaches its experts.
+pub const Moe = struct {
+    ctx: *anyopaque,
+    /// For each of the `n` rows of `x` (normalized hidden states, n x d_model)
+    /// adds sum over j of w[t][j] * expert idx[t][j] (x[t]) to out[t] (zeroed
+    /// by the caller). idx and w are n x top_k.
+    run: *const fn (ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, w: []const f32, out: []f32) anyerror!void,
+};
+
+pub const Layer = struct {
+    attn_norm: []f32,
+    q: Mat,
+    k: Mat,
+    v: Mat,
+    o: Mat,
+    q_norm: []f32,
+    k_norm: []f32,
+    ffn_norm: []f32,
+    router: Mat,
+};
+
+/// Every weight except the experts, pointing into a region loaded by a plan
+/// (norm vectors are copied out as aligned f32).
+pub const Weights = struct {
+    cfg: Config,
+    embed: Mat,
+    layers: []Layer,
+    out_norm: []f32,
+    head: Mat,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn deinit(self: *Weights) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    /// The non-expert tensors' byte ranges, to add to a load plan.
+    pub fn ranges(gpa: std.mem.Allocator, h: gguf.Header) ![]loader.Range {
+        var list: std.ArrayList(loader.Range) = .empty;
+        for (h.tensors) |t| {
+            if (std.mem.indexOf(u8, t.name, "_exps.") != null) continue;
+            try list.append(gpa, .{ .offset = t.offset, .len = t.bytes });
+        }
+        return list.toOwnedSlice(gpa);
+    }
+
+    pub fn init(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader.Plan, region: []const u8) !Weights {
+        var self: Weights = .{ .cfg = cfg, .embed = undefined, .layers = undefined, .out_norm = undefined, .head = undefined, .arena = .init(gpa) };
+        errdefer self.arena.deinit();
+        const a = self.arena.allocator();
+        const Get = struct {
+            hh: gguf.Header,
+            p: loader.Plan,
+            reg: []const u8,
+            al: std.mem.Allocator,
+            fn info(s: @This(), name: []const u8) !gguf.TensorInfo {
+                return s.hh.tensor(name) orelse {
+                    std.log.err("missing tensor {s}", .{name});
+                    return error.MissingTensor;
+                };
+            }
+            fn mat(s: @This(), name: []const u8, rows: usize, cols: usize) !Mat {
+                const t = try s.info(name);
+                if (t.dims[0] != cols or t.dims[1] != rows) {
+                    std.log.err("{s}: dims {any}, expected [{d}, {d}]", .{ name, t.dims[0..t.ndim], cols, rows });
+                    return error.BadShape;
+                }
+                return .{ .format = t.format, .rows = rows, .cols = cols, .bytes = s.p.locate(s.reg, .{ .offset = t.offset, .len = t.bytes }) };
+            }
+            fn vec(s: @This(), name: []const u8, n: usize) ![]f32 {
+                const m = try s.mat(name, 1, n);
+                const out = try s.al.alloc(f32, n);
+                try quant.dequantize(m.format, m.bytes, out);
+                return out;
+            }
+        };
+        const g: Get = .{ .hh = h, .p = plan, .reg = region, .al = a };
+        const d = cfg.d_model;
+        self.embed = try g.mat("token_embd.weight", cfg.vocab, d);
+        self.head = try g.mat("output.weight", cfg.vocab, d);
+        self.out_norm = try g.vec("output_norm.weight", d);
+        self.layers = try a.alloc(Layer, cfg.layers);
+        for (self.layers, 0..) |*l, i| {
+            var buf: [64]u8 = undefined;
+            const n = struct {
+                fn f(b: []u8, layer: usize, s: []const u8) []const u8 {
+                    return std.fmt.bufPrint(b, "blk.{d}.{s}.weight", .{ layer, s }) catch unreachable;
+                }
+            }.f;
+            l.* = .{
+                .attn_norm = try g.vec(n(&buf, i, "attn_norm"), d),
+                .q = try g.mat(n(&buf, i, "attn_q"), d, d),
+                .k = try g.mat(n(&buf, i, "attn_k"), d, d),
+                .v = try g.mat(n(&buf, i, "attn_v"), d, d),
+                .o = try g.mat(n(&buf, i, "attn_output"), d, d),
+                .q_norm = try g.vec(n(&buf, i, "attn_q_norm"), d),
+                .k_norm = try g.vec(n(&buf, i, "attn_k_norm"), d),
+                .ffn_norm = try g.vec(n(&buf, i, "ffn_norm"), d),
+                .router = try g.mat(n(&buf, i, "ffn_gate_inp"), cfg.experts, d),
+            };
+        }
+        return self;
+    }
+};
+
+/// Per-layer values recorded during `forward`, for comparison with the
+/// reference: hidden state after each layer (layers x n x d_model) and the
+/// chosen experts (layers x n x top_k).
+pub const Trace = struct {
+    hidden: []f32,
+    topk: []u32,
+};
+
+/// Top-k of `p` by value, largest first; ties go to the lower index (as
+/// torch.topk does on CPU in practice).
+pub fn topK(p: []const f32, k: usize, idx: []u32, val: []f32) void {
+    for (0..k) |j| {
+        var best: ?usize = null;
+        for (p, 0..) |v, e| {
+            var taken = false;
+            for (idx[0..j]) |x| taken = taken or x == e;
+            if (taken) continue;
+            if (best == null or v > p[best.?]) best = e;
+        }
+        idx[j] = @intCast(best.?);
+        val[j] = p[best.?];
+    }
+}
+
+/// Runs `tokens` (positions 0 to n-1) through the model and writes every
+/// position's logits (n x vocab).
+pub fn forward(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, tokens: []const u32, logits: []f32, trace: ?Trace) !void {
+    const cfg = w.cfg;
+    const n = tokens.len;
+    const d = cfg.d_model;
+    const k = cfg.top_k;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const h = try a.alloc(f32, n * d);
+    const x = try a.alloc(f32, n * d);
+    const q = try a.alloc(f32, n * d);
+    const kk = try a.alloc(f32, n * d);
+    const v = try a.alloc(f32, n * d);
+    const att = try a.alloc(f32, n * d);
+    const tmp = try a.alloc(f32, n * d);
+    const scores = try a.alloc(f32, n);
+    const scratch = try a.alloc(f32, @max(d, cfg.d_ff));
+    const probs = try a.alloc(f32, n * cfg.experts);
+    const idx = try a.alloc(u32, n * k);
+    const wts = try a.alloc(f32, n * k);
+
+    for (tokens, 0..) |tok, t| {
+        if (tok >= cfg.vocab) return error.BadToken;
+        w.embed.row(tok, h[t * d ..][0..d]);
+    }
+    const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.head_dim)));
+    for (w.layers, 0..) |*l, li| {
+        // Attention.
+        for (0..n) |t| rmsnorm(h[t * d ..][0..d], l.attn_norm, cfg.eps, x[t * d ..][0..d]);
+        l.q.matmul(x, n, q, scratch);
+        l.k.matmul(x, n, kk, scratch);
+        l.v.matmul(x, n, v, scratch);
+        for (0..n) |t| {
+            const qt = q[t * d ..][0..d];
+            const kt = kk[t * d ..][0..d];
+            @memcpy(tmp[0..d], qt);
+            rmsnorm(tmp[0..d], l.q_norm, cfg.eps, qt);
+            @memcpy(tmp[0..d], kt);
+            rmsnorm(tmp[0..d], l.k_norm, cfg.eps, kt);
+            rope(qt, cfg.heads, cfg.head_dim, t, cfg.rope_theta);
+            rope(kt, cfg.heads, cfg.head_dim, t, cfg.rope_theta);
+        }
+        for (0..n) |t| {
+            for (0..cfg.heads) |hd| {
+                const qh = q[t * d + hd * cfg.head_dim ..][0..cfg.head_dim];
+                var mx: f32 = -std.math.inf(f32);
+                for (0..t + 1) |s| {
+                    scores[s] = dot(qh, kk[s * d + hd * cfg.head_dim ..][0..cfg.head_dim]) * scale;
+                    mx = @max(mx, scores[s]);
+                }
+                var sum: f32 = 0;
+                for (scores[0 .. t + 1]) |*sc| {
+                    sc.* = @exp(sc.* - mx);
+                    sum += sc.*;
+                }
+                const out = att[t * d + hd * cfg.head_dim ..][0..cfg.head_dim];
+                @memset(out, 0);
+                for (0..t + 1) |s| {
+                    const p = scores[s] / sum;
+                    for (out, v[s * d + hd * cfg.head_dim ..][0..cfg.head_dim]) |*o, vv| o.* += p * vv;
+                }
+            }
+        }
+        l.o.matmul(att, n, tmp, scratch);
+        for (h, tmp) |*hh, o| hh.* += o;
+
+        // Sparse MoE.
+        for (0..n) |t| rmsnorm(h[t * d ..][0..d], l.ffn_norm, cfg.eps, x[t * d ..][0..d]);
+        l.router.matmul(x, n, probs, scratch);
+        for (0..n) |t| {
+            const p = probs[t * cfg.experts ..][0..cfg.experts];
+            var mx: f32 = -std.math.inf(f32);
+            for (p) |pv| mx = @max(mx, pv);
+            var sum: f32 = 0;
+            for (p) |*pv| {
+                pv.* = @exp(pv.* - mx);
+                sum += pv.*;
+            }
+            for (p) |*pv| pv.* /= sum;
+            topK(p, k, idx[t * k ..][0..k], wts[t * k ..][0..k]);
+        }
+        @memset(tmp, 0);
+        try moe.run(moe.ctx, li, x, n, idx, wts, tmp);
+        for (h, tmp) |*hh, o| hh.* += o;
+
+        if (trace) |tr| {
+            @memcpy(tr.hidden[li * n * d ..][0 .. n * d], h);
+            @memcpy(tr.topk[li * n * k ..][0 .. n * k], idx);
+        }
+    }
+    for (0..n) |t| rmsnorm(h[t * d ..][0..d], w.out_norm, cfg.eps, x[t * d ..][0..d]);
+    w.head.matmul(x, n, logits, scratch);
+}
+
+/// Experts held in this process, by (layer, expert); null if not owned.
+pub const LocalExperts = struct {
+    cfg: Config,
+    experts: []?Expert,
+    scratch: []f32,
+    out: []f32,
+
+    pub fn init(a: std.mem.Allocator, cfg: Config, m: loader.Model, owned: []const bool, plan: loader.Plan, region: []const u8) !LocalExperts {
+        const ex = try a.alloc(?Expert, cfg.layers * cfg.experts);
+        for (ex, 0..) |*e, i| {
+            const layer: u32 = @intCast(i / cfg.experts);
+            const id: u32 = @intCast(i % cfg.experts);
+            if (!owned[id]) {
+                e.* = null;
+                continue;
+            }
+            const mk = struct {
+                fn f(w: loader.ExpertWeight, p: loader.Plan, r: []const u8) Mat {
+                    return .{ .format = w.format, .rows = @intCast(w.rows), .cols = @intCast(w.cols), .bytes = p.locate(r, w.parts[0]) };
+                }
+            }.f;
+            e.* = .{
+                .gate = mk(m.weight(layer, .gate, id), plan, region),
+                .up = mk(m.weight(layer, .up, id), plan, region),
+                .down = mk(m.weight(layer, .down, id), plan, region),
+            };
+        }
+        return .{
+            .cfg = cfg,
+            .experts = ex,
+            .scratch = try a.alloc(f32, 3 * cfg.d_ff + @max(cfg.d_model, cfg.d_ff)),
+            .out = try a.alloc(f32, cfg.d_model),
+        };
+    }
+
+    pub fn get(self: *const LocalExperts, layer: usize, expert: usize) ?Expert {
+        return self.experts[layer * self.cfg.experts + expert];
+    }
+
+    /// `Moe` for a process that owns every expert.
+    pub fn moe(self: *LocalExperts) Moe {
+        return .{ .ctx = self, .run = runAll };
+    }
+
+    fn runAll(ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, w: []const f32, out: []f32) anyerror!void {
+        const self: *LocalExperts = @ptrCast(@alignCast(ctx));
+        const d = self.cfg.d_model;
+        const k = self.cfg.top_k;
+        for (0..n) |t| {
+            for (0..k) |j| {
+                const e = self.get(layer, idx[t * k + j]) orelse return error.ExpertNotLocal;
+                e.forward(x[t * d ..][0..d], self.out, self.scratch);
+                for (out[t * d ..][0..d], self.out) |*o, y| o.* += w[t * k + j] * y;
+            }
+        }
+    }
+};
+
+test "tiny OLMoE matches transformers (tools/ref/ref_olmoe.py --tiny)" {
+    const tfref = @import("tfref.zig");
+    const gpa = std.testing.allocator;
+    const file = @embedFile("olmoe_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    // The whole file is the loaded region: one span at offset 0.
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [8]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+
+    const golden = try tfref.File.parse(@embedFile("olmoe_tiny.tfref"));
+    const prompts: usize = @intCast((try golden.get("config")).i32s()[0]);
+    for (0..prompts) |p| {
+        var buf: [64]u8 = undefined;
+        const ids = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
+        const tokens = try gpa.alloc(u32, ids.len);
+        defer gpa.free(tokens);
+        for (tokens, ids) |*t, id| t.* = @intCast(id);
+        const logits = try gpa.alloc(f32, ids.len * cfg.vocab);
+        defer gpa.free(logits);
+        const trace: Trace = .{ .hidden = try gpa.alloc(f32, cfg.layers * ids.len * cfg.d_model), .topk = try gpa.alloc(u32, cfg.layers * ids.len * cfg.top_k) };
+        defer gpa.free(trace.hidden);
+        defer gpa.free(trace.topk);
+        try forward(gpa, &w, local.moe(), tokens, logits, trace);
+
+        const want = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits", .{p}))).f32s();
+        for (logits, want) |a, b| try std.testing.expectApproxEqAbs(b, a, 1e-4);
+        for (0..cfg.layers) |l| {
+            const gi = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.topk_idx", .{ p, l }))).i32s();
+            for (trace.topk[l * ids.len * cfg.top_k ..][0 .. ids.len * cfg.top_k], gi) |got, exp| try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+        }
+    }
+}
+
+test "rope matches rotate_half on one pair" {
+    var x = [_]f32{ 1, 0, 0, 0, 0, 1, 0, 0 }; // head_dim 4: pairs (0, 2), (1, 3)
+    rope(&x, 2, 4, 1, 10000);
+    try std.testing.expectApproxEqAbs(@cos(@as(f32, 1)), x[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@sin(@as(f32, 1)), x[2], 1e-6);
+}
+
+test "topK keeps order and breaks ties toward the lower index" {
+    var idx: [3]u32 = undefined;
+    var val: [3]f32 = undefined;
+    topK(&.{ 0.1, 0.3, 0.3, 0.05, 0.25 }, 3, &idx, &val);
+    try std.testing.expectEqualSlices(u32, &.{ 1, 2, 4 }, &idx);
+}

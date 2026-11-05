@@ -90,6 +90,163 @@ pub const Imm = packed struct(u32) {
     }
 };
 
+/// How `payload` holds the hidden state: bits 0 to 1 of `Header.flags`.
+/// v0's packet layout is unchanged; flags 0 is the spec's FP8 encoding.
+pub const Encoding = enum(u2) {
+    /// FP8 E4M3 ("e4m3fn") values, one E8M0 power-of-two scale per 32 values
+    /// in `scales` (OCP MX). Up to 7,168 values.
+    fp8_e4m3 = 0,
+    /// bfloat16, round to nearest even. Up to 3,584 values.
+    bf16 = 1,
+    /// float32, exact. Up to 1,792 values.
+    f32 = 2,
+
+    pub fn maxValues(self: Encoding) usize {
+        return switch (self) {
+            .fp8_e4m3 => hidden_bytes,
+            .bf16 => hidden_bytes / 2,
+            .f32 => hidden_bytes / 4,
+        };
+    }
+
+    fn bytesPer(self: Encoding) usize {
+        return switch (self) {
+            .fp8_e4m3 => 1,
+            .bf16 => 2,
+            .f32 => 4,
+        };
+    }
+};
+
+pub fn encodingOf(h: Header) Encoding {
+    return @fromBackingInt(@intCast(@as(u2, @truncate(h.flags))));
+}
+
+/// Writes `x` into the payload in `enc`, setting `payload_len`, the encoding
+/// bits of `flags`, and (for FP8) the block scales. Unused payload and scale
+/// bytes are left as they were; the receiver reads only `payload_len` bytes.
+pub fn encodePayload(pkt: *Packet, enc: Encoding, x: []const f32) error{PayloadTooLarge}!void {
+    if (x.len > enc.maxValues()) return error.PayloadTooLarge;
+    pkt.header.flags = (pkt.header.flags & ~@as(u16, 3)) | @backingInt(enc);
+    pkt.header.payload_len = @intCast(x.len * enc.bytesPer());
+    switch (enc) {
+        .f32 => for (x, 0..) |v, i| std.mem.writeInt(u32, pkt.payload[i * 4 ..][0..4], @bitCast(v), .little),
+        .bf16 => for (x, 0..) |v, i| std.mem.writeInt(u16, pkt.payload[i * 2 ..][0..2], f32ToBf16(v), .little),
+        .fp8_e4m3 => {
+            var b: usize = 0;
+            while (b * 32 < x.len) : (b += 1) {
+                const blk = x[b * 32 .. @min(x.len, b * 32 + 32)];
+                var amax: f32 = 0;
+                for (blk) |v| amax = @max(amax, @abs(v));
+                // Smallest power of two that keeps the block within E4M3's 448.
+                const e: i32 = if (amax == 0) 0 else @intFromFloat(@ceil(std.math.log2(amax / 448.0)));
+                const se = std.math.clamp(e, -127, 127);
+                pkt.scales[b] = @intCast(se + 127);
+                const inv = std.math.ldexp(@as(f32, 1), -se);
+                for (blk, 0..) |v, i| pkt.payload[b * 32 + i] = f32ToE4m3(v * inv);
+            }
+        },
+    }
+}
+
+/// A vector longer than one packet holds (2,048 f32 values, say) goes as
+/// several packets of `enc.maxValues()` values each; bits 2 to 5 of `flags`
+/// number the chunk.
+pub fn chunkCount(enc: Encoding, n: usize) usize {
+    return (n + enc.maxValues() - 1) / enc.maxValues();
+}
+
+pub fn chunkOf(h: Header) usize {
+    return (h.flags >> 2) & 0xF;
+}
+
+/// Encodes chunk `chunk` of `x` (see `chunkCount`).
+pub fn encodeChunk(pkt: *Packet, enc: Encoding, x: []const f32, chunk: usize) error{PayloadTooLarge}!void {
+    const m = enc.maxValues();
+    if (chunk > 15 or chunk * m >= x.len) return error.PayloadTooLarge;
+    try encodePayload(pkt, enc, x[chunk * m .. @min(x.len, (chunk + 1) * m)]);
+    pkt.header.flags = (pkt.header.flags & ~@as(u16, 0xF << 2)) | @as(u16, @intCast(chunk << 2));
+}
+
+/// Decodes a packet's chunk into its place in `out` (the whole vector) and
+/// returns the chunk number.
+pub fn decodeChunk(pkt: *const Packet, out: []f32) error{BadPayload}!usize {
+    const enc = encodingOf(pkt.header);
+    const chunk = chunkOf(pkt.header);
+    const m = enc.maxValues();
+    if (chunk * m >= out.len) return error.BadPayload;
+    try decodeInto(pkt, out[chunk * m .. @min(out.len, (chunk + 1) * m)]);
+    return chunk;
+}
+
+/// Reads a single-packet payload into `out`, which must hold exactly the
+/// packet's value count (`payload_len` / bytes per value).
+pub fn decodePayload(pkt: *const Packet, out: []f32) error{BadPayload}!void {
+    if (chunkOf(pkt.header) != 0) return error.BadPayload;
+    return decodeInto(pkt, out);
+}
+
+fn decodeInto(pkt: *const Packet, out: []f32) error{BadPayload}!void {
+    const enc = encodingOf(pkt.header);
+    if (pkt.header.flags >> 6 != 0 or pkt.header.payload_len != out.len * enc.bytesPer() or out.len > enc.maxValues()) return error.BadPayload;
+    switch (enc) {
+        .f32 => for (out, 0..) |*o, i| {
+            o.* = @bitCast(std.mem.readInt(u32, pkt.payload[i * 4 ..][0..4], .little));
+        },
+        .bf16 => for (out, 0..) |*o, i| {
+            o.* = @bitCast(@as(u32, std.mem.readInt(u16, pkt.payload[i * 2 ..][0..2], .little)) << 16);
+        },
+        .fp8_e4m3 => for (out, 0..) |*o, i| {
+            const s: i32 = @as(i32, pkt.scales[i / 32]) - 127;
+            o.* = std.math.ldexp(e4m3ToF32(pkt.payload[i]), s);
+        },
+    }
+}
+
+fn f32ToBf16(x: f32) u16 {
+    const bits: u32 = @bitCast(x);
+    if (std.math.isNan(x)) return @truncate((bits >> 16) | 0x40);
+    return @truncate((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16);
+}
+
+/// Rounds `x` to the nearest even integer.
+fn roundEven(x: f32) f32 {
+    const f = @floor(x);
+    const diff = x - f;
+    if (diff > 0.5) return f + 1;
+    if (diff < 0.5) return f;
+    return if (@mod(f, 2) == 0) f else f + 1;
+}
+
+/// float32 to E4M3 ("e4m3fn": bias 7, max 448, no infinities), round to
+/// nearest even, saturating.
+pub fn f32ToE4m3(x: f32) u8 {
+    if (std.math.isNan(x)) return 0x7F;
+    const sign: u8 = if (std.math.signbit(x)) 0x80 else 0;
+    const a = @abs(x);
+    if (a >= 464) return sign | 0x7E; // 464 is halfway past 448; below it rounds to 448 at most
+    if (a < 0x1p-6) { // subnormal: m * 2^-9
+        const m: u8 = @intFromFloat(roundEven(a * 512));
+        return sign | m; // m == 8 is the smallest normal, encoded the same way
+    }
+    var e: i32 = @intFromFloat(@floor(std.math.log2(a)));
+    var m = roundEven((std.math.ldexp(a, -e) - 1) * 8);
+    if (m == 8) {
+        m = 0;
+        e += 1;
+    }
+    if (e > 8 or (e == 8 and m > 6)) return sign | 0x7E;
+    return sign | @as(u8, @intCast((e + 7) << 3)) | @as(u8, @intFromFloat(m));
+}
+
+pub fn e4m3ToF32(b: u8) f32 {
+    if (b & 0x7F == 0x7F) return std.math.nan(f32);
+    const e: i32 = (b >> 3) & 0xF;
+    const m: f32 = @floatFromInt(b & 7);
+    const mag = if (e == 0) m * 0x1p-9 else std.math.ldexp(1 + m / 8, e - 7);
+    return if (b & 0x80 != 0) -mag else mag;
+}
+
 comptime {
     std.debug.assert(@sizeOf(Header) == 32);
     std.debug.assert(@sizeOf(Tail) == 16);
@@ -140,6 +297,69 @@ test "CRC32C matches the standard check value and Zig's reference" {
     var buf: [1027]u8 = undefined;
     for (&buf, 0..) |*b, i| b.* = @truncate(i *% 31 +% 7);
     try std.testing.expectEqual(std.hash.crc.@"CRC-32/ISCSI".hash(&buf), crc32c(&buf));
+}
+
+test "E4M3 encoding round-trips every finite code" {
+    for (0..256) |i| {
+        const b: u8 = @intCast(i);
+        if (b & 0x7F == 0x7F) continue;
+        const v = e4m3ToF32(b);
+        const back = f32ToE4m3(v);
+        // +0 and -0 both encode as themselves.
+        try std.testing.expectEqual(b, back);
+    }
+    try std.testing.expectEqual(@as(u8, 0x7E), f32ToE4m3(1000)); // saturates at 448
+    try std.testing.expectEqual(@as(u8, 0x38), f32ToE4m3(1.03)); // 1.0 is nearest
+    try std.testing.expectEqual(@as(u8, 0x3C), f32ToE4m3(1.5625)); // halfway 1.5/1.625: even mantissa 1.5
+}
+
+test "payload encodings round-trip within their precision" {
+    const pkt = try std.testing.allocator.create(Packet);
+    defer std.testing.allocator.destroy(pkt);
+    pkt.* = std.mem.zeroes(Packet);
+    var x: [2048]f32 = undefined;
+    var s: u32 = 12345;
+    for (&x, 0..) |*v, i| {
+        s = s *% 1664525 +% 1013904223;
+        v.* = (@as(f32, @floatFromInt(s >> 8)) / 16777216.0 - 0.5) * @as(f32, @floatFromInt(1 + i % 7)) * 3;
+    }
+    var y: [2048]f32 = undefined;
+    for ([_]Encoding{ .fp8_e4m3, .bf16, .f32 }) |enc| {
+        if (x.len > enc.maxValues()) {
+            try std.testing.expectError(error.PayloadTooLarge, encodePayload(pkt, enc, &x));
+            continue;
+        }
+        try encodePayload(pkt, enc, &x);
+        try std.testing.expectEqual(enc, encodingOf(pkt.header));
+        try decodePayload(pkt, &y);
+        // Worst relative error against each block's largest value.
+        const tol: f32 = switch (enc) {
+            .fp8_e4m3 => 1.0 / 16.0, // 3 mantissa bits
+            .bf16 => 1.0 / 256.0,
+            .f32 => 0,
+        };
+        for (0..x.len / 32) |b| {
+            var amax: f32 = 0;
+            for (x[b * 32 ..][0..32]) |v| amax = @max(amax, @abs(v));
+            for (x[b * 32 ..][0..32], y[b * 32 ..][0..32]) |a, c| try std.testing.expect(@abs(a - c) <= tol * amax);
+        }
+    }
+}
+
+test "a vector larger than one packet goes as numbered chunks" {
+    const pkt = try std.testing.allocator.create(Packet);
+    defer std.testing.allocator.destroy(pkt);
+    pkt.* = std.mem.zeroes(Packet);
+    var x: [2048]f32 = undefined;
+    for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(i)) * 0.37 - 100;
+    var y: [2048]f32 = @splat(0);
+    try std.testing.expectEqual(@as(usize, 2), chunkCount(.f32, x.len));
+    for (0..2) |ch| {
+        try encodeChunk(pkt, .f32, &x, ch);
+        try std.testing.expectEqual(ch, try decodeChunk(pkt, &y));
+    }
+    try std.testing.expectEqualSlices(f32, &x, &y);
+    try std.testing.expectError(error.PayloadTooLarge, encodeChunk(pkt, .f32, &x, 2));
 }
 
 test "sealed packet passes; corruption and stale generation are caught" {

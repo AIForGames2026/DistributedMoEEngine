@@ -441,10 +441,6 @@ fn routerReport(ep: *transport.Endpoint, opts: Options, name: []const u8) !void 
 
 const golden = @embedFile("moe_tiny.tfref");
 
-fn payloadF32(pkt: *wire.Packet, n: usize) []align(1) f32 {
-    return std.mem.bytesAsSlice(f32, pkt.payload[0 .. n * @sizeOf(f32)]);
-}
-
 /// Rank 1 in `--moe` mode: owns every expert's FFN weights. Each dispatch
 /// carries one token's normalized hidden state for one (layer, expert); the
 /// combine carries that expert's output back, unweighted.
@@ -466,12 +462,12 @@ fn moeExpert(ep: *transport.Endpoint) !void {
         const r = try ep.recv();
         const hdr = r.packet.header;
         if (r.kind != .dispatch or hdr.layer >= cfg.layers or hdr.expert >= cfg.experts or
-            hdr.payload_len != d * @sizeOf(f32)) return error.BadDispatch;
-        for (n[0..d], payloadF32(@constCast(r.packet), d)) |*x, v| x.* = v;
+            wire.encodingOf(hdr) != .f32) return error.BadDispatch;
+        try wire.decodePayload(r.packet, n[0..d]);
         try ep.release();
         moe_ref.expert(cfg, weights[hdr.layer], hdr.expert, n[0..d], b[0..d]);
         out.header = hdr;
-        for (payloadF32(&out, d), b[0..d]) |*x, v| x.* = v;
+        try wire.encodePayload(&out, .f32, b[0..d]);
         try ep.send(&out, .combine);
     }
     try ep.finish();
@@ -512,8 +508,8 @@ fn moeRouter(ep: *transport.Endpoint, name: []const u8) !void {
             const tw = wts[t * k ..][0..k];
             moe_ref.route(cfg, w, h[t * d ..][0..d], n[0..d], logits[0..cfg.experts], ti, tw);
             for (ti, tw) |e, p| {
-                pkt.header = .{ .token_id = t, .generation = 0, .src_rank = 0, .layer = @intCast(l), .expert = @intCast(e), .flags = 0, .gate_weight = p, .payload_len = @intCast(d * @sizeOf(f32)) };
-                for (payloadF32(&pkt, d), n[0..d]) |*x, v| x.* = v;
+                pkt.header = .{ .token_id = t, .generation = 0, .src_rank = 0, .layer = @intCast(l), .expert = @intCast(e), .flags = 0, .gate_weight = p, .payload_len = 0 };
+                try wire.encodePayload(&pkt, .f32, n[0..d]); // exact, so results match the goldens bit for bit
                 try ep.send(&pkt, .dispatch);
             }
         }
@@ -524,8 +520,10 @@ fn moeRouter(ep: *transport.Endpoint, name: []const u8) !void {
             const t = i / k;
             // Combines must come back for exactly the (token, expert) we sent.
             if (r.kind != .combine or hdr.token_id != t or hdr.layer != l or
-                hdr.expert != idx[i] or hdr.payload_len != d * @sizeOf(f32)) return error.BadCombine;
-            for (moe[t * d ..][0..d], payloadF32(@constCast(r.packet), d)) |*m, v| m.* += wts[i] * v;
+                hdr.expert != idx[i] or wire.encodingOf(hdr) != .f32) return error.BadCombine;
+            var y: [64]f32 = undefined;
+            try wire.decodePayload(r.packet, y[0..d]);
+            for (moe[t * d ..][0..d], y[0..d]) |*m, v| m.* += wts[i] * v;
             try ep.release();
         }
         try ep.flushCredits();

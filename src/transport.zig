@@ -11,6 +11,8 @@ const wire = @import("wire.zig");
 
 pub const shm = @import("transport/shm.zig");
 pub const tcp = @import("transport/tcp.zig");
+/// Only usable in builds made with `-Drdma=true` (it links libibverbs).
+pub const rdma = @import("transport/rdma.zig");
 
 pub const Error = error{ ConnectionClosed, ProtocolError, Unexpected };
 

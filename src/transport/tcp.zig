@@ -46,15 +46,8 @@ pub const Link = struct {
         self.drainAndClose();
     }
 
-    /// Discards incoming bytes until the peer closes (or 5 s of silence),
-    /// then closes the socket.
     fn drainAndClose(self: *Link) void {
-        var scratch: [4096]u8 = undefined;
-        while (sock.waitReadable(self.fd, 5000) catch false) {
-            const n = sock.recv(self.fd, &scratch) catch break;
-            if (n == 0) break;
-        }
-        sock.close(self.fd);
+        drainAndCloseSocket(self.fd);
         self.fd = undefined;
     }
 
@@ -75,28 +68,11 @@ pub const Link = struct {
     };
 
     fn sendAll(self: *Link, bytes: []const u8, more: bool) transport.Error!void {
-        var off: usize = 0;
-        while (off < bytes.len) {
-            off += sock.send(self.fd, bytes[off..], more) catch |err| {
-                std.log.err("tcp send: {t}", .{err});
-                return error.ConnectionClosed;
-            };
-        }
+        return sendAllSocket(self.fd, bytes, more);
     }
 
     fn recvAll(self: *Link, bytes: []u8) transport.Error!void {
-        var off: usize = 0;
-        while (off < bytes.len) {
-            const n = sock.recv(self.fd, bytes[off..]) catch |err| {
-                std.log.err("tcp recv: {t}", .{err});
-                return error.ConnectionClosed;
-            };
-            if (n == 0) {
-                std.log.err("tcp recv: peer closed with {d} of {d} bytes read", .{ off, bytes.len });
-                return error.ConnectionClosed;
-            }
-            off += n;
-        }
+        return recvAllSocket(self.fd, bytes);
     }
 
     fn postWriteImm(ptr: *anyopaque, i: u16, pkt: *const wire.Packet, imm: u32) transport.Error!void {
@@ -139,6 +115,58 @@ pub const Link = struct {
         return &self.ring[i];
     }
 };
+
+fn sendAllSocket(fd: Socket, bytes: []const u8, more: bool) transport.Error!void {
+    var off: usize = 0;
+    while (off < bytes.len) {
+        off += sock.send(fd, bytes[off..], more) catch |err| {
+            std.log.err("tcp send: {t}", .{err});
+            return error.ConnectionClosed;
+        };
+    }
+}
+
+fn recvAllSocket(fd: Socket, bytes: []u8) transport.Error!void {
+    var off: usize = 0;
+    while (off < bytes.len) {
+        const n = sock.recv(fd, bytes[off..]) catch |err| {
+            std.log.err("tcp recv: {t}", .{err});
+            return error.ConnectionClosed;
+        };
+        if (n == 0) {
+            std.log.err("tcp recv: peer closed with {d} of {d} bytes read", .{ off, bytes.len });
+            return error.ConnectionClosed;
+        }
+        off += n;
+    }
+}
+
+/// Discards incoming bytes until the peer closes (or 5 s of silence), then
+/// closes the socket. Closing with unread bytes would make the kernel send a
+/// reset, which destroys data the peer has not read yet.
+fn drainAndCloseSocket(fd: Socket) void {
+    var scratch: [4096]u8 = undefined;
+    while (sock.waitReadable(fd, 5000) catch false) {
+        const n = sock.recv(fd, &scratch) catch break;
+        if (n == 0) break;
+    }
+    sock.close(fd);
+}
+
+/// Sends `mine` and receives exactly `theirs.len` bytes from the peer. Both
+/// sides call it at once; the messages are small enough to sit in the socket
+/// buffers, so neither side blocks the other. Used to bootstrap RDMA.
+pub fn exchange(fd: Socket, mine: []const u8, theirs: []u8) transport.Error!void {
+    try sendAllSocket(fd, mine, false);
+    try recvAllSocket(fd, theirs);
+}
+
+/// Ordered close of a bare socket, as `Link.close` (`after_peer` false) or
+/// `Link.closeAfterPeer` (true) do for a TCP link.
+pub fn closeAfterPeerSocket(fd: Socket, after_peer: bool) void {
+    if (!after_peer) sock.shutdownSend(fd);
+    drainAndCloseSocket(fd);
+}
 
 pub fn parseIp4(text: []const u8) !u32 {
     var parts = std.mem.splitScalar(u8, text, '.');

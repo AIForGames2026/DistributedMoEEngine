@@ -10,10 +10,22 @@
 //!   dispatch shm [--packets N] [--slots S] [--moe]        both ranks, two processes
 //!   dispatch expert --port P [--packets N] [--slots S] [--moe]   TCP server, rank 1
 //!   dispatch router --host IP --port P [--packets N] [--slots S] [--moe]
+//!   dispatch rdma [--dev D] [--gid G] ...                 both ranks, RDMA (TASK-07)
+//!   dispatch rdma-expert --port P [--dev D] [--gid G] ...
+//!   dispatch rdma-router --host IP --port P [--dev D] [--gid G] ...
+//!
+//! Instead of `--moe`, `--latency` measures one packet's one-way latency
+//! (half the round trip, like `ib_write_lat`) over `--packets` round trips, and
+//! `--oneway` streams `--packets` dispatches with no combines and reports the
+//! one-direction rate (like `ib_write_bw`).
 //!
 //! On Linux `shm` forks. Windows has no fork, so `shm` starts this program
 //! again as `dispatch shm-expert --name <mapping> ...` (internal) for rank 1.
+//! The `rdma` modes need Linux, an RDMA device, and `zig build -Drdma=true`;
+//! they swap queue-pair details over TCP on `--port`, then send everything
+//! over RDMA.
 const std = @import("std");
+const build_options = @import("build_options");
 const c = std.c;
 const win32 = @import("win32.zig");
 const wire = @import("wire.zig");
@@ -25,12 +37,21 @@ const moe_ref = @import("moe_ref.zig");
 const Options = struct {
     mode: []const u8 = "",
     packets: u64 = 4096,
+    /// Ring slots per rank. Defaults to 64, or 256 for the `rdma` modes: the
+    /// sender can only have a ring's worth in flight, and RDMA needs about
+    /// 256 to keep the link full (bench/transport/2026-11-05.md).
     slots: u16 = 64,
     host: []const u8 = "127.0.0.1",
     port: u16 = 7470,
     moe: bool = false,
+    latency: bool = false,
+    oneway: bool = false,
     /// `shm-expert` only: the shared mapping's name.
     name: []const u8 = "",
+    /// RDMA device; null takes the first.
+    device: ?[:0]const u8 = null,
+    /// RDMA GID index; negative picks the first RoCE v2 IPv4 GID.
+    gid: i32 = -1,
 };
 
 const is_windows = @import("builtin").os.tag == .windows;
@@ -40,9 +61,12 @@ const combine_salt = 1;
 pub fn main(init: std.process.Init) !void {
     const opts = parseArgs(init) catch {
         std.debug.print(
-            \\usage: dispatch shm [--packets N] [--slots S] [--moe]
-            \\       dispatch expert --port P [--packets N] [--slots S] [--moe]
-            \\       dispatch router --host IP --port P [--packets N] [--slots S] [--moe]
+            \\usage: dispatch shm [--packets N] [--slots S] [--moe | --latency | --oneway]
+            \\       dispatch expert --port P [--packets N] [--slots S] [--moe | --latency | --oneway]
+            \\       dispatch router --host IP --port P [--packets N] [--slots S] [--moe | --latency | --oneway]
+            \\       dispatch rdma [--dev D] [--gid G] [--packets N] [--slots S] [--moe | --latency | --oneway]
+            \\       dispatch rdma-expert --port P [--dev D] [--gid G] [...]
+            \\       dispatch rdma-router --host IP --port P [--dev D] [--gid G] [...]
             \\
         , .{});
         std.process.exit(2);
@@ -50,6 +74,12 @@ pub fn main(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, opts.mode, "shm")) return if (is_windows) runShmSpawn(init, opts) else runShmFork(opts);
     if (is_windows and std.mem.eql(u8, opts.mode, "shm-expert")) return runShmExpert(opts);
+    if (std.mem.startsWith(u8, opts.mode, "rdma")) {
+        if (comptime !build_options.rdma) {
+            std.debug.print("this build has no RDMA support; rebuild with zig build -Drdma=true (Linux, libibverbs)\n", .{});
+            std.process.exit(2);
+        } else return runRdma(opts);
+    }
 
     var arena = try Arena.init(@as(usize, opts.slots) * @sizeOf(wire.Packet));
     defer arena.deinit();
@@ -63,16 +93,13 @@ pub fn main(init: std.process.Init) !void {
         var link = transport.tcp.Link.init(fd, ring);
         defer link.closeAfterPeer();
         var ep = transport.Endpoint.init(link.backend(), 1, opts.slots);
-        if (opts.moe) return moeExpert(&ep);
-        try expert(&ep, opts.packets);
-        std.debug.print("expert: verified {d} dispatch packets, sent {d} combines\n", .{ ep.stats.received, ep.stats.sent });
+        try rank1(&ep, opts);
     } else if (std.mem.eql(u8, opts.mode, "router")) {
         const fd = try transport.tcp.connect(opts.host, opts.port, 100);
         var link = transport.tcp.Link.init(fd, ring);
         defer link.close();
         var ep = transport.Endpoint.init(link.backend(), 0, opts.slots);
-        if (opts.moe) return moeRouter(&ep, "tcp");
-        try routerReport(&ep, opts, "tcp");
+        try rank0(&ep, opts, "tcp");
     } else {
         std.debug.print("unknown mode '{s}'\n", .{opts.mode});
         std.process.exit(2);
@@ -81,6 +108,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn parseArgs(init: std.process.Init) !Options {
     var opts: Options = .{};
+    var slots_given = false;
     var it = try init.minimal.args.iterateAllocator(init.arena.allocator());
     _ = it.next();
     opts.mode = it.next() orelse return error.Usage;
@@ -89,20 +117,35 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.moe = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--latency")) {
+            opts.latency = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--oneway")) {
+            opts.oneway = true;
+            continue;
+        }
         const value = it.next() orelse return error.Usage;
         if (std.mem.eql(u8, arg, "--packets")) {
             opts.packets = try std.fmt.parseInt(u64, value, 10);
         } else if (std.mem.eql(u8, arg, "--slots")) {
             opts.slots = try std.fmt.parseInt(u16, value, 10);
+            slots_given = true;
         } else if (std.mem.eql(u8, arg, "--host")) {
             opts.host = value;
         } else if (std.mem.eql(u8, arg, "--port")) {
             opts.port = try std.fmt.parseInt(u16, value, 10);
         } else if (std.mem.eql(u8, arg, "--name")) {
             opts.name = value;
+        } else if (std.mem.eql(u8, arg, "--dev")) {
+            opts.device = value;
+        } else if (std.mem.eql(u8, arg, "--gid")) {
+            opts.gid = try std.fmt.parseInt(i32, value, 10);
         } else return error.Usage;
     }
     if (opts.slots == 0) return error.Usage;
+    if (!slots_given and std.mem.startsWith(u8, opts.mode, "rdma")) opts.slots = 256;
+    if (@as(u8, @intFromBool(opts.moe)) + @intFromBool(opts.latency) + @intFromBool(opts.oneway) > 1) return error.Usage;
     return opts;
 }
 
@@ -114,7 +157,7 @@ fn runShmFork(opts: Options) !void {
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) {
         var ep = transport.Endpoint.init(pair.side(1).backend(), 1, opts.slots);
-        (if (opts.moe) moeExpert(&ep) else expert(&ep, opts.packets)) catch |err| {
+        rank1(&ep, opts) catch |err| {
             std.debug.print("expert: {t}\n", .{err});
             c._exit(1);
         };
@@ -122,7 +165,7 @@ fn runShmFork(opts: Options) !void {
     }
 
     var ep = transport.Endpoint.init(pair.side(0).backend(), 0, opts.slots);
-    const result = if (opts.moe) moeRouter(&ep, "shm") else routerReport(&ep, opts, "shm");
+    const result = rank0(&ep, opts, "shm");
     var status: c_int = 0;
     _ = c.waitpid(pid, &status, 0);
     try result;
@@ -148,10 +191,12 @@ fn runShmSpawn(init: std.process.Init, opts: Options) !void {
         "--packets", try std.fmt.bufPrint(&packets_buf, "{d}", .{opts.packets}),
     });
     if (opts.moe) argv.appendAssumeCapacity("--moe");
+    if (opts.latency) argv.appendAssumeCapacity("--latency");
+    if (opts.oneway) argv.appendAssumeCapacity("--oneway");
     var child = try std.process.spawn(init.io, .{ .argv = argv.items });
 
     var ep = transport.Endpoint.init(pair.side(0).backend(), 0, opts.slots);
-    const result = if (opts.moe) moeRouter(&ep, "shm") else routerReport(&ep, opts, "shm");
+    const result = rank0(&ep, opts, "shm");
     if (result) |_| {
         if (!(try child.wait(init.io)).success()) return error.ExpertFailed;
     } else |err| {
@@ -166,8 +211,169 @@ fn runShmExpert(opts: Options) !void {
     var pair = try transport.shm.Pair.open(opts.name, opts.slots);
     defer pair.deinit();
     var ep = transport.Endpoint.init(pair.side(1).backend(), 1, opts.slots);
-    if (opts.moe) return moeExpert(&ep);
-    try expert(&ep, opts.packets);
+    try rank1(&ep, opts);
+}
+
+/// The `rdma` modes. Queue-pair details go over a TCP socket (a loopback one
+/// between a fork's two halves for plain `rdma`), then all traffic is RDMA.
+fn runRdma(opts: Options) !void {
+    if (std.mem.eql(u8, opts.mode, "rdma")) {
+        const l = try transport.tcp.listen(0);
+        const pid = c.fork();
+        if (pid < 0) return error.ForkFailed;
+        if (pid == 0) {
+            transport.tcp.closeSocket(l.fd);
+            const fd = transport.tcp.connect("127.0.0.1", l.port, 50) catch c._exit(1);
+            rdmaRank(fd, 1, opts) catch |err| {
+                std.debug.print("expert: {t}\n", .{err});
+                c._exit(1);
+            };
+            c._exit(0);
+        }
+        const fd = try transport.tcp.acceptOn(l.fd);
+        transport.tcp.closeSocket(l.fd);
+        const result = rdmaRank(fd, 0, opts);
+        var status: c_int = 0;
+        _ = c.waitpid(pid, &status, 0);
+        try result;
+        if (status != 0) return error.ExpertFailed;
+    } else if (std.mem.eql(u8, opts.mode, "rdma-expert")) {
+        const l = try transport.tcp.listen(opts.port);
+        std.debug.print("expert: listening on port {d} for the RDMA handshake\n", .{l.port});
+        const fd = try transport.tcp.acceptOn(l.fd);
+        transport.tcp.closeSocket(l.fd);
+        try rdmaRank(fd, 1, opts);
+    } else if (std.mem.eql(u8, opts.mode, "rdma-router")) {
+        try rdmaRank(try transport.tcp.connect(opts.host, opts.port, 100), 0, opts);
+    } else {
+        std.debug.print("unknown mode '{s}'\n", .{opts.mode});
+        std.process.exit(2);
+    }
+}
+
+fn rdmaRank(fd: transport.tcp.Socket, rank: u6, opts: Options) !void {
+    var arena = try Arena.init(@as(usize, opts.slots) * @sizeOf(wire.Packet));
+    defer arena.deinit();
+    const ring = try arena.alloc(wire.Packet, opts.slots);
+    var link = try transport.rdma.Link.connect(fd, rank, ring, .{ .device = opts.device, .gid_index = opts.gid });
+    defer link.close();
+    var ep = transport.Endpoint.init(link.backend(), rank, opts.slots);
+    if (rank == 0) try rank0(&ep, opts, "rdma") else try rank1(&ep, opts);
+}
+
+/// Rank 0's side of whichever check `opts` selects.
+fn rank0(ep: *transport.Endpoint, opts: Options, name: []const u8) !void {
+    if (opts.moe) return moeRouter(ep, name);
+    if (opts.latency) return latencyRouter(ep, opts.packets, name);
+    if (opts.oneway) return onewayRouter(ep, opts.packets, name);
+    return routerReport(ep, opts, name);
+}
+
+/// Rank 1's side of whichever check `opts` selects.
+fn rank1(ep: *transport.Endpoint, opts: Options) !void {
+    if (opts.moe) return moeExpert(ep);
+    if (opts.latency) return latencyExpert(ep, opts.packets);
+    if (opts.oneway) return onewayExpert(ep, opts.packets);
+    try expert(ep, opts.packets);
+    std.debug.print("expert: verified {d} dispatch packets, sent {d} combines\n", .{ ep.stats.received, ep.stats.sent });
+}
+
+const latency_warmup = 1000;
+
+/// Rank 0 `--latency`: one dispatch out, then wait for its combine, `rounds`
+/// times after a warm-up. Reports half of each round trip, as `ib_write_lat`
+/// does, so the numbers compare directly. Includes sealing and checking the
+/// packet (CRC32C) on both sides.
+fn latencyRouter(ep: *transport.Endpoint, rounds: u64, name: []const u8) !void {
+    const gpa = std.heap.page_allocator;
+    const samples = try gpa.alloc(u64, rounds);
+    defer gpa.free(samples);
+    var pkt = std.mem.zeroes(wire.Packet);
+    pkt.header.payload_len = wire.hidden_bytes;
+    transport.fillPayload(&pkt, 0, 0);
+    for (0..latency_warmup + rounds) |i| {
+        pkt.header.token_id = i;
+        const t0 = nowNs();
+        try ep.send(&pkt, .dispatch);
+        const r = try ep.recv();
+        const t1 = nowNs();
+        if (r.kind != .combine or r.packet.header.token_id != i) return error.BadCombine;
+        try ep.release();
+        if (i >= latency_warmup) samples[i - latency_warmup] = t1 - t0;
+    }
+    try ep.finish();
+    std.mem.sort(u64, samples, {}, std.sort.asc(u64));
+    const half = struct {
+        fn us(ns: u64) f64 {
+            return @as(f64, @floatFromInt(ns)) / 2e3;
+        }
+    }.us;
+    std.debug.print("{s}: one-way latency over {d} round trips of {d}-byte packets: min {d:.2} us, p50 {d:.2} us, p99 {d:.2} us, p99.9 {d:.2} us\n", .{
+        name,
+        rounds,
+        wire.packet_bytes,
+        half(samples[0]),
+        half(samples[samples.len / 2]),
+        half(samples[samples.len * 99 / 100]),
+        half(samples[samples.len * 999 / 1000]),
+    });
+}
+
+/// Rank 1 `--latency`: answer each dispatch with a combine at once.
+fn latencyExpert(ep: *transport.Endpoint, rounds: u64) !void {
+    var out = std.mem.zeroes(wire.Packet);
+    out.header.payload_len = wire.hidden_bytes;
+    for (0..latency_warmup + rounds) |_| {
+        const r = try ep.recv();
+        if (r.kind != .dispatch) return error.BadDispatch;
+        out.header.token_id = r.packet.header.token_id;
+        try ep.release();
+        try ep.send(&out, .combine);
+    }
+    try ep.finish();
+}
+
+/// Rank 0 `--oneway`: stream `packets` dispatches as fast as credits allow;
+/// rank 1 confirms the last one with a single combine. Reports one
+/// direction's payload rate, as `ib_write_bw` does.
+fn onewayRouter(ep: *transport.Endpoint, packets: u64, name: []const u8) !void {
+    var pkt = std.mem.zeroes(wire.Packet);
+    pkt.header.payload_len = wire.hidden_bytes;
+    transport.fillPayload(&pkt, 0, 0);
+    const start = nowNs();
+    for (0..packets) |i| {
+        pkt.header.token_id = i;
+        try ep.send(&pkt, .dispatch);
+    }
+    const r = try ep.recv();
+    const ns = nowNs() - start;
+    if (r.kind != .combine or r.packet.header.token_id != packets - 1) return error.BadCombine;
+    try ep.release();
+    try ep.finish();
+    std.debug.print("{s}: one-way {d} x {d}-byte packets in {d:.2} ms: {d:.2} Gb/s, {d:.2} us per packet, {d} polls waiting for credits\n", .{
+        name,
+        packets,
+        wire.packet_bytes,
+        @as(f64, @floatFromInt(ns)) / 1e6,
+        @as(f64, @floatFromInt(packets * wire.packet_bytes * 8)) / @as(f64, @floatFromInt(ns)),
+        @as(f64, @floatFromInt(ns)) / 1e3 / @as(f64, @floatFromInt(packets)),
+        ep.stats.blocked_polls,
+    });
+}
+
+/// Rank 1 `--oneway`: receive and check every dispatch, confirm the last.
+fn onewayExpert(ep: *transport.Endpoint, packets: u64) !void {
+    var last: u64 = 0;
+    for (0..packets) |i| {
+        const r = try ep.recv();
+        if (r.kind != .dispatch or r.packet.header.token_id != i) return error.BadDispatch;
+        last = r.packet.header.token_id;
+        try ep.release();
+    }
+    var out = std.mem.zeroes(wire.Packet);
+    out.header.token_id = last;
+    try ep.send(&out, .combine);
+    try ep.finish();
 }
 
 /// Rank 1: receive each dispatch, check it, answer with a combine.

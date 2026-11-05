@@ -51,6 +51,15 @@ pub fn build(b: *std.Build) void {
     dispatch_mod.addCSourceFiles(.{ .files = &c_sources, .flags = &c_flags });
     dispatch_mod.addAnonymousImport("moe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/moe_tiny.tfref") });
     if (target.result.os.tag == .windows) dispatch_mod.linkSystemLibrary("ws2_32", .{});
+    // RDMA transport (TASK-07): opt in, since it needs libibverbs (Linux).
+    const rdma = b.option(bool, "rdma", "Build dispatch with the RDMA transport (needs libibverbs)") orelse false;
+    const dispatch_options = b.addOptions();
+    dispatch_options.addOption(bool, "rdma", rdma);
+    dispatch_mod.addOptions("build_options", dispatch_options);
+    if (rdma) {
+        dispatch_mod.addCSourceFile(.{ .file = b.path("csrc/tf_rdma.c"), .flags = &c_flags });
+        dispatch_mod.linkSystemLibrary("ibverbs", .{});
+    }
     const dispatch = b.addExecutable(.{ .name = "dispatch", .root_module = dispatch_mod });
     b.installArtifact(dispatch);
     const run_dispatch = b.addRunArtifact(dispatch);

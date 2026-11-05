@@ -14,8 +14,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - name: Install liburing
-        run: sudo apt-get update && sudo apt-get install -y liburing-dev
+      - name: Install liburing and libibverbs
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev libibverbs-dev
       - name: Unit tests (x86_64)
         run: zig build test --summary all
       - name: io_uring reader test
@@ -37,6 +37,8 @@ jobs:
           zig-out/bin/dispatch expert --port 7471 --moe & expert=$!
           zig-out/bin/dispatch router --host 127.0.0.1 --port 7471 --moe
           wait $expert
+      - name: Build with the RDMA transport (compile and link only; runners have no RDMA device)
+        run: zig build install -Drdma=true --prefix zig-out-rdma
       - name: Cross-compile for DGX Spark (aarch64)
         run: zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
 

@@ -145,11 +145,12 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-07] RoCE v2 Zero-Copy RDMA Transport
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Backlog
+- **Status**: Review
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement the RDMA backend of the TASK-02 `Transport` with libibverbs Reliable Connection QPs over ConnectX-7, using one-sided `IBV_WR_RDMA_WRITE_WITH_IMM` into pre-registered remote slot rings. Bootstrap QPN, PSN, GID index, remote address, and rkey from a launcher manifest. The CPU publishes receiver-side readiness after it sees the CQE; the immediate value does not increment memory by itself. With one free node, this is developed and accepted as two processes on `gx10-03` talking through its ConnectX-7 (HCA loopback). The Sparks are already direct-cabled in a full mesh at 200 Gb/s, so real two-node runs need only `gx10-01` or `gx10-02` to be free (TASK-15b).
 - **Acceptance Criteria**: Done when two processes on `gx10-03` pass the TASK-02 test suite unchanged on the RDMA backend, single-packet one-way latency p50 is within 1.5x of loopback `ib_write_lat` for the same size, sustained bandwidth reaches at least 90% of loopback `ib_write_bw`, and no payload slot is reused before its send completion. If TASK-05 shows RDMA loopback cannot run on `gx10-03`, the same suite passes against Soft-RoCE (`rdma_rxe`) and the Emergency cut in Section 4 applies for performance numbers.
   - **From the PoC (Nov 2)**: keep the ordered goodbye (rank 0 first; rank 1 tears down after rank 0), since the relayed TCP path showed that close-time ordering cannot be assumed; and keep CRC32C on the hardware instructions (or offload it), because software CRC dominated per-token cost on ARM.
+  - **Results (Nov 5)**: all acceptance checks pass on `gx10-03` over HCA loopback (`roceP2p1s0f0`). `csrc/tf_rdma.c` (verbs) under `src/transport/rdma.zig` (`Backend`); built with `zig build -Drdma=true`; run with `dispatch rdma` (or `rdma-expert` / `rdma-router`). The TASK-02 dispatch check and the PoC `--moe` check pass 20 of 20 runs each with both processes exiting 0. One-way latency p50 4.34 to 4.39 us against a 4.68 us target (`ib_write_lat` 3.12 us today); one-direction bandwidth 100.7 to 102.0 Gb/s against 92.4 Gb/s (`ib_write_bw` 102.65 Gb/s today). Bandwidth needs 256 slots per ring (64 slots reach only 74 to 83 Gb/s, limited by credits in flight), so the `rdma` modes default to 256. A send buffer is reused only after its send completes. Queue-pair details are swapped over TCP instead of a launcher manifest (the manifest arrives with TASK-09). Not done yet: striping across both devices of a port and node-to-node runs (TASK-15b). See `bench/transport/2026-11-05.md`.
 
 #### [TASK-08] Quantized Expert Loader (GGUF + NVFP4)
 - **Milestone**: Alpha (Nov 8)
@@ -165,6 +166,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Implement the gating router (softmax over top-k logits, starting with k = 1 and generalizing to k = 8) that sends each token to local or remote experts, runs the expert FFN, and combines weighted results. Combine writes each expert contribution to its own slot and reduces locally; overlapping RDMA writes do not sum. Expert placement comes from a static manifest file until TASK-09 lands.
 - **Acceptance Criteria**: Done when a token sequence completes a forward pass split across 2 engine processes (on `gx10-03` over RDMA, and between the desktop and `gx10-03` over TCP) for the TASK-06 synthetic MoE and one small public MoE (for example OLMoE-1B-7B), with output logits matching the PyTorch reference within a documented tolerance (target: max abs error at or below 1e-2 in FP8 paths) and identical top-1 next tokens on the golden prompts.
   - **Progress (Nov 2, PoC core check)**: the TASK-06 synthetic MoE runs split across 2 processes on CPU (`dispatch --moe`: rank 0 routes, rank 1 owns every expert) over shared memory, TCP loopback, and TCP desktop to `gx10-03`. Routing identical, logits max abs error 7.15e-7, top-1 16/16 on every path. Left: GPU kernels, the RDMA path (needs TASK-07), and OLMoE-1B-7B (needs TASK-08). See `POC.md` and `bench/transport/2026-11-02.md`.
+  - **Progress (Nov 5)**: the same synthetic MoE now also passes over RDMA on `gx10-03` (`dispatch rdma --moe`, 20 of 20 runs, logits max abs error 7.15e-7, top-1 16/16). Left: GPU kernels and OLMoE-1B-7B (needs TASK-08).
 
 #### [TASK-21] Direct Desktop-to-Spark Network Path
 - **Milestone**: Alpha (Nov 8)
@@ -316,9 +318,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | Column | Tasks |
 |---|---|
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22 |
-| **To Do** | TASK-07, TASK-08, TASK-21 |
-| **In Progress** | TASK-10 (synthetic two-process CPU slice passes) |
-| **Review** | (none) |
+| **To Do** | TASK-08, TASK-21 |
+| **In Progress** | TASK-10 (synthetic two-process CPU slice passes over shared memory, TCP, and RDMA) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |

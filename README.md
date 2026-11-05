@@ -27,7 +27,7 @@ TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference
 
 **The PoC check:** `dispatch --moe` splits a real (tiny, seeded) MoE across two engine processes: one runs the router, the other runs every expert, and they talk only through 7,552-byte wire-format packets. Output logits match PyTorch to 7.2e-7 with identical routing and top-1 tokens, over shared memory, TCP loopback, and desktop to Spark. See [POC.md](POC.md).
 
-Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory and TCP, verified desktop to Spark), the io_uring expert reader (7.2 GB/s, matching `fio`), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows and cross-compiles for the Sparks (aarch64).
+Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory, TCP verified desktop to Spark, and RoCE v2 RDMA at 102 Gb/s on `gx10-03`), the io_uring expert reader (7.2 GB/s, matching `fio`), and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows, builds the RDMA transport, and cross-compiles for the Sparks (aarch64).
 
 ## Links
 
@@ -141,6 +141,14 @@ The PoC check: add `--moe` to any of the three commands above to run the tiny Mo
 ```bash
 zig-out/bin/dispatch shm --moe
 ```
+
+RDMA transport (TASK-07, Linux with an RDMA device and libibverbs): build with `-Drdma=true`, then run the same checks over RoCE v2. Plain `rdma` runs both ranks on one machine through the NIC (HCA loopback); `rdma-expert` and `rdma-router` run them separately, swapping queue-pair details over TCP on `--port` first. `--dev` picks the device (default: the first), `--gid` the GID index (default: the first RoCE v2 IPv4 GID).
+
+```bash
+zig build install -Doptimize=ReleaseFast -Drdma=true -Dcpu=native && zig-out/bin/dispatch rdma --dev roceP2p1s0f0 --moe
+```
+
+`--latency` (one-way latency, comparable to `ib_write_lat`) and `--oneway` (one-direction bandwidth, comparable to `ib_write_bw`) work on every backend in place of `--moe`. Results: [`bench/transport/2026-11-05.md`](bench/transport/2026-11-05.md).
 
 ```bash
 zig build run

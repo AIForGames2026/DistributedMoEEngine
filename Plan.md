@@ -60,7 +60,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Steps (Monday start)**:
   - [x] On `gx10-03`: Zig 0.17.0, liburing 2.15, and fio 3.43 installed in `~/lukehinojosa/tools/` (Oct 26); `zig cc` builds and runs a liburing test.
   - [x] Install WSL2 Ubuntu 24.04 with the NVIDIA WSL CUDA toolkit; install Zig 0.17.0 (pinned in `.zig-version`), `liburing-dev`, `rdma-core`, `libibverbs-dev`, `fio` (Oct 27: `tools/setup/install-zig.sh` and `tools/setup/wsl2-packages.sh`; CUDA 13.0, liburing 2.5, rdma-core 50.0, fio 3.36).
-  - [x] Set up key-based SSH to `gx10-03` (README, "Machine access"); done Oct 26 for all three Sparks.
+  - [x] Set up key-based SSH to `gx10-03` (`docs/BUILDING.md`, "Lab machine access"); done Oct 26 for all three Sparks.
   - [ ] Work through the Zig ramp-up list in Section 9 (about one day).
   - [x] Create `build.zig` with `run` and `test` steps; compile one C file (`csrc/tf_version.c`) and call it from Zig (Oct 27; `bench` step still to add).
   - [x] **Toolchain gate (Wed Oct 28)**: in WSL2, `zig build` compiles C, links `liburing` and `libcudart`, calls `cudaGetDeviceCount` on the 5070 Ti, and cross-compiles for `aarch64-linux-gnu`; the same build runs natively on `gx10-03`. (**Passed Oct 27, one day early.** `zig build gate` passes in WSL2 (RTX 5070 Ti, 12.0, 70 SMs) and on `gx10-03` (GB10, 12.1, 48 SMs): io_uring NOP reaped, cudaMalloc and cudaMemset ok, no libpython. The aarch64 cross-compile from WSL2 works. Risk R1's fallback is not needed.)
@@ -348,7 +348,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22, TASK-24, TASK-25 |
 | **To Do** | (none) |
-| **In Progress** | TASK-23 (built Nov 5; second-machine check and tag left) |
+| **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; first-time tester and tag left) |
 | **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 

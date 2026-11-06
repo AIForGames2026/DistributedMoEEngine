@@ -40,7 +40,7 @@ const STEPS = [
   },
   {
     title: 'Experiment 3 of 4: the real situation',
-    body: `<p>Only one of the three machines is free right now, so the model has to be split between it and a separate desktop. Their traffic goes through a relay on the internet.</p>
+    body: `<p>Now try a setup the real engine has run on: the model split between one of those machines and a separate desktop. Their traffic goes through a relay on the internet.</p>
       <p>Turn Lookahead prefetch back <b>on</b>, set <b>Cluster</b> to "${MISSION.relayLabel}", then press <b>Run</b>.</p>`,
     spot: ['preset', 'lookahead'],
     need: (c) => {
@@ -62,10 +62,10 @@ const STEPS = [
   },
   {
     title: 'Final challenge: fix the swarm',
-    body: `<p>Get these two machines to <b>${MISSION.targetTps} tok/s</b> or more. Use the left panel and run as many times as you like. The other two machines are still busy, so you cannot use them.</p>`,
+    body: `<p>Get these two machines to <b>${MISSION.targetTps} tok/s</b> or more. Use the left panel and run as many times as you like, but it has to stay two machines.</p>`,
     spot: ['preset', 'lookahead'],
     challenge: true,
-    need: (c) => (c.preset === 'sparks' ? 'Those three machines are busy today. Pick a two-machine Cluster.' : null),
+    need: (c) => (c.preset === 'sparks' ? 'This challenge is for two machines. Pick a two-machine Cluster.' : null),
     result: (r, runs, tries) => {
       if (r.tps >= MISSION.targetTps) return `<p><b>${tps(r)}: target reached.</b></p>`;
       const hint = tries >= 2

@@ -1,26 +1,74 @@
-# TensorFold-Swarm (Distributed MoE Inference Engine)
+# TensorFold-Swarm
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![CI](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml)
-[![Pages](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml/badge.svg)](https://aiforgames2026.github.io/DistributedMoEEngine/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-> **Status:** Alpha vertical slice, ready for Testing Session 1 ([release notes](#alpha-release-notes), [test plan](TestPlan.md)). PoC **passed** ([POC.md](POC.md)). Next: Beta (due Nov 22, 2026).
-> **Try it (browser, about 3 minutes):** https://aiforgames2026.github.io/DistributedMoEEngine/
-> **PoC demo video:** [watch (4:20)](https://aiforgames2026.github.io/DistributedMoEEngine/media/poc-demo.mp4) (file: [`web/public/media/poc-demo.mp4`](web/public/media/poc-demo.mp4))
-> **Engine builds:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) (Linux x86_64 and aarch64); native Windows 11 build with [`build.ps1`](#engine-on-windows-11-native)
-> **Project board:** https://github.com/orgs/AIForGames2026/projects/3
+Run AI models too big for one machine across a small cluster of NVIDIA DGX Sparks. TensorFold-Swarm gives each machine a share of a Mixture-of-Experts model and sends only the tokens between them, over RDMA or TCP, with no Python at runtime.
 
-## Pitch
+**[Try the simulator in your browser](https://aiforgames2026.github.io/DistributedMoEEngine/)**: about 3 minutes, nothing to install.
 
-TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference engine for frontier-scale sparse Mixture-of-Experts models. Instead of copying weights around, it pins each expert to a node and moves only the tokens: a Zig/C engine core with no Python runtime sends token hidden states node to node over zero-copy RoCE v2 RDMA, straight into the destination's LPDDR5X memory. A lightweight lookahead router predicts which experts the next layers will need, so network transfers and `io_uring` NVMe expert reads start before the layer that needs them, hidden behind the compute already running. Everything the swarm does can be watched in an in-browser WebGL inspector, with nothing to install.
+[![The inspector showing tokens flying between three machines](docs/images/inspector.png)](https://aiforgames2026.github.io/DistributedMoEEngine/)
 
-## Alpha Vertical Slice
+**Status: alpha.** OLMoE-1B-7B runs split across two processes and matches Hugging Face's output. It processes whole prompts and can't generate text yet.
 
-**The slice is a simulation, on purpose:** running the real engine takes DGX Spark hardware and a 7 GB model, so testers use a browser mission built on speeds measured on that hardware. No background in AI is needed, and there is nothing to install.
+## Build
 
-**Core loop:** read a short intro, then run experiments on a simulated swarm, work out what is slowing it down, and fix it in a final challenge (get two machines to 200 tok/s). You finish on a report card with your time and results, then play again or exit to explore freely.
+**Linux or WSL2 (Ubuntu 24.04):**
 
-### Alpha release notes
+```bash
+git clone https://github.com/AIForGames2026/DistributedMoEEngine.git
+cd DistributedMoEEngine
+sudo apt install liburing-dev                 # io_uring, for reading model files
+bash tools/setup/install-zig.sh               # Zig 0.17.0 in ~/tools/zig, no sudo
+export PATH="$HOME/tools/zig:$PATH"
+zig build install -Doptimize=ReleaseFast
+```
+
+**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds a subset of the engine.
+
+```powershell
+.\build.ps1
+```
+
+Prefer not to build? [Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) has binaries, each with a SHA-256 checksum.
+
+## Run
+
+Split a tiny model across two processes and check the output against PyTorch. It ends with `PASS`.
+
+```bash
+zig-out/bin/dispatch shm --moe                # Windows: .\zig-out\bin\dispatch.exe shm --moe
+```
+
+Or across two machines, starting the first one first:
+
+```bash
+zig-out/bin/dispatch expert --port 7470 --moe                      # first machine
+zig-out/bin/dispatch router --host <first machine's IP> --port 7470 --moe   # second machine
+```
+
+Run the browser inspector locally (needs [Node.js 22](https://nodejs.org)):
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+To run the real 7 GB model, over RDMA or on a GPU, see [Building and running everything](docs/BUILDING.md).
+
+## Documentation
+
+- [Building and running everything](docs/BUILDING.md): every program, GPU and RDMA builds, benchmarks
+- [Project overview](docs/PROJECT.md): architecture, hardware, team, workflow
+- [Technical pitch](docs/PITCH.md), [wire format](docs/wire-format.md), [telemetry schema](docs/telemetry-schema.md)
+- [Benchmark results](bench/) and the [test plan](TestPlan.md)
+- [Plan](Plan.md) and [project board](https://github.com/orgs/AIForGames2026/projects/3)
+
+<details>
+<summary><b>Release notes (Alpha)</b></summary>
+
+Played through on the live site from a second machine, a laptop separate from the build desktop (Nov 5).
 
 **In this build**
 - Guided mission on first load: intro, three experiments with check questions, final challenge, report card, Play again, and Exit.
@@ -43,76 +91,23 @@ TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference
 
 Engine binaries are not part of this slice and classmates are not asked to run any. Operators can build from source or download them from [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases), where each one has a published SHA-256 to verify.
 
-## Proof of Concept
+</details>
 
-[![TensorFold-Swarm inspector](docs/images/inspector.png)](https://aiforgames2026.github.io/DistributedMoEEngine/)
-
-**Core mechanic: routing tokens to experts across machines.** The WebGL inspector ([open it live](https://aiforgames2026.github.io/DistributedMoEEngine/)) animates a Mixture-of-Experts model (OLMoE-1B-7B shape: 16 layers, 64 experts, top-8) running across the real lab topology:
-
-- Each batch of tokens goes through a top-k gate, layer by layer. Packets fly to whichever node owns each chosen expert (**dispatch**), the experts light up (**compute**), and the results fly back (**combine**).
-- Expert colors show what the lookahead router achieved: already in memory, prefetched in time, or a miss that stalls on NVMe.
-- Everything on screen is played from a **telemetry trace** ([schema v0](docs/telemetry-schema.md)), the same format the engine will record in TASK-16. Pick a trace: one generated in the browser from simulated routing (switch between the three-Spark cluster and today's Spark-plus-desktop setup, and adjust top-k and predictor recall), a 10,000-packet stress test, or a `.json` trace file of your own.
-- Timing in synthetic traces uses **measured** numbers: 3.26 µs RDMA per 7,552-byte packet, 7.2 GB/s NVMe reads, and the Tailscale relay's 33 ms round trip ([`bench/`](bench/)). The panel lists every input and its source.
-
-**The PoC check:** `dispatch --moe` splits a real (tiny, seeded) MoE across two engine processes: one runs the router, the other runs every expert, and they talk only through 7,552-byte wire-format packets. Output logits match PyTorch to 7.2e-7 with identical routing and top-1 tokens, over shared memory, TCP loopback, and desktop to Spark. See [POC.md](POC.md).
-
-Engine side: the C ABI and reference GEMM kernels, a token transport (shared memory, TCP verified desktop to Spark, and RoCE v2 RDMA at 102 Gb/s on `gx10-03`), the io_uring expert reader (7.2 GB/s, matching `fio`), an expert loader for GGUF and NVFP4 checkpoints (owned experts only, 7.0 GB/s on OLMoE-1B-7B), an OLMoE-1B-7B forward pass split across two processes (over RDMA, TCP, or shared memory, on CPU or CUDA) that matches Hugging Face transformers, and a CPU MoE reference that matches PyTorch golden outputs. CI runs the unit tests and PoC checks on Linux and Windows, builds the RDMA transport, and cross-compiles for the Sparks (aarch64).
-
-## Links
-
-- [Design Document & Plan](Plan.md): scope, tasks, milestones, risks, and verified hardware constraints
-- [Test plan for Testing Session 1](TestPlan.md)
-- [Technical Pitch](docs/PITCH.md)
-- [Project Board](https://github.com/orgs/AIForGames2026/projects/3) and [Milestones](https://github.com/AIForGames2026/DistributedMoEEngine/milestones)
-- [Platform probe: gx10-03](bench/platform/gx10-03-2026-10-26.md)
-- [Research reports](Research/)
-
-## Team Roles & Members
-
-This is a one-person project built with an AI pair programmer. Luke holds all four roles and owns every task on the board; the role split shows which hat each part of the work needs.
-
-| Role | Member | Owns |
-|---|---|---|
-| **Lead Architect** | Luke Hinojosa | Engine core, scheduling loop, gating, lookahead router, miss handling, whitepaper |
-| **Network/RDMA Engineer** | Luke Hinojosa | Transport layer, RoCE v2 verbs, swarm tracker integration, multi-node testing |
-| **CUDA/Kernel Engineer** | Luke Hinojosa | FP4 GEMM kernels, `io_uring` storage path, expert loader, KV tiering, decompression, platform probe |
-| **WebGL Frontend Developer** | Luke Hinojosa | WebGL inspector, telemetry replay, GitHub Pages showcase |
-| *AI pair programmer* | Claude (Anthropic) | Code drafts, tests, reviews, and documentation, all reviewed and committed by Luke |
-
-## Target Platform
-
-| Component | Target |
-|---|---|
-| **Compute node** | NVIDIA DGX Spark (GB10 Grace Blackwell): 20-core Arm Grace CPU, Blackwell GPU (compute capability 12.1, `sm_121`), 128 GB unified LPDDR5X (~273 GB/s). The project starts on one shared Spark, with up to three as they free up. |
-| **Dev workstation** | RTX 5070 Ti (16 GB, compute capability 12.0), i7-12700K, 64 GB DDR4, running WSL2; also serves as a second node in cross-machine TCP runs |
-| **Interconnect** | NVIDIA ConnectX-7, RoCE v2, 200 Gb/s; the three Sparks are direct-cabled in a full mesh |
-| **Storage** | PCIe Gen 4 x4 NVMe on `gx10-03`, read through `io_uring` + `O_DIRECT` |
-| **Weight formats** | NVFP4, MXFP4, Q8_0 (GGUF) |
-| **OS** | Linux (aarch64); the engine runs in user space with no Python runtime |
-| **Web inspector** | Any current browser with WebGL 2.0 (Chrome, Firefox, Edge, Safari) |
-
-## Planned Publish Locations
-
-- **GitHub Pages** (primary, and the Dec 6 host): the in-browser WebGL inspector, deployed by CI when `web/` changes on `main`. After v1, this page is planned to grow into an operator dashboard for nodes, the router, models, and the API endpoint harnesses call, with the inspector as one feature ([TASK-25](Plan.md#task-25-operator-dashboard)).
-- **GitHub Releases**: tagged source releases (`v0.1.0-poc` to `v1.0.0`), operator builds for GB10, and benchmark data bundles.
-
-## Running It
-
-### Web inspector
-
-Requires Node.js 22 or newer.
-
-```bash
-cd web && npm install && npm run dev
-```
-
-Then open the URL Vite prints (usually http://localhost:5173). `npm run build` writes the static site to `web/dist/`. `npm test` checks the trace generator and that the guided mission's lessons still hold.
-
-### Deploying the inspector
+<details>
+<summary><b>Deploying the website</b></summary>
 
 The site is hosted on GitHub Pages (the Dec 6 host), and any member with write access can redeploy:
 
-1. Check it locally: `cd web && npm ci && npm test && npm run build && npm run preview`, then play through the mission.
+1. Check it locally, then play through the mission:
+
+   ```bash
+   cd web
+   npm ci
+   npm test
+   npm run build
+   npm run preview
+   ```
+
 2. Push to `main`. Any change under `web/` or to `.github/workflows/pages.yml` starts the [Pages workflow](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml), which builds the site, fails if the bundle contains an executable or installer, and publishes it.
 3. To redeploy with no code change, use **Run workflow** on that page, or run:
 
@@ -123,207 +118,10 @@ The site is hosted on GitHub Pages (the Dec 6 host), and any member with write a
 4. Wait for the workflow to pass, then open https://aiforgames2026.github.io/DistributedMoEEngine/ in a private window, ideally on another machine, and play through the mission with no console errors.
 5. First-time setup only, on a fork: under **Settings > Pages**, set **Source** to **GitHub Actions**.
 
-During a test window, push only fixes the session needs, and list each one in the [release notes](#alpha-release-notes).
+During a test window, push only fixes the session needs, and list each one in the [release notes](#release-notes).
 
-### Engine
-
-Requires Zig 0.17.0 (pinned in `.zig-version`) on Linux or WSL2. One-time setup on WSL2 (Ubuntu 24.04), from the repo root:
-
-```bash
-bash tools/setup/install-zig.sh
-```
-
-```bash
-sudo bash tools/setup/wsl2-packages.sh
-```
-
-The first installs Zig into `~/tools/zig` (checksum verified, no sudo). The second installs liburing, rdma-core, fio, and the CUDA 13.0 toolkit from NVIDIA's WSL repository (the GPU driver comes from Windows).
-
-```bash
-zig build test --summary all
-```
-
-Toolchain gate (links liburing and the CUDA runtime, then calls both). Add `-During=<prefix>` if liburing is not in the system paths, as on the Sparks:
-
-```bash
-zig build gate
-```
-
-io_uring expert reader (TASK-03): unit test, then a throughput run against a 1 GiB pattern file (delete it afterward):
-
-```bash
-zig build io-test
-```
-
-```bash
-zig build io-bench -Doptimize=ReleaseFast && zig-out/bin/uring_bench mk /tmp/expert.bin 1024 && zig-out/bin/uring_bench read /tmp/expert.bin --bs 256 --qd 16 --verify
-```
-
-Reference harness (TASK-06, testing only): regenerates `tests/golden/moe_tiny.tfref` from a fixed seed, or checks that the committed file still matches. Needs PyTorch (CPU build), for example in a virtual environment:
-
-```bash
-python3 -m venv ~/tools/ref-venv && ~/tools/ref-venv/bin/pip install -r tools/ref/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-```bash
-~/tools/ref-venv/bin/python tools/ref/ref_moe.py --check
-```
-
-`tools/ref/ref_quant.py --check` does the same for the expert loader's fixtures (TASK-08): a GGUF file with Q8_0, MXFP4, and NVFP4 expert tensors written with llama.cpp's gguf-py, and a ModelOpt NVFP4 safetensors checkpoint.
-
-Expert loader (TASK-08): `tfload` reads only the experts a process owns from a GGUF or ModelOpt NVFP4 safetensors checkpoint, through the io_uring reader, and checks each one against a CRC32C index written once by `tfload index`. For example, with allenai's [OLMoE-1B-7B-0924-Instruct Q8_0 GGUF](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct-GGUF) (7.4 GB) in `~/models`:
-
-```bash
-zig build tfload -Doptimize=ReleaseFast && zig-out/bin/tfload index ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf && zig-out/bin/tfload load ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --experts 0-31
-```
-
-Add `--golden FILE.tfref` (from `ref_quant.py --model ... --out FILE.tfref`) to compare the dequantized experts with llama.cpp's own dequantizer. Results: [`bench/storage/gx10-03-2026-11-05.md`](bench/storage/gx10-03-2026-11-05.md).
-
-OLMoE-1B-7B forward pass (TASK-10): `olmoe` runs the model split across two processes, rank 0 with attention, router, LM head, and experts 0 to 31, rank 1 with experts 32 to 63, and compares the output with Hugging Face transformers on the same weights. Make the reference once (needs the model's `config.json` and `tokenizer.json` from [allenai/OLMoE-1B-7B-0924-Instruct](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct)):
-
-```bash
-~/tools/ref-venv/bin/python tools/ref/ref_olmoe.py --gguf ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --config ~/models/config.json --tokenizer ~/models/tokenizer.json --out ~/models/olmoe_forward.tfref
-```
-
-Then, for example over RDMA with CUDA matmuls (drop `-Dgpu=true` and `--gpu` for CPU only; `shm`, `local`, and `expert` / `router` over TCP work the same way):
-
-```bash
-zig build olmoe -Doptimize=ReleaseFast -Drdma=true -Dgpu=true && zig-out/bin/olmoe rdma ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --golden ~/models/olmoe_forward.tfref --payload f32 --gpu
-```
-
-`--payload f32` is exact (two packets per expert call); `bf16` and `fp8` (the default) are smaller but round the hidden state. Results: [`bench/olmoe/2026-11-05.md`](bench/olmoe/2026-11-05.md). A tiny random OLMoE (`ref_olmoe.py --tiny`, in `tests/golden/`) runs the same forward pass in `zig build test`.
-
-Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
-
-```bash
-zig build install -Doptimize=ReleaseFast && zig-out/bin/dispatch shm
-```
-
-```bash
-zig-out/bin/dispatch expert --port 7470
-```
-
-```bash
-zig-out/bin/dispatch router --host <expert IPv4> --port 7470
-```
-
-The PoC check: add `--moe` to any of the three commands above to run the tiny MoE split across the two processes and compare against the PyTorch goldens (prints PASS, or exits non-zero).
-
-```bash
-zig-out/bin/dispatch shm --moe
-```
-
-RDMA transport (TASK-07, Linux with an RDMA device and libibverbs): build with `-Drdma=true`, then run the same checks over RoCE v2. Plain `rdma` runs both ranks on one machine through the NIC (HCA loopback); `rdma-expert` and `rdma-router` run them separately, swapping queue-pair details over TCP on `--port` first. `--dev` picks the device (default: the first), `--gid` the GID index (default: the first RoCE v2 IPv4 GID).
-
-```bash
-zig build install -Doptimize=ReleaseFast -Drdma=true -Dcpu=native && zig-out/bin/dispatch rdma --dev roceP2p1s0f0 --moe
-```
-
-`--latency` (one-way latency, comparable to `ib_write_lat`) and `--oneway` (one-direction bandwidth, comparable to `ib_write_bw`) work on every backend in place of `--moe`. Results: [`bench/transport/2026-11-05.md`](bench/transport/2026-11-05.md).
-
-```bash
-zig build run
-```
-
-Cross-compile for the DGX Sparks:
-
-```bash
-zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
-```
-
-`-Dcpu=cortex_a78` keeps the ARMv8 CRC32C instructions (GB10's cores support them); without it the baseline target falls back to software CRC, about 14x slower per token.
-
-### Engine on Windows 11 (native)
-
-`dispatch.exe` and `tensorfold.exe` also build natively for Windows 11 x86_64, enough to run the PoC check without WSL2. From PowerShell (5.1 or 7) in the repo root:
-
-```powershell
-.\build.ps1
-```
-
-It finds Zig 0.17.0 on PATH or in `~\tools\zig` (installing it there with `tools\setup\install-zig.ps1`, checksum verified, no admin, if missing), runs the unit tests, builds ReleaseFast into `zig-out\bin`, and runs the dispatch and `--moe` checks over shared memory and TCP loopback. `-SkipChecks` stops after the build; `-Package` also writes a zip and its SHA-256 to `dist\`. If PowerShell refuses to run scripts, use `powershell -ExecutionPolicy Bypass -File .\build.ps1`.
-
-```powershell
-.\zig-out\bin\dispatch.exe shm --moe
-```
-
-Windows has no `fork`, so in `shm` mode the program starts a second copy of itself for rank 1, which maps the same named shared memory. TCP mode is the same as on Linux, and Windows and Linux processes can be each other's peer. The io_uring reader, the toolchain gate, CUDA, and RDMA stay Linux only.
-
-### Lab machine access
-
-Lab machines are reached over Tailscale with SSH keys, never passwords stored in the repo. One-time setup from Git Bash or WSL2:
-
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/spark_ed25519 -C "tensorfold-swarm"
-```
-
-```bash
-ssh-copy-id -i ~/.ssh/spark_ed25519.pub admin@gx10-03
-```
-
-Then add a host entry to `~/.ssh/config`:
-
-```
-Host gx10-03
-    User admin
-    IdentityFile ~/.ssh/spark_ed25519
-```
-
-The `admin` account is shared, so all project files on a Spark live in `~/lukehinojosa/` and are activated with `source ~/lukehinojosa/env.sh`.
-
-## Architecture at a Glance
-
-| Layer | Subsystem | Technology |
-|---|---|---|
-| 4 | Swarm orchestration (node registry, health, expert ownership) | Lumabri / Colibri pure-C tracker daemon |
-| 3 | Scheduling, token batching, lookahead loop, arena allocation | TensorFold engine core (Zig) |
-| 2 | Token transport and weight streaming | libibverbs (RoCE v2), liburing, nvCOMP |
-| 1 | Expert execution kernels | Blackwell FP4 Tensor Core kernels (CUDA / PTX) |
-
-Four bottlenecks, four answers:
-
-1. **All-to-all network choke**: one-sided RDMA WRITE-with-immediate into pre-registered slot rings, with receiver-granted credits.
-2. **Routing dependency stalls**: a lookahead router predicts expert sets 1 to 2 layers ahead; the native router stays authoritative, so predictions affect only prefetching.
-3. **PCIe streaming bottleneck**: fine-grained expert reads via `io_uring` fixed buffers, with optional lossless compression only where measurements show a win.
-4. **Memory contention**: tiered KV cache keeping attention sink and recent tokens in LPDDR5X and offloading middle context to NVMe.
-
-Design details and verified hardware limits are in [Plan.md, Section 7](Plan.md#7-risks-research-verified-constraints--fallbacks).
-
-## Web Delivery & Safety
-
-- The demo is **100% WebGL 2.0 + JavaScript in the browser sandbox**, served as static files from GitHub Pages.
-- **Visitors never download** `.exe`, `.dmg`, `.pkg`, `.msi`, or install scripts. The Pages workflow fails the deploy if any such file appears in the bundle.
-- The page sets a Content-Security-Policy and loads no third-party scripts.
-- The hosted demo uses simulated or recorded data only. Live telemetry (TASK-16b) would connect only to an operator-supplied `wss://` endpoint and is never enabled by default.
-
-## Repository Layout
-
-```
-build.zig            Zig build (run, test); .zig-version pins Zig 0.17.0
-include/             Public C ABI (tensorfold.h, tf_wire.h)
-csrc/                C sources behind the ABI (io_uring reader, CRC32C; verbs code lands here)
-src/                 Zig engine core (entry point, arena, wire format, transport, reference GEMM)
-tests/               Plain C tests of the public ABI; golden/ holds PyTorch reference outputs
-tools/probe/         Platform probe (probe.py writes bench/platform/<host>-<date>.json)
-tools/ref/           PyTorch reference harness for the golden files (testing only)
-tools/setup/         Zig installers (Linux, Windows) and WSL2 package setup
-web/                 WebGL inspector and guided mission (Vite + Three.js), trace generator
-bench/platform/      Hardware probe results
-docs/                Pitch, wire format, telemetry schema, images, and (later) whitepaper
-Research/            Source research reports
-.github/workflows/   CI (engine tests, web build) and GitHub Pages deploy
-```
-
-## Workflow
-
-Work is tracked on the [project board](https://github.com/orgs/AIForGames2026/projects/3) with columns `Backlog`, `To Do`, `In Progress`, `Review`, `Done`. Every task has a priority label (`must`, `should`, `could`), an area label (`code`, `architecture`, `benchmarking`, `webgl`, `docs`), a milestone, and, if it is in a cut line, a `cut-1` or `cut-2` tag. See [Plan.md, Sections 4 and 5](Plan.md#4-scope-tiers--cut-lines) for scope tiers, cut lines, and board rules.
-
-## Acknowledgements & References
-
-Builds on ideas from TensorFold, Colibri / Lumabri, Strata, Director, SpecPrefetch, ProMoE, fabric-lib, and DeepEP. Full citations are in [`Research/`](Research/).
+</details>
 
 ## License
 
-TensorFold-Swarm is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version (`GPL-3.0-or-later`). See [LICENSE](LICENSE).
-
-Before the first binary release, a GPLv3 section 7 additional permission will be added for linking with NVIDIA's proprietary CUDA and nvCOMP libraries (tracked as risk R8 in [Plan.md](Plan.md)).
+[GPL-3.0-or-later](LICENSE).

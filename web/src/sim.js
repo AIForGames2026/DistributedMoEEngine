@@ -37,9 +37,9 @@ export const HW = {
 };
 
 export const NODES = {
-  'gx10-01': { label: 'gx10-01', sub: 'DGX Spark / GB10', note: 'busy today (GLM 5.3)' },
-  'gx10-02': { label: 'gx10-02', sub: 'DGX Spark / GB10', note: 'busy today (GLM 5.3)' },
-  'gx10-03': { label: 'gx10-03', sub: 'DGX Spark / GB10', note: 'available (shared)' },
+  'gx10-01': { label: 'gx10-01', sub: 'DGX Spark / GB10' },
+  'gx10-02': { label: 'gx10-02', sub: 'DGX Spark / GB10' },
+  'gx10-03': { label: 'gx10-03', sub: 'DGX Spark / GB10' },
   desktop: { label: 'Desktop', sub: 'RTX 5070 Ti', note: 'dev workstation' },
 };
 

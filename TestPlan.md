@@ -35,4 +35,4 @@ The tester pastes the result line and their answers into the class feedback form
 
 **After the session:** turn each repeated problem (2 or more testers) into a Beta board issue with its evidence. Any crash or dead end on the main path goes first.
 
-**If something breaks in class:** if WebGL is missing, the page says so; try another browser and record the browser and OS. Any fix redeploys through `README.md` (Deploying the inspector) and goes in the release notes.
+**If something breaks in class:** if WebGL is missing, the page says so; try another browser and record the browser and OS. Any fix redeploys through `README.md` (Deploying the website) and goes in the release notes.

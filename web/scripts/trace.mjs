@@ -4,12 +4,31 @@
 //   node scripts/trace.mjs write <out.json> [preset] [batch] [passes]
 import { writeFileSync } from 'node:fs';
 import { generateTrace, validateTrace, summarize } from '../src/trace.js';
-import { STRESS } from '../src/presets.js';
+import { STRESS, MISSION } from '../src/presets.js';
+import { PRESETS } from '../src/sim.js';
+
+// The guided mission's lessons must hold in the model it runs on.
+function checkMission() {
+  const speed = (preset, lookahead) => {
+    const s = summarize(generateTrace({ preset, lookahead, recall: MISSION.recall, passes: MISSION.passes, seed: MISSION.seed }));
+    return s.tokens / (s.durationNs * 1e-9);
+  };
+  const fail = (msg) => { throw new Error(`mission: ${msg}`); };
+  if (PRESETS.today.label !== MISSION.relayLabel) fail('step text names a Cluster option that does not exist');
+  if (speed('sparks', false) >= speed('sparks', true)) fail('turning off lookahead must slow the three-Spark cluster');
+  for (const lookahead of [true, false]) {
+    if (speed('today', lookahead) >= MISSION.targetTps) fail('the relay must not reach the target');
+    if (speed('direct', lookahead) < MISSION.targetTps) fail('direct TCP must reach the target');
+  }
+  console.log(`mission check: ok (${speed('sparks', true).toFixed(0)}, ${speed('sparks', false).toFixed(0)}, ` +
+    `${speed('today', true).toFixed(1)}, ${speed('direct', true).toFixed(0)} tok/s, target ${MISSION.targetTps})`);
+}
 
 function check() {
   const cases = {
     'live sparks': generateTrace({ preset: 'sparks' }),
     'live today': generateTrace({ preset: 'today' }),
+    'live direct': generateTrace({ preset: 'direct' }),
     'no lookahead': generateTrace({ lookahead: false }),
     stress: generateTrace(STRESS),
   };
@@ -25,6 +44,7 @@ function check() {
   let threw = false;
   try { validateTrace({ ...cases.stress, version: 1 }); } catch { threw = true; }
   if (!threw) throw new Error('validator accepted version 1');
+  checkMission();
   console.log('trace check: ok');
 }
 

@@ -20,9 +20,14 @@ export const LINKS = {
     source: 'measured: ib_write_lat loopback on gx10-03, 7,552-byte packet',
   },
   tcp: {
-    label: 'TCP over Tailscale',
+    label: 'TCP via relay',
     us: 16500,
     source: 'measured: half of the 33 ms tailscale ping RTT, desktop to gx10-03 via the NYC relay',
+  },
+  'tcp-direct': {
+    label: 'Direct TCP',
+    us: 772,
+    source: 'measured: dispatch --latency p50 over plain TCP, gx10-03 to desktop (bench/transport/2026-11-05-direct-path.md)',
   },
 };
 
@@ -49,9 +54,14 @@ export const PRESETS = {
     ],
   },
   today: {
-    label: 'Today: gx10-03 + desktop over Tailscale',
+    label: 'Today: gx10-03 + desktop, internet relay',
     nodes: ['gx10-03', 'desktop'],
     links: [['gx10-03', 'desktop', 'tcp']],
+  },
+  direct: {
+    label: 'Today: gx10-03 + desktop, direct TCP',
+    nodes: ['gx10-03', 'desktop'],
+    links: [['gx10-03', 'desktop', 'tcp-direct']],
   },
 };
 

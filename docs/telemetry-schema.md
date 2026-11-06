@@ -30,7 +30,7 @@ A trace is one JSON document. Events are compact positional arrays, because a si
 | `time_unit` | Always `"ns"`. Event times are nanoseconds since trace start. |
 | `model` | Shape of the model being run. `expert_owner` and expert indices refer to it. |
 | `nodes` | Machines. `kind` is `"gb10"` or `"desktop"`. Referenced by index. |
-| `links` | Node pairs (indices into `nodes`) and the transport between them: `"rdma"`, `"tcp"`, or `"shm"`. |
+| `links` | Node pairs (indices into `nodes`) and the transport between them: `"rdma"`, `"tcp"` (over a relay), `"tcp-direct"`, or `"shm"`. |
 | `processes` | Engine processes (ranks) and the node each runs on. Events name processes, not nodes. |
 | `expert_owner` | For each expert index, the process that holds it. v0 assumes the same placement in every layer. |
 | `batch_tokens` | Tokens per batch. |

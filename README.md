@@ -4,8 +4,8 @@
 [![CI](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/ci.yml)
 [![Pages](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml/badge.svg)](https://aiforgames2026.github.io/DistributedMoEEngine/)
 
-> **Status:** PoC **passed** ([POC.md](POC.md): assumption, criteria, evidence, scope update). Next: Alpha (due Nov 8, 2026).
-> **Live demo:** https://aiforgames2026.github.io/DistributedMoEEngine/
+> **Status:** Alpha vertical slice, ready for Testing Session 1 ([release notes](#alpha-release-notes), [test plan](TestPlan.md)). PoC **passed** ([POC.md](POC.md)). Next: Beta (due Nov 22, 2026).
+> **Try it (browser, about 3 minutes):** https://aiforgames2026.github.io/DistributedMoEEngine/
 > **PoC demo video:** [watch (4:20)](https://aiforgames2026.github.io/DistributedMoEEngine/media/poc-demo.mp4) (file: [`web/public/media/poc-demo.mp4`](web/public/media/poc-demo.mp4))
 > **Engine builds:** [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) (Linux x86_64 and aarch64); native Windows 11 build with [`build.ps1`](#engine-on-windows-11-native)
 > **Project board:** https://github.com/orgs/AIForGames2026/projects/3
@@ -13,6 +13,35 @@
 ## Pitch
 
 TensorFold-Swarm turns a cluster of NVIDIA GB10 desktop nodes into one inference engine for frontier-scale sparse Mixture-of-Experts models. Instead of copying weights around, it pins each expert to a node and moves only the tokens: a Zig/C engine core with no Python runtime sends token hidden states node to node over zero-copy RoCE v2 RDMA, straight into the destination's LPDDR5X memory. A lightweight lookahead router predicts which experts the next layers will need, so network transfers and `io_uring` NVMe expert reads start before the layer that needs them, hidden behind the compute already running. Everything the swarm does can be watched in an in-browser WebGL inspector, with nothing to install.
+
+## Alpha Vertical Slice
+
+**The slice is a simulation, on purpose:** running the real engine takes DGX Spark hardware and a 7 GB model, so testers use a browser mission built on speeds measured on that hardware. No background in AI is needed, and there is nothing to install.
+
+**Core loop:** read a short intro, then run experiments on a simulated swarm, work out what is slowing it down, and fix it in a final challenge (get two machines to 200 tok/s). You finish on a report card with your time and results, then play again or exit to explore freely.
+
+### Alpha release notes
+
+**In this build**
+- Guided mission on first load: intro, three experiments with check questions, final challenge, report card, Play again, and Exit.
+- The full inspector, with three clusters (including the direct TCP link measured this week), the stress trace, and loading your own trace file. It opens directly with `?explore=1`.
+- A panel of results recorded on the real hardware, kept separate from the simulation and linked to the raw data.
+- Engine, not part of the test session: RoCE v2 RDMA transport, GGUF and NVFP4 expert loader, and OLMoE-1B-7B split across two processes on CPU or CUDA, matching Hugging Face's output ([`bench/`](bench/)).
+
+**Not in this build**
+- No live connection to the engine: everything on the page is simulated or recorded. Traces recorded from the engine arrive with TASK-16.
+- No token generation yet: the engine processes whole prompts (TASK-24).
+- No lookahead router, tracker, or miss handling yet (Beta).
+- The operator dashboard is post-v1 ([TASK-25](Plan.md#task-25-operator-dashboard)).
+
+**Known bugs and limits**
+- Simulated speeds assume both machines compute at full GPU speed, so they run higher than the real CPU results the report card quotes. The simulation also leaves out the direct link's bandwidth limit.
+- Throughput shows in the panel before you press Run, since it comes from the trace, so the challenge can be solved without running it.
+- Phones work, but the card and controls compete for a small screen. A desktop browser is recommended.
+- Copy can fall back to "Press Ctrl+C" if the browser blocks clipboard access; the line is selected for you.
+- Engine, off the main path: one unexplained GPU failure in 16 runs on `gx10-03` (see [`bench/olmoe/2026-11-05.md`](bench/olmoe/2026-11-05.md)), and the direct TCP link only works with the Spark connecting to the desktop.
+
+Engine binaries are not part of this slice and classmates are not asked to run any. Operators can build from source or download them from [GitHub Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases), where each one has a published SHA-256 to verify.
 
 ## Proof of Concept
 
@@ -32,6 +61,7 @@ Engine side: the C ABI and reference GEMM kernels, a token transport (shared mem
 ## Links
 
 - [Design Document & Plan](Plan.md): scope, tasks, milestones, risks, and verified hardware constraints
+- [Test plan for Testing Session 1](TestPlan.md)
 - [Technical Pitch](docs/PITCH.md)
 - [Project Board](https://github.com/orgs/AIForGames2026/projects/3) and [Milestones](https://github.com/AIForGames2026/DistributedMoEEngine/milestones)
 - [Platform probe: gx10-03](bench/platform/gx10-03-2026-10-26.md)
@@ -63,7 +93,7 @@ This is a one-person project built with an AI pair programmer. Luke holds all fo
 
 ## Planned Publish Locations
 
-- **GitHub Pages** (primary): the in-browser WebGL inspector, deployed by CI on every push to `main`.
+- **GitHub Pages** (primary, and the Dec 6 host): the in-browser WebGL inspector, deployed by CI when `web/` changes on `main`. After v1, this page is planned to grow into an operator dashboard for nodes, the router, models, and the API endpoint harnesses call, with the inspector as one feature ([TASK-25](Plan.md#task-25-operator-dashboard)).
 - **GitHub Releases**: tagged source releases (`v0.1.0-poc` to `v1.0.0`), operator builds for GB10, and benchmark data bundles.
 
 ## Running It
@@ -76,7 +106,24 @@ Requires Node.js 22 or newer.
 cd web && npm install && npm run dev
 ```
 
-Then open the URL Vite prints (usually http://localhost:5173). `npm run build` writes the static site to `web/dist/`.
+Then open the URL Vite prints (usually http://localhost:5173). `npm run build` writes the static site to `web/dist/`. `npm test` checks the trace generator and that the guided mission's lessons still hold.
+
+### Deploying the inspector
+
+The site is hosted on GitHub Pages (the Dec 6 host), and any member with write access can redeploy:
+
+1. Check it locally: `cd web && npm ci && npm test && npm run build && npm run preview`, then play through the mission.
+2. Push to `main`. Any change under `web/` or to `.github/workflows/pages.yml` starts the [Pages workflow](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml), which builds the site, fails if the bundle contains an executable or installer, and publishes it.
+3. To redeploy with no code change, use **Run workflow** on that page, or run:
+
+   ```bash
+   gh workflow run pages.yml --ref main
+   ```
+
+4. Wait for the workflow to pass, then open https://aiforgames2026.github.io/DistributedMoEEngine/ in a private window, ideally on another machine, and play through the mission with no console errors.
+5. First-time setup only, on a fork: under **Settings > Pages**, set **Source** to **GitHub Actions**.
+
+During a test window, push only fixes the session needs, and list each one in the [release notes](#alpha-release-notes).
 
 ### Engine
 
@@ -260,7 +307,7 @@ tests/               Plain C tests of the public ABI; golden/ holds PyTorch refe
 tools/probe/         Platform probe (probe.py writes bench/platform/<host>-<date>.json)
 tools/ref/           PyTorch reference harness for the golden files (testing only)
 tools/setup/         Zig installers (Linux, Windows) and WSL2 package setup
-web/                 WebGL inspector (Vite + Three.js) and trace generator
+web/                 WebGL inspector and guided mission (Vite + Three.js), trace generator
 bench/platform/      Hardware probe results
 docs/                Pitch, wire format, telemetry schema, images, and (later) whitepaper
 Research/            Source research reports

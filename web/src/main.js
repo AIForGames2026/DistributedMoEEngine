@@ -7,7 +7,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { MODEL, LINKS, HW, NODES, PRESETS } from './sim.js';
 import { generateTrace, validateTrace, summarize, KIND, STATUS } from './trace.js';
-import { STRESS } from './presets.js';
+import { STRESS, MISSION } from './presets.js';
+import { createMission } from './mission.js';
 import './style.css';
 
 const COLORS = {
@@ -17,6 +18,7 @@ const COLORS = {
   miss: new THREE.Color(0xf87171),
   rdma: new THREE.Color(0x38bdf8),
   tcp: new THREE.Color(0xfb923c),
+  'tcp-direct': new THREE.Color(0xfacc15),
   shm: new THREE.Color(0xc4b5fd),
 };
 const STATUS_COLOR = STATUS.map((s) => COLORS[s]);
@@ -30,6 +32,7 @@ const params = new URLSearchParams(location.search);
 const state = {
   source: params.get('source') === 'stress' ? 'stress' : 'live',
   preset: 'sparks', topK: MODEL.topK, lookahead: true, recall: 0.85, speed: 1, playing: true, seed: 42,
+  passes: 2, inMission: false,
 };
 
 if (hasWebGL2()) start();
@@ -246,7 +249,7 @@ function start() {
       if (state.source === 'stress') loadTrace(generateTrace(STRESS), 'Stress test: synthetic trace');
       else if (state.source === 'live') {
         loadTrace(generateTrace({
-          preset: state.preset, passes: 2, topK: state.topK, lookahead: state.lookahead,
+          preset: state.preset, passes: state.passes, topK: state.topK, lookahead: state.lookahead,
           recall: state.recall, seed: state.seed,
         }), 'Synthetic trace (simulated routing)');
       } else if (trace) rewind();
@@ -381,10 +384,84 @@ function start() {
     if (topo) frame();
   }
 
-  bindControls({ reload, loadFile, regenerate: () => { if (state.source === 'live') reload(); } });
+  // The guided mission plays one pass at a time: a run starts only from its
+  // Run button, stops at the end of the trace, and reports what happened.
+  let missionRunning = false;
+  function missionReset() {
+    missionRunning = false;
+    setPlaying(false);
+    reload();
+    mission.onConfigChanged();
+  }
+  const mission = createMission({
+    enter() {
+      Object.assign(state, {
+        inMission: true, source: 'live', preset: 'sparks', topK: MODEL.topK, lookahead: true,
+        recall: MISSION.recall, seed: MISSION.seed, passes: MISSION.passes, speed: MISSION.speed,
+      });
+      syncInputs();
+      syncEnabled();
+      missionRunning = false;
+      setPlaying(false);
+      reload();
+    },
+    exit() {
+      Object.assign(state, { inMission: false, passes: 2, speed: 1 });
+      syncInputs();
+      syncEnabled();
+      missionRunning = false;
+      setPlaying(true);
+      reload();
+    },
+    setConfig(c) {
+      Object.assign(state, c);
+      syncInputs();
+      syncEnabled();
+      missionRunning = false;
+      setPlaying(false);
+      reload();
+    },
+    config: () => ({ preset: state.preset, lookahead: state.lookahead }),
+    run() {
+      rewind();
+      missionRunning = true;
+      setPlaying(true);
+    },
+  });
+
+  function missionRunEnded() {
+    missionRunning = false;
+    setPlaying(false);
+    const s = summary;
+    mission.onRunEnd({
+      tps: s.tokens / (s.durationNs * 1e-9),
+      misses: s.misses,
+      lookahead: state.lookahead,
+      label: { sparks: 'Three Sparks', today: 'Two machines, relay', direct: 'Two machines, direct' }[state.preset],
+    });
+  }
+
+  bindControls({
+    reload,
+    loadFile,
+    regenerate: () => {
+      if (state.inMission) missionReset();
+      else if (state.source === 'live') reload();
+    },
+    restart: () => {
+      if (state.inMission) missionReset();
+      else reload();
+    },
+    play: () => {
+      if (state.inMission && !missionRunning) mission.tryRun();
+      else setPlaying(!state.playing);
+    },
+    openMission: () => mission.open(),
+  });
   window.addEventListener('resize', resize);
   resize();
-  reload();
+  if (params.has('explore') || params.has('source')) reload();
+  else mission.open();
 
   function loadFile(file) {
     const reader = new FileReader();
@@ -423,7 +500,8 @@ function start() {
       while (cursor < events.length && events[cursor][0] <= traceNow) apply(events[cursor++]);
       if (cursor >= events.length && packets.length === 0) {
         // Loop. Live traces get a new seed so each loop routes differently.
-        if (state.source === 'live') {
+        if (state.inMission) missionRunEnded();
+        else if (state.source === 'live') {
           state.seed++;
           reload();
         } else rewind();
@@ -440,12 +518,34 @@ function start() {
 }
 
 // Cluster, top-k, and lookahead controls only shape generated traces.
+// The guided mission holds the trace source, top-k, and recall fixed.
 function syncEnabled() {
-  for (const id of ['preset', 'topk', 'lookahead', 'recall']) document.getElementById(id).disabled = state.source !== 'live';
-  if (state.source === 'live') document.getElementById('recall').disabled = !state.lookahead;
+  const $ = (id) => document.getElementById(id);
+  for (const id of ['preset', 'topk', 'lookahead', 'recall']) $(id).disabled = state.source !== 'live';
+  if (state.source === 'live') $('recall').disabled = !state.lookahead;
+  if (state.inMission) for (const id of ['source', 'topk', 'recall']) $(id).disabled = true;
+  else $('source').disabled = false;
+  $('mission-open').hidden = state.inMission;
 }
 
-function bindControls({ reload, loadFile, regenerate }) {
+function setPlaying(playing) {
+  state.playing = playing;
+  document.getElementById('play').textContent = playing ? 'Pause' : 'Play';
+}
+
+// Writes `state` back to the controls after the mission changes it.
+function syncInputs() {
+  const $ = (id) => document.getElementById(id);
+  $('source').value = state.source;
+  $('preset').value = state.preset;
+  $('lookahead').checked = state.lookahead;
+  for (const id of ['topk', 'recall', 'speed']) {
+    $(id).value = state[id === 'topk' ? 'topK' : id];
+    $(id).dispatchEvent(new Event('input'));
+  }
+}
+
+function bindControls({ reload, loadFile, regenerate, restart, play: onPlay, openMission }) {
   const $ = (id) => document.getElementById(id);
   const source = $('source');
   source.value = state.source;
@@ -489,17 +589,15 @@ function bindControls({ reload, loadFile, regenerate }) {
     regenerate();
   });
 
-  const play = $('play');
-  play.addEventListener('click', () => {
-    state.playing = !state.playing;
-    play.textContent = state.playing ? 'Pause' : 'Play';
-  });
-  $('restart').addEventListener('click', reload);
+  $('play').addEventListener('click', onPlay);
+  $('restart').addEventListener('click', restart);
+  $('mission-open').addEventListener('click', openMission);
   syncEnabled();
 
   $('sources').innerHTML = [
     `RDMA latency: ${LINKS.rdma.us} µs (${LINKS.rdma.source})`,
     `TCP latency: ${LINKS.tcp.us.toLocaleString()} µs (${LINKS.tcp.source})`,
+    `Direct TCP latency: ${LINKS['tcp-direct'].us} µs (${LINKS['tcp-direct'].source})`,
     `Memory bandwidth: ${HW.memGBps.value} GB/s (${HW.memGBps.source})`,
     `NVMe bandwidth: ${HW.nvmeGBps.value} GB/s (${HW.nvmeGBps.source})`,
   ].map((s) => `<li>${s}</li>`).join('');

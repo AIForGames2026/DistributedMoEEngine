@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #23 mirror the tasks below; #23 is TASK-21, added after the PoC). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #27 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #27 are TASK-22 to TASK-25). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -179,6 +179,13 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Acceptance Criteria**: Done when `tailscale ping` (or the chosen route) reports a direct connection and `dispatch router --packets 4096` desktop to `gx10-03` is re-measured and recorded in `bench/transport/`; if no direct path is possible, the reason is recorded and TASK-10 and TASK-15 label their cross-machine numbers as relay-bound.
 - **Results (Nov 5)**: direct path found, plain TCP only. `gx10-03` dials the desktop's campus address, so the Spark runs the router and the desktop the expert. `dispatch router --packets 4096` takes a median 1.02 s (248 µs per token, 0.49 Gb/s) against 49.3 s over the relay in the same setup; one-way latency p50 is 772 µs against 18.5 ms. OLMoE-1B-7B split over this path, with the expert in WSL2 behind a small forwarder, keeps the same accuracy and takes 3.95 s for the 17-token prompt, against 24.3 s over the relay. Tailscale still cannot go direct: every UDP flow between the machines is cut after 3 packets per side at any rate, apparently by a campus firewall, so `tailscale ping` stays on DERP. Opening UDP would be a request for campus IT, and no one in charge of the network has been asked about the TCP path yet. TASK-15's desktop-to-Spark runs can use this path, and should keep the expert's port open only during a run, since the TCP transport has no authentication. See `bench/transport/2026-11-05-direct-path.md`.
 
+#### [TASK-23] Alpha Vertical Slice: Guided Mission & Test Plan
+- **Milestone**: Alpha (Nov 8)
+- **Status**: In Progress
+- **Priority**: `must` | **Area**: `webgl`
+- **Description**: Added Nov 5 for Testing Session 1 (week of Nov 9). Classmates cannot run the engine, and the slice is simulated by design (the instructor knows the scope is deep and does not need it changed), so the page has to teach the idea with no developer help. On first load the inspector runs a guided mission: a short intro, three experiments (watch it work, remove prediction, split across the relay) with a check question, a final challenge (get two machines to 200 tok/s, which only the direct link can do), and a report card with a result line, Play again, and Exit. The numbers come from the existing simulator, and `npm test` fails if a lesson stops holding. A panel separates recorded engine results from the simulation. Top-k and recall stay locked during the mission.
+- **Acceptance Criteria**: Done when a first-time tester finishes the mission unaided on the live GitHub Pages site, the site has been loaded on a second machine, `TestPlan.md`, the release notes, and the redeploy steps are in the repo, and `v0.2.0-alpha` is tagged.
+
 ---
 
 ### Milestone 3: Beta (Target: Nov 22)
@@ -224,6 +231,13 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Priority**: `could` | **Area**: `code` | **Tag**: `cut-1`
 - **Description**: Added Nov 3. Let a machine with no NVIDIA GPU (any x86_64 or ARM Linux or Windows box, starting with the desktop's i7-12700K) join as an expert node that runs its experts on the CPU. The PoC expert already does this for the synthetic MoE (`moe_ref.expert` behind `dispatch --moe`, over TCP, on Linux and native Windows); this task extends it to real weights: a per-process `cpu` backend flag in the placement manifest, CPU dequantization of the TASK-08 formats (Q8_0, MXFP4, NVFP4) to FP32 at load time, and a tiled CPU expert FFN. The wire format and transport do not change. This is the only supported way for non-NVIDIA hardware to take part (Section 4).
 - **Acceptance Criteria**: Done when the TASK-10 small public MoE runs split between a GPU process on `gx10-03` and a CPU-only expert process on the desktop over TCP, with logits within TASK-10's tolerance of the PyTorch reference and identical top-1 tokens, and the CPU process's per-expert latency and tokens/second are recorded in `bench/` (labeled as desktop CPU results).
+
+#### [TASK-24] Token Generation Loop & In-Memory KV Cache
+- **Milestone**: Beta (Nov 22)
+- **Status**: Backlog
+- **Priority**: `must` | **Area**: `code`
+- **Description**: Added Nov 5. TASK-10 processes a whole prompt in one forward pass, and TASK-15's soak has to generate tokens for an hour, but no task owned the step between them. Add a per-layer KV cache in memory, one-token-at-a-time forward passes, greedy and seeded sampling, and an `olmoe generate` mode over every transport. TASK-12 (NVMe offload) stays separate and optional.
+- **Acceptance Criteria**: Done when greedy generation over RDMA on `gx10-03` produces the same tokens as transformers' `generate()` for the three TASK-10 prompts (at least 64 new tokens each, F32 payload), per-token logits stay within TASK-10's tolerance, and memory stays flat across a 10-minute run. Results recorded in `bench/`.
 
 ---
 
@@ -291,13 +305,24 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 ---
 
+### Post-v1 Roadmap (no milestone)
+
+#### [TASK-25] Operator Dashboard
+- **Milestone**: None (after v1)
+- **Status**: Backlog
+- **Priority**: `could` | **Area**: `webgl`
+- **Description**: Added Nov 5 from the project owner's direction: the web page grows into a dashboard where an operator manages nodes, the router, and models, and the API endpoint at the router that harnesses call. The inspector becomes one feature of it. This needs what v1 does not ship: the tracker (TASK-09), live telemetry (TASK-16b), an authenticated control channel, and the REST server listed as out of scope for v1 below. Testing Session 1's question 5 asks which control to build first. Until this task starts, the public site stays simulated and recorded data only.
+- **Acceptance Criteria**: To be written when it is scheduled. Minimum: an operator adds a node, loads a model, and sends a request through the router's endpoint from the dashboard, with authentication required for every control action.
+
+---
+
 ## 4. Scope Tiers & Cut Lines
 
 | Tier | Label | Meaning | Tasks |
 |---|---|---|---|
-| **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, shown in a browser replay. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 18, 19 |
+| **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, shown in a browser replay. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 18, 19, 23, 24 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. | 12, 13, 15b, 16b, 22 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25 is post-v1. | 12, 13, 15b, 16b, 22, 25 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, live telemetry, and CPU-only expert nodes.
 
@@ -311,7 +336,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 TASK-20 is `should` but untagged: it is never cut, only reduced to a minimal build guide.
 
-**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist), OpenAI-compatible REST server, approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends (AMD ROCm/HIP, Apple Metal, Intel; non-NVIDIA machines join only as CPU expert nodes, TASK-22), macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
+**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist), OpenAI-compatible REST server and the operator dashboard (TASK-25, post-v1), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends (AMD ROCm/HIP, Apple Metal, Intel; non-NVIDIA machines join only as CPU expert nodes, TASK-22), macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
 
 ---
 
@@ -321,25 +346,25 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22 |
+| **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22, TASK-24, TASK-25 |
 | **To Do** | (none) |
-| **In Progress** | (none) |
+| **In Progress** | TASK-23 (built Nov 5; second-machine check and tag left) |
 | **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22 | 12 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24 | 13 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
-| `webgl` | 04, 16, 16b | 3 |
+| `webgl` | 04, 16, 16b, 23, 25 | 5 |
 | `docs` | 18, 19, 20 | 3 |
 
 | Priority | Count | Cut tag |
 |---|---|---|
-| `must` | 13 | none |
+| `must` | 15 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 5 | all tagged `cut-1` |
+| `could` | 6 | 5 tagged `cut-1`; TASK-25 is post-v1 |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 
@@ -369,7 +394,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-12 | 03, 10 | (none) |
 | TASK-13 | 05, 08 | (none) |
 | TASK-14 | 07, 11 | 15 (if shipped) |
-| TASK-15 | 10, time agreed with co-tenant | 16, 19 |
+| TASK-15 | 10, 24, time agreed with co-tenant | 16, 19 |
 | TASK-15b | 15, a free and cabled second Spark | 19 |
 | TASK-16 | 04, 15 | 18 |
 | TASK-17 | 10 | 15 (hardening) |
@@ -377,8 +402,11 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-19 | 15 | Final |
 | TASK-20 | all code tasks | Final |
 | TASK-22 | 08, 10 | 15 (optional CPU node in the cross-machine run) |
+| TASK-23 | 04, 21 (the direct link it teaches) | Testing Session 1 |
+| TASK-24 | 10 | 15 |
+| TASK-25 | 09, 16b, v1 release | (none) |
 
-**Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-15 → TASK-16 → TASK-18.
+**Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-24 → TASK-15 → TASK-16 → TASK-18.
 
 ---
 

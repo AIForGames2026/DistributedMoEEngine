@@ -173,10 +173,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-21] Direct Desktop-to-Spark Network Path
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Backlog
+- **Status**: Review
 - **Priority**: `should` | **Area**: `benchmarking`
 - **Description**: Added after the PoC. Every desktop-to-`gx10-03` run so far went through Tailscale's DERP relay in NYC (33 ms round trip, about 5 ms per token pipelined), so cross-machine numbers measure the relay, not the transport. Find a direct path: Tailscale direct UDP (41641) through the campus network, a subnet route, or another link the lab allows.
 - **Acceptance Criteria**: Done when `tailscale ping` (or the chosen route) reports a direct connection and `dispatch router --packets 4096` desktop to `gx10-03` is re-measured and recorded in `bench/transport/`; if no direct path is possible, the reason is recorded and TASK-10 and TASK-15 label their cross-machine numbers as relay-bound.
+- **Results (Nov 5)**: direct path found, plain TCP only. `gx10-03` dials the desktop's campus address, so the Spark runs the router and the desktop the expert. `dispatch router --packets 4096` takes a median 1.02 s (248 µs per token, 0.49 Gb/s) against 49.3 s over the relay in the same setup; one-way latency p50 is 772 µs against 18.5 ms. OLMoE-1B-7B split over this path, with the expert in WSL2 behind a small forwarder, keeps the same accuracy and takes 3.95 s for the 17-token prompt, against 24.3 s over the relay. Tailscale still cannot go direct: every UDP flow between the machines is cut after 3 packets per side at any rate, apparently by a campus firewall, so `tailscale ping` stays on DERP. Opening UDP would be a request for campus IT, and no one in charge of the network has been asked about the TCP path yet. TASK-15's desktop-to-Spark runs can use this path, and should keep the expert's port open only during a run, since the TCP transport has no authentication. See `bench/transport/2026-11-05-direct-path.md`.
 
 ---
 
@@ -321,9 +322,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | Column | Tasks |
 |---|---|
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22 |
-| **To Do** | TASK-21 |
+| **To Do** | (none) |
 | **In Progress** | (none) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |

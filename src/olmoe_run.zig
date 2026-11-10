@@ -11,7 +11,10 @@
 //!          --dev D, --gid G (RDMA), --gpu (Q8_0 matmuls on CUDA; -Dgpu=true),
 //!          --generate N (TASK-24: N new tokens per prompt, one at a time),
 //!          --temperature T, --top-k K, --seed S (seeded sampling; default greedy),
-//!          --minutes M (repeat generation for M minutes, checking memory)
+//!          --minutes M (repeat generation for M minutes, checking memory),
+//!          --lookahead H (TASK-11: guess experts H layers ahead, 1 or 2, and
+//!          send rank 1 a prefetch hint for its share), --extra E (guesses
+//!          beyond top_k, default 2)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -68,6 +71,8 @@ const Options = struct {
     top_k: usize = 0,
     seed: u64 = 0,
     minutes: f64 = 0,
+    lookahead: usize = 0,
+    extra: usize = 2,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -79,6 +84,7 @@ pub fn main(init: std.process.Init) !void {
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
             \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
+            \\         --lookahead H  --extra E
             \\
         , .{});
         std.process.exit(2);
@@ -91,7 +97,13 @@ pub fn main(init: std.process.Init) !void {
         var l = try Loaded.init(gpa, opts.model, &all, true);
         defer l.deinit(gpa);
         if (opts.gpu) try gpu.map(l.weightRegion());
-        return runGolden(gpa, &l.weights.?, l.local.moe(), opts, "local");
+        var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra };
+        var moe = l.local.moe();
+        if (opts.lookahead > 0)
+        {
+            moe.ahead = &la;
+        }
+        return runGolden(gpa, &l.weights.?, moe, opts, "local");
     }
     const is_rdma = std.mem.startsWith(u8, mode, "rdma");
     if (is_rdma and !build_options.rdma) {
@@ -150,6 +162,11 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.seed = try std.fmt.parseInt(u64, value, 10);
         } else if (std.mem.eql(u8, arg, "--minutes")) {
             opts.minutes = try std.fmt.parseFloat(f64, value);
+        } else if (std.mem.eql(u8, arg, "--lookahead")) {
+            opts.lookahead = try std.fmt.parseInt(usize, value, 10);
+            if (opts.lookahead > olmoe.Lookahead.max_horizon) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--extra")) {
+            opts.extra = try std.fmt.parseInt(usize, value, 10);
         } else return error.Usage;
     }
     return opts;
@@ -284,9 +301,34 @@ const SplitMoe = struct {
     pkt: *wire.Packet,
     remote: u64 = 0,
     local_calls: u64 = 0,
+    /// Forward passes so far, so rank 1 can tell one pass's hints from the next.
+    step: u64 = 0,
+    hints: u64 = 0,
 
     fn moe(self: *SplitMoe) olmoe.Moe {
         return .{ .ctx = self, .run = run };
+    }
+
+    /// Sends rank 1 the guessed experts it owns for `layer` (TASK-11), even
+    /// when there are none, so it can time every layer's hint.
+    fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
+    {
+        const self: *SplitMoe = @ptrCast(@alignCast(ctx));
+        // Layer 0's hint comes first in every pass.
+        if (layer == 0)
+        {
+            self.step += 1;
+        }
+        wire.beginPrefetch(self.pkt, self.step, @intCast(layer));
+        for (experts) |e|
+        {
+            if (self.owner[e] != 0)
+            {
+                try wire.addPrefetch(self.pkt, @intCast(e));
+            }
+        }
+        try self.ep.send(self.pkt, .dispatch);
+        self.hints += 1;
     }
 
     fn take(self: *SplitMoe, r: transport.Received, layer: usize, idx: []const u32, n: usize) !void {
@@ -356,10 +398,84 @@ const SplitMoe = struct {
     }
 };
 
+/// Rank 1's record of rank 0's prefetch hints (TASK-11): how long before each
+/// layer's first expert call its hint arrived. Rank 0 measures how often the
+/// hints were right.
+const HintLog = struct {
+    experts: usize,
+    /// Per layer: the pass of the latest hint, when its first hint arrived,
+    /// and the pass whose first call has been seen.
+    latest: []u64,
+    first_ns: []u64,
+    started: []u64,
+    hints: u64 = 0,
+    starts: u64 = 0,
+    lead_ns: u64 = 0,
+    lead_min_ns: u64 = std.math.maxInt(u64),
+
+    const none = std.math.maxInt(u64);
+
+    fn init(a: std.mem.Allocator, layers: usize, experts: usize) !HintLog
+    {
+        const self: HintLog = .{
+            .experts = experts,
+            .latest = try a.alloc(u64, layers),
+            .first_ns = try a.alloc(u64, layers),
+            .started = try a.alloc(u64, layers),
+        };
+        @memset(self.latest, none);
+        @memset(self.started, none);
+        return self;
+    }
+
+    fn hint(self: *HintLog, pkt: *const wire.Packet, now: u64) !void
+    {
+        const layer = pkt.header.layer;
+        const step = pkt.header.token_id;
+        if (layer >= self.latest.len)
+        {
+            return error.BadDispatch;
+        }
+        if (self.latest[layer] != step)
+        {
+            self.latest[layer] = step;
+            self.first_ns[layer] = now;
+        }
+        for (0..try wire.prefetchCount(pkt)) |i|
+        {
+            if (wire.prefetchExpert(pkt, i) >= self.experts)
+            {
+                return error.BadDispatch;
+            }
+        }
+        self.hints += 1;
+    }
+
+    fn call(self: *HintLog, layer: usize, now: u64) void
+    {
+        const step = self.latest[layer];
+        if (step == none)
+        {
+            return;
+        }
+        if (self.started[layer] != step)
+        {
+            self.started[layer] = step;
+            self.starts += 1;
+            const lead = now - self.first_ns[layer];
+            self.lead_ns += lead;
+            self.lead_min_ns = @min(self.lead_min_ns, lead);
+        }
+    }
+};
+
 /// Rank 1: answers dispatches with its experts until rank 0 says goodbye.
 fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []const bool) !void {
     const cfg = local.cfg;
     const d = cfg.d_model;
+    var hint_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer hint_arena.deinit();
+    var hints = try HintLog.init(hint_arena.allocator(), cfg.layers, cfg.experts);
     const x = try std.heap.page_allocator.alloc(f32, 2 * d);
     defer std.heap.page_allocator.free(x);
     const y = x[d..];
@@ -378,10 +494,20 @@ fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []co
             continue;
         };
         const hdr = r.packet.header;
+        if (r.kind == .dispatch and wire.isPrefetch(hdr) and have == 0)
+        {
+            try hints.hint(r.packet, mf.nowNs());
+            try ep.release();
+            continue;
+        }
         if (r.kind != .dispatch or hdr.layer >= cfg.layers or hdr.expert >= cfg.experts or !owned[hdr.expert]) return error.BadDispatch;
         const enc = wire.encodingOf(hdr);
         const chunks = wire.chunkCount(enc, d);
-        if (have == 0) first = hdr;
+        if (have == 0)
+        {
+            first = hdr;
+            hints.call(hdr.layer, mf.nowNs());
+        }
         if (hdr.token_id != first.token_id or hdr.layer != first.layer or hdr.expert != first.expert or
             try wire.decodeChunk(r.packet, x[0..d]) != have) return error.BadDispatch;
         try ep.release();
@@ -399,7 +525,17 @@ fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []co
     }
     try ep.finish();
     std.debug.print("expert: ran {d} expert FFNs for rank 0; resident memory {d:.0} MB\n", .{ served, mb(rssBytes()) });
+    if (hints.hints > 0)
+    {
+        std.debug.print("expert: lookahead: {d} prefetch hints; {d} layer starts here, each after its hint, by {d:.0} us on average (min {d:.0} us)\n", .{
+            hints.hints,
+            hints.starts,
+            @as(f64, @floatFromInt(hints.lead_ns)) / @as(f64, @floatFromInt(@max(hints.starts, 1))) / 1e3,
+            @as(f64, @floatFromInt(if (hints.starts > 0) hints.lead_min_ns else 0)) / 1e3,
+        });
+    }
 }
+
 
 /// Loads this rank's weights and runs its side over `ep`.
 fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank: u8, name: []const u8) !void {
@@ -427,9 +563,20 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .pkt = pkt,
     };
     defer gpa.free(split.contrib);
-    const result = runGolden(gpa, &l.weights.?, split.moe(), opts, name);
+    var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra };
+    var moe = split.moe();
+    if (opts.lookahead > 0)
+    {
+        moe.ahead = &la;
+        moe.prefetch = SplitMoe.prefetch;
+    }
+    const result = runGolden(gpa, &l.weights.?, moe, opts, name);
     try ep.finish();
     std.debug.print("{s}: {d} expert calls sent to rank 1, {d} run locally; payload {t}\n", .{ name, split.remote, split.local_calls, opts.payload });
+    if (opts.lookahead > 0)
+    {
+        std.debug.print("{s}: lookahead: {d} prefetch hints sent to rank 1\n", .{ name, split.hints });
+    }
     return result;
 }
 
@@ -530,6 +677,8 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
 
     var ok = true;
     var worst_logit: f32 = 0;
+    var same_bits = true;
+    var compared: usize = 0;
     for (0..@intCast(gcfg[0])) |p| {
         var buf: [64]u8 = undefined;
         const toks_g = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
@@ -549,6 +698,14 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         const t0 = mf.nowNs();
         try olmoe.forward(gpa, w, moe, tokens, logits, trace);
         const ms = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e6;
+        if (moe.ahead != null)
+        {
+            const plain = try gpa.alloc(f32, n * cfg.vocab);
+            defer gpa.free(plain);
+            try olmoe.forward(gpa, w, withoutLookahead(moe), tokens, plain, null);
+            same_bits = same_bits and std.mem.eql(u8, std.mem.sliceAsBytes(plain), std.mem.sliceAsBytes(logits));
+            compared += plain.len;
+        }
 
         var hidden_err: f32 = 0;
         var routing_same: usize = 0;
@@ -584,6 +741,10 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         return error.ForwardMismatch;
     }
     std.debug.print("{s}: PASS: OLMoE-1B-7B logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, worst_logit });
+    if (moe.ahead) |la|
+    {
+        try reportLookahead(la, name, "prompts", same_bits, compared);
+    }
     if (opts.generate > 0)
     {
         try runGenerate(gpa, w, moe, golden, opts, name);
@@ -591,6 +752,44 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
     if (opts.minutes > 0)
     {
         try runSoak(gpa, w, moe, golden, opts, name);
+        if (moe.ahead) |la|
+        {
+            try reportLookahead(la, name, "soak", true, 0);
+        }
+    }
+}
+
+/// The same `Moe` with the predictor off, for the on-versus-off check.
+fn withoutLookahead(moe: olmoe.Moe) olmoe.Moe
+{
+    var m = moe;
+    m.ahead = null;
+    m.prefetch = null;
+    return m;
+}
+
+/// Prints the predictor's recall and cost since the last report, then starts
+/// a new count. Fails if turning it on changed any output bit.
+fn reportLookahead(la: *olmoe.Lookahead, name: []const u8, phase: []const u8, same_bits: bool, compared: usize) !void
+{
+    const h = la.horizon;
+    std.debug.print("{s}: lookahead ({s}, top_k + {d} guesses): recall at H={d} {d:.1}% ({d} expert choices)", .{ name, phase, la.extra, h, la.recall(h) * 100, la.total[h - 1] });
+    for (1..h) |near|
+    {
+        std.debug.print(", layer {d} from the embeddings {d:.1}%", .{ near - 1, la.recall(near) * 100 });
+    }
+    std.debug.print("; guessing took {d:.2}% of layer time ({d:.1} of {d:.1} ms)", .{
+        la.overhead() * 100, @as(f64, @floatFromInt(la.predict_ns)) / 1e6, @as(f64, @floatFromInt(la.layer_ns)) / 1e6,
+    });
+    if (compared > 0)
+    {
+        std.debug.print("; predictor on vs off: {s} ({d} values)", .{ if (same_bits) "bit-identical" else "DIFFERENT", compared });
+    }
+    std.debug.print("\n", .{});
+    la.* = .{ .horizon = la.horizon, .extra = la.extra };
+    if (!same_bits)
+    {
+        return error.LookaheadChangedOutput;
     }
 }
 
@@ -646,15 +845,29 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
     defer gpa.free(step_logits);
     var ok = true;
     var compared = false;
+    var same_bits = true;
+    var compared_bits: usize = 0;
     for (0..@intCast((try golden.get("config")).i32s()[0])) |p|
     {
         const prompt = try goldenTokens(gpa, golden, p);
         defer gpa.free(prompt);
         var cache = try olmoe.KvCache.init(gpa, cfg, prompt.len + opts.generate);
         defer cache.deinit(gpa);
+        const sampler_start = sampler;
         const t0 = mf.nowNs();
         try olmoe.generate(gpa, w, moe, &cache, prompt, &sampler, out, step_logits);
         const s = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9;
+        if (moe.ahead != null)
+        {
+            var again = sampler_start;
+            const out2 = try gpa.alloc(u32, out.len);
+            defer gpa.free(out2);
+            const logits2 = try gpa.alloc(f32, step_logits.len);
+            defer gpa.free(logits2);
+            try olmoe.generate(gpa, w, withoutLookahead(moe), &cache, prompt, &again, out2, logits2);
+            same_bits = same_bits and std.mem.eql(u32, out, out2) and std.mem.eql(u8, std.mem.sliceAsBytes(step_logits), std.mem.sliceAsBytes(logits2));
+            compared_bits += logits2.len;
+        }
         std.debug.print("{s}: generate prompt {d}: {d} tokens in {d:.2} s ({d:.1} tokens/s, prompt included)\n", .{ name, p, out.len, s, @as(f64, @floatFromInt(out.len)) / s });
         std.debug.print("{s}:   tokens:", .{name});
         for (out) |t|
@@ -683,6 +896,10 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
         const pass = same == g and lerr <= 1e-2;
         ok = ok and pass;
         std.debug.print("{s}:   same as transformers' generate(): {d}/{d} tokens, logits max err {e:.2} {s}\n", .{ name, same, g, lerr, if (pass) "ok" else "FAIL" });
+    }
+    if (moe.ahead) |la|
+    {
+        try reportLookahead(la, name, "generation", same_bits, compared_bits);
     }
     if (!compared)
     {

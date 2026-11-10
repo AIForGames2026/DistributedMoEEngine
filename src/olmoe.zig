@@ -88,6 +88,19 @@ pub const Mat = struct {
     pub fn matmul(self: Mat, x: []const f32, n: usize, y: []f32, scratch: []f32) void {
         std.debug.assert(x.len >= n * self.cols and y.len >= n * self.rows and scratch.len >= self.cols);
         if (gpu_matmul) |f| if (f(self, x[0 .. n * self.cols], n, y[0 .. n * self.rows])) return;
+        if (self.format == .f32 and @intFromPtr(self.bytes.ptr) % @alignOf(f32) == 0)
+        {
+            // Rows are already f32 (the router, say): read them in place, same sums.
+            const wv: []const f32 = @alignCast(std.mem.bytesAsSlice(f32, self.bytes[0 .. self.rows * self.cols * 4]));
+            for (0..self.rows) |r|
+            {
+                for (0..n) |t|
+                {
+                    y[t * self.rows + r] = dot(wv[r * self.cols ..][0..self.cols], x[t * self.cols ..][0..self.cols]);
+                }
+            }
+            return;
+        }
         for (0..self.rows) |r| {
             self.row(r, scratch);
             for (0..n) |t| y[t * self.rows + r] = dot(scratch[0..self.cols], x[t * self.cols ..][0..self.cols]);
@@ -165,6 +178,51 @@ pub const Moe = struct {
     /// adds sum over j of w[t][j] * expert idx[t][j] (x[t]) to out[t] (zeroed
     /// by the caller). idx and w are n x top_k.
     run: *const fn (ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, w: []const f32, out: []f32) anyerror!void,
+    /// If set, guesses the experts of later layers while the forward pass runs.
+    ahead: ?*Lookahead = null,
+    /// Called with each guess (TASK-11), before `layer` starts. It may start
+    /// loading those experts but must not change any result.
+    prefetch: ?*const fn (ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void = null,
+};
+
+/// The lookahead predictor (TASK-11). After layer S's attention, it applies
+/// each later layer T's own MoE norm and router to S's hidden state and keeps
+/// the top_k + extra experts per token as T's guess. It needs no training,
+/// and the real router still picks the experts that run.
+pub const Lookahead = struct {
+    /// How many layers ahead to guess: 1 or 2. Layers before that are
+    /// guessed from the token embeddings, as early as they can be.
+    horizon: usize = 2,
+    /// Candidates beyond top_k in each guess.
+    extra: usize = 2,
+    /// By how far ahead each guess was made: true experts found among the
+    /// guesses, and true experts.
+    hits: [max_horizon]u64 = @splat(0),
+    total: [max_horizon]u64 = @splat(0),
+    prefetches: u64 = 0,
+    /// Time spent guessing, and in whole layers, for the overhead figure.
+    predict_ns: u64 = 0,
+    layer_ns: u64 = 0,
+
+    pub const max_horizon = 2;
+
+    pub fn recall(self: Lookahead, h: usize) f64
+    {
+        if (self.total[h - 1] == 0)
+        {
+            return 0;
+        }
+        return @as(f64, @floatFromInt(self.hits[h - 1])) / @as(f64, @floatFromInt(self.total[h - 1]));
+    }
+
+    pub fn overhead(self: Lookahead) f64
+    {
+        if (self.layer_ns == 0)
+        {
+            return 0;
+        }
+        return @as(f64, @floatFromInt(self.predict_ns)) / @as(f64, @floatFromInt(self.layer_ns));
+    }
 };
 
 pub const Layer = struct {
@@ -363,6 +421,14 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const probs = try a.alloc(f32, n * cfg.experts);
     const idx = try a.alloc(u32, n * k);
     const wts = try a.alloc(f32, n * k);
+    // Lookahead guesses: per horizon and target layer, top_k + extra experts per token.
+    const la = moe.ahead;
+    const kx = if (la) |p| k + p.extra else 0;
+    const horizon = if (la) |p| @min(p.horizon, Lookahead.max_horizon) else 0;
+    const guess = try a.alloc(u32, horizon * cfg.layers * n * kx);
+    const guess_val = try a.alloc(f32, kx);
+    const wanted = try a.alloc(bool, if (la != null) cfg.experts else 0);
+    const wanted_list = try a.alloc(u32, wanted.len);
 
     for (tokens, 0..) |tok, t|
     {
@@ -372,9 +438,21 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         }
         w.embed.row(tok, h[t * d ..][0..d]);
     }
+    const ahead: Guesser = .{ .w = w, .moe = moe, .n = n, .kx = kx, .out = guess, .val = guess_val, .wanted = wanted, .wanted_list = wanted_list };
+    if (la) |p|
+    {
+        // The first layers' guesses come from the token embeddings, before any attention.
+        const t0 = nowNs();
+        for (1..@min(horizon, cfg.layers) + 1) |hz|
+        {
+            try ahead.guess(hz - 1, hz, h, x, probs, scratch);
+        }
+        p.predict_ns += nowNs() - t0;
+    }
     const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.head_dim)));
     for (w.layers, 0..) |*l, li|
     {
+        const layer_t0 = if (la != null) nowNs() else 0;
         // New keys and values go straight into the cache, after the old ones.
         const kc = cache.keys(li);
         const vc = cache.values(li);
@@ -434,6 +512,16 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             hh.* += o;
         }
 
+        if (la) |p|
+        {
+            const t0 = nowNs();
+            if (li + horizon < cfg.layers)
+            {
+                try ahead.guess(li + horizon, horizon, h, x, probs, scratch);
+            }
+            p.predict_ns += nowNs() - t0;
+        }
+
         for (0..n) |t|
         {
             rmsnorm(h[t * d ..][0..d], l.ffn_norm, cfg.eps, x[t * d ..][0..d]);
@@ -459,11 +547,19 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             }
             topK(p, k, idx[t * k ..][0..k], wts[t * k ..][0..k]);
         }
+        if (la) |p|
+        {
+            scoreGuesses(p, guess, idx, li, n, k, kx, horizon, cfg.layers);
+        }
         @memset(tmp, 0);
         try moe.run(moe.ctx, li, x, n, idx, wts, tmp);
         for (h, tmp) |*hh, o|
         {
             hh.* += o;
+        }
+        if (la) |p|
+        {
+            p.layer_ns += nowNs() - layer_t0;
         }
 
         if (trace) |tr|
@@ -486,6 +582,81 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         rmsnorm(h[(n - 1) * d ..][0..d], w.out_norm, cfg.eps, x[0..d]);
         w.head.matmul(x, 1, logits, scratch);
     }
+}
+
+/// One forward pass's lookahead guesses (n x kx experts per horizon and target).
+const Guesser = struct {
+    w: *const Weights,
+    moe: Moe,
+    n: usize,
+    kx: usize,
+    out: []u32,
+    val: []f32,
+    wanted: []bool,
+    wanted_list: []u32,
+
+    /// Guesses layer `target`'s experts from the hidden states `h`, `hz` layers
+    /// early, and passes them to `moe.prefetch`. `x` and `logits` are scratch
+    /// the caller overwrites later.
+    fn guess(self: Guesser, target: usize, hz: usize, h: []const f32, x: []f32, logits: []f32, scratch: []f32) !void
+    {
+        const cfg = self.w.cfg;
+        const d = cfg.d_model;
+        const n = self.n;
+        const tl = &self.w.layers[target];
+        const out = self.out[((hz - 1) * cfg.layers + target) * n * self.kx ..][0 .. n * self.kx];
+        for (0..n) |t|
+        {
+            rmsnorm(h[t * d ..][0..d], tl.ffn_norm, cfg.eps, x[t * d ..][0..d]);
+        }
+        tl.router.matmul(x, n, logits, scratch);
+        for (0..n) |t|
+        {
+            // Softmax keeps the order, so the raw router outputs rank the same.
+            topK(logits[t * cfg.experts ..][0..cfg.experts], self.kx, out[t * self.kx ..][0..self.kx], self.val);
+        }
+        const f = self.moe.prefetch orelse return;
+        @memset(self.wanted, false);
+        var count: usize = 0;
+        for (out) |e|
+        {
+            if (!self.wanted[e])
+            {
+                self.wanted[e] = true;
+                self.wanted_list[count] = e;
+                count += 1;
+            }
+        }
+        try f(self.moe.ctx, target, self.wanted_list[0..count]);
+        self.moe.ahead.?.prefetches += 1;
+    }
+};
+
+/// Counts how many of layer `li`'s chosen experts its earlier guesses held.
+fn scoreGuesses(p: *Lookahead, guess: []const u32, idx: []const u32, li: usize, n: usize, k: usize, kx: usize, horizon: usize, layers: usize) void
+{
+    // The first layers were guessed from the embeddings, fewer layers ahead.
+    const hz = @min(horizon, li + 1);
+    const g = guess[((hz - 1) * layers + li) * n * kx ..][0 .. n * kx];
+    for (0..n) |t|
+    {
+        for (idx[t * k ..][0..k]) |e|
+        {
+            p.hits[hz - 1] += @intFromBool(std.mem.indexOfScalar(u32, g[t * kx ..][0..kx], e) != null);
+        }
+    }
+    p.total[hz - 1] += n * k;
+}
+
+fn nowNs() u64
+{
+    if (@import("builtin").os.tag == .windows)
+    {
+        return @import("win32.zig").nowNs();
+    }
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
 /// Index of the largest value; ties go to the lowest index, as torch.argmax.
@@ -734,6 +905,64 @@ test "cached generation matches a full recompute and transformers' generate() on
             try std.testing.expectApproxEqAbs(exp, got, 1e-5);
         }
     }
+}
+
+test "lookahead guesses leave every logit bit-identical and arrive before their layer" {
+    const gpa = std.testing.allocator;
+    const file = @embedFile("olmoe_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [8]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+
+    // Records each prefetch's target and the layers that had run by then.
+    const Log = struct {
+        local: *LocalExperts,
+        layers_run: usize = 0,
+        ok: bool = true,
+        calls: usize = 0,
+        fn run(ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, wt: []const f32, out: []f32) anyerror!void
+        {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.layers_run = layer + 1;
+            return LocalExperts.runAll(self.local, layer, x, n, idx, wt, out);
+        }
+        fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
+        {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.calls += 1;
+            self.ok = self.ok and layer >= self.layers_run and experts.len > 0;
+        }
+    };
+    var log: Log = .{ .local = &local };
+    var la: Lookahead = .{ .horizon = 2, .extra = 1 };
+    const with: Moe = .{ .ctx = &log, .run = Log.run, .ahead = &la, .prefetch = Log.prefetch };
+
+    const tokens = [_]u32{ 3, 17, 200, 45, 9, 1, 2, 3 };
+    const plain = try gpa.alloc(f32, tokens.len * cfg.vocab);
+    defer gpa.free(plain);
+    const guessed = try gpa.alloc(f32, tokens.len * cfg.vocab);
+    defer gpa.free(guessed);
+    try forward(gpa, &w, local.moe(), &tokens, plain, null);
+    try forward(gpa, &w, with, &tokens, guessed, null);
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(plain), std.mem.sliceAsBytes(guessed));
+    try std.testing.expect(log.ok);
+    // Tiny OLMoE has 2 layers, both guessed from the embeddings: layer 0 one layer ahead, layer 1 two.
+    try std.testing.expectEqual(@as(usize, 2), log.calls);
+    try std.testing.expectEqual(@as(u64, tokens.len * cfg.top_k), la.total[0]);
+    try std.testing.expectEqual(@as(u64, tokens.len * cfg.top_k), la.total[1]);
+    try std.testing.expect(la.recall(1) > 0 and la.recall(1) <= 1);
+    try std.testing.expect(la.layer_ns > 0);
 }
 
 test "seeded sampling repeats with the same seed and stays inside top_k" {

@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #28 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #28 are TASK-22 to TASK-26). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #30 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #30 are TASK-22 to TASK-28). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -199,10 +199,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-11] Speculative Lookahead Router
 - **Milestone**: Beta (Nov 22)
-- **Status**: Backlog
+- **Status**: In Progress
 - **Priority**: `should` | **Area**: `code` | **Tag**: `cut-2`
 - **Description**: Build a lightweight low-rank or cascaded predictor (following SpecPrefetch / Director) that predicts expert sets ahead (H = 1 first, H = 2 target) and issues RDMA pre-arming and NVMe prefetch commands through the Prefetch Command Ring. The native router stays authoritative: predictions only drive transfers, never which experts run. Prefetch keys are `(layer, expert)` pairs. Predictor training can run on the desktop's 5070 Ti.
 - **Acceptance Criteria**: Done when prefetches are issued before the target layer starts in at least 95% of steps, measured expert recall at H = 2 with k + 2 candidates is at least 80% on two evaluation datasets (or H = 1 results are reported if H = 2 misses), predictor compute overhead is under 2% of layer time, and outputs are bit-identical with the predictor on versus off.
+- **Progress (Nov 10)**: all four criteria met on the desktop; `gx10-03` not yet run. The predictor needs no training: after layer S's attention it applies layer S + 2's own norm and router to S's hidden state and keeps the top 8 + 2 experts (layers 0 and 1 are guessed from the token embeddings). Recall at H=2 is 82.7% on WikiText-2 and 82.2% on HumanEval (16,384 tokens each, `tools/ref/lookahead_study.py`), and 83.6% during generation in the engine. Guessing takes 1.62% of layer time in one process and 1.33% in two, outputs are bit-identical with it on versus off (prompts and 3 x 64 generated tokens), and rank 1 received every layer's prefetch hint (`flags` bit 6) before that layer's first expert call, 6.1 ms early on average. Hints are not yet acted on: every expert is still loaded at startup. Layer 0's guesses are weak (19 to 26%). See `bench/olmoe/2026-11-10-lookahead.md`.
 
 #### [TASK-14] Misprediction & Miss Handling (Exact Mode)
 - **Milestone**: Beta (Nov 22)
@@ -323,6 +324,20 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Added Nov 5 from the project owner's direction: the web page grows into a dashboard where an operator manages nodes, the router, and models, and the API endpoint at the router that harnesses call. The inspector becomes one feature of it. This needs what v1 does not ship: the tracker (TASK-09), live telemetry (TASK-16b), an authenticated control channel, and the REST server listed as out of scope for v1 below. Testing Session 1's question 5 asks which control to build first. Until this task starts, the public site stays simulated and recorded data only.
 - **Acceptance Criteria**: To be written when it is scheduled. Minimum: an operator adds a node, loads a model, and sends a request through the router's endpoint from the dashboard, with authentication required for every control action.
 
+#### [TASK-27] Compact KV Cache Formats
+- **Milestone**: None (after v1)
+- **Status**: Backlog
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 10, after DeepSeek-V4.1-Flash's KV cache work (arXiv 2609.19969) came up in class. Its 890 bytes per token come from architecture and training (shared KV across layers, sparse top-k selection, FP4 cache with quantization-aware training), none of which an existing model like OLMoE can take on without retraining. The part that carries over is storing the cache smaller: TASK-24's cache holds K and V in f32 (262,144 bytes per token for OLMoE-1B-7B), and a BF16 or FP8 (E4M3 with per-block scales) option would cut that by 2x to 4x. The cache lives on the attention rank only, so this saves memory there and changes no wire traffic.
+- **Acceptance Criteria**: To be written when it is scheduled. Minimum: each format's bytes per token, its logits error and matching-token count against transformers' `generate()` on the TASK-24 prompts, and decode speed versus f32, recorded in `bench/`.
+
+#### [TASK-28] Persistent Prefix KV Cache
+- **Milestone**: None (after v1)
+- **Status**: Backlog
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 10, from the same paper, which keeps every prompt's global KV on SSD for at least 72 hours so a repeated prefix skips prefill. Save the K and V of a prompt prefix to NVMe, keyed by a hash of its tokens, and read them back through the TASK-03 `io_uring` reader when a later prompt starts with the same tokens. OLMoE has no sliding-window cache, so unlike DeepSeek's bounded replay the restored cache is exact. Shares the NVMe paging code with TASK-12 if that task is built.
+- **Acceptance Criteria**: To be written when it is scheduled. Minimum: a prompt that reuses a cached prefix produces exactly the same tokens and logits as a cold run, with time to first token for both recorded in `bench/`.
+
 ---
 
 ## 4. Scope Tiers & Cut Lines
@@ -331,7 +346,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, shown in a browser replay. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 18, 19, 23, 24 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25 is post-v1. | 12, 13, 15b, 16b, 22, 25, 26 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, and 28 are post-v1. | 12, 13, 15b, 16b, 22, 25, 26, 27, 28 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, live telemetry, and CPU-only expert nodes.
 
@@ -355,15 +370,15 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22, TASK-25 |
+| **Backlog** | TASK-09, TASK-12 to TASK-20 (including 15b, 16b), TASK-22, TASK-25, TASK-27, TASK-28 |
 | **To Do** | (none) |
-| **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
+| **In Progress** | TASK-11 (all criteria met on the desktop Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
 | **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26 | 14 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28 | 16 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b, 23, 25 | 5 |
@@ -373,7 +388,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 15 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 7 | 5 tagged `cut-1`; TASK-25 is post-v1; TASK-26 untagged |
+| `could` | 9 | 5 tagged `cut-1`; TASK-25, 27, and 28 are post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 
@@ -415,6 +430,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-24 | 10 | 15 |
 | TASK-25 | 09, 16b, v1 release | (none) |
 | TASK-26 | 10 | 09 (classroom machines as swarm nodes) |
+| TASK-27 | 24 | (none) |
+| TASK-28 | 03, 24 | (none) |
 
 **Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-24 → TASK-15 → TASK-16 → TASK-18.
 

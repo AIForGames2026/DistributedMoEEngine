@@ -179,6 +179,50 @@ pub fn decodeChunk(pkt: *const Packet, out: []f32) error{BadPayload}!usize {
     return chunk;
 }
 
+/// Bit 6 of `flags` (TASK-11): a prefetch hint rather than an expert call.
+/// `token_id` numbers the forward pass, `layer` is the layer the hint is for,
+/// `expert` counts the experts listed, and the payload holds their ids.
+pub const flag_prefetch: u16 = 1 << 6;
+
+pub fn isPrefetch(h: Header) bool
+{
+    return h.flags & flag_prefetch != 0;
+}
+
+/// Starts an empty prefetch hint for `layer` in forward pass `step`.
+pub fn beginPrefetch(pkt: *Packet, step: u64, layer: u16) void
+{
+    pkt.header = .{ .token_id = step, .generation = 0, .src_rank = 0, .layer = layer, .expert = 0, .flags = flag_prefetch, .gate_weight = 0, .payload_len = 0 };
+}
+
+pub fn addPrefetch(pkt: *Packet, expert: u16) error{PayloadTooLarge}!void
+{
+    const i = pkt.header.expert;
+    if ((@as(usize, i) + 1) * 2 > hidden_bytes)
+    {
+        return error.PayloadTooLarge;
+    }
+    std.mem.writeInt(u16, pkt.payload[@as(usize, i) * 2 ..][0..2], expert, .little);
+    pkt.header.expert = i + 1;
+    pkt.header.payload_len = (@as(u32, i) + 1) * 2;
+}
+
+/// The experts a prefetch hint lists, after checking its length.
+pub fn prefetchCount(pkt: *const Packet) error{BadPayload}!usize
+{
+    const n: usize = pkt.header.expert;
+    if (!isPrefetch(pkt.header) or pkt.header.payload_len != n * 2 or n * 2 > hidden_bytes)
+    {
+        return error.BadPayload;
+    }
+    return n;
+}
+
+pub fn prefetchExpert(pkt: *const Packet, i: usize) u16
+{
+    return std.mem.readInt(u16, pkt.payload[i * 2 ..][0..2], .little);
+}
+
 /// Reads a single-packet payload into `out`, which must hold exactly the
 /// packet's value count (`payload_len` / bytes per value).
 pub fn decodePayload(pkt: *const Packet, out: []f32) error{BadPayload}!void {
@@ -360,6 +404,19 @@ test "a vector larger than one packet goes as numbered chunks" {
     }
     try std.testing.expectEqualSlices(f32, &x, &y);
     try std.testing.expectError(error.PayloadTooLarge, encodeChunk(pkt, .f32, &x, 2));
+}
+
+test "prefetch hints list their experts and never decode as a hidden state" {
+    var pkt = std.mem.zeroes(Packet);
+    beginPrefetch(&pkt, 7, 3);
+    try addPrefetch(&pkt, 40);
+    try addPrefetch(&pkt, 63);
+    try std.testing.expect(isPrefetch(pkt.header));
+    try std.testing.expectEqual(@as(usize, 2), try prefetchCount(&pkt));
+    try std.testing.expectEqual(@as(u16, 63), prefetchExpert(&pkt, 1));
+    try std.testing.expectEqual(@as(u64, 7), pkt.header.token_id);
+    var out: [1]f32 = undefined;
+    try std.testing.expectError(error.BadPayload, decodeChunk(&pkt, &out));
 }
 
 test "sealed packet passes; corruption and stale generation are caught" {

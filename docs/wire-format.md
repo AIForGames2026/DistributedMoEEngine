@@ -40,9 +40,14 @@ The packet layout is unchanged; `flags`, reserved until now, says how `payload` 
 |---|---|---|
 | 0 to 1 | encoding | 0: FP8 E4M3 ("e4m3fn") with one E8M0 scale per 32 values in `scales`, up to 7,168 values. 1: bfloat16, up to 3,584. 2: float32, exact, up to 1,792 |
 | 2 to 5 | chunk | For a vector larger than one packet holds: chunk *i* carries values *i* x max to (*i* + 1) x max. The chunks of one vector are sent back to back |
-| 6 to 15 | reserved | 0 |
+| 6 | prefetch | 1: a prefetch hint (TASK-11), not an expert call; see below |
+| 7 to 15 | reserved | 0 |
 
 `payload_len` is the byte count of this packet's values. The FP8 block scale is the smallest power of two that keeps the block within 448, E4M3's largest value; values round to nearest even. Measured on OLMoE-1B-7B (2,048 values): FP8 and BF16 each fit one packet but round the hidden state, while F32 takes two packets and is exact ([`bench/olmoe/2026-11-05.md`](../bench/olmoe/2026-11-05.md)). The code is in `src/wire.zig` (`encodePayload`, `encodeChunk`).
+
+### Prefetch hints (`flags` bit 6, added Nov 10 for TASK-11)
+
+A dispatch packet with bit 6 set tells the receiving process which of its experts the sender's lookahead predictor expects a later layer to use, so it can start loading them. `token_id` numbers the sender's forward pass, `layer` is the layer the hint is for, `expert` is how many experts are listed, and the payload holds their ids as little-endian `u16` (`payload_len` = 2 x count). The receiver sends nothing back. A hint never changes which experts run, and a packet with bit 6 set never decodes as a hidden state. The code is in `src/wire.zig` (`beginPrefetch`, `addPrefetch`, `prefetchCount`).
 
 ## Immediate data (32 bits)
 

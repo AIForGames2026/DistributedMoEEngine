@@ -84,6 +84,8 @@ zig build olmoe -Doptimize=ReleaseFast -Drdma=true -Dgpu=true && zig-out/bin/olm
 
 Token generation (TASK-24): add `--generate 64` to the reference command to also record 64 tokens of transformers' greedy `generate()` after each prompt (written to `--out` with the rest), then add `--generate 64` to any `olmoe` command. After the prompt check, it generates one token at a time with a KV cache and compares every token, and the logits it was picked from, with the reference. `--temperature T`, `--top-k K`, and `--seed S` sample instead (repeatable for a given seed, so not compared). `--minutes 10` then repeats the generation for 10 minutes and fails if any round's tokens change or resident memory grows by 1% or more after the first round.
 
+Lookahead predictor (TASK-11): add `--lookahead 2` to any `olmoe` command. After each layer's attention, rank 0 guesses the experts two layers ahead (the first layers from the token embeddings) by applying that later layer's own norm and router, keeps the top 8 + `--extra` (default 2), and sends rank 1 a prefetch hint for its share. It reports recall (the share of chosen experts that were guessed), the time spent guessing as a share of layer time, and runs every prompt and generation a second time with the predictor off to check the output is bit-identical. Rank 1 reports how long before each layer's first expert call its hint arrived. `--lookahead 1` guesses one layer ahead. `tools/ref/lookahead_study.py` measures the same recall in transformers over text files, for example WikiText-2 and HumanEval.
+
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 
 ```bash

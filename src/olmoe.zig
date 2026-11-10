@@ -287,103 +287,294 @@ pub fn topK(p: []const f32, k: usize, idx: []u32, val: []f32) void {
     }
 }
 
+/// Keys (after QK norm and rotary) and values for every position seen so
+/// far, per layer, so each new token attends to them without recomputing.
+pub const KvCache = struct {
+    cap: usize,
+    d: usize,
+    len: usize = 0,
+    k: []f32,
+    v: []f32,
+
+    /// Room for `cap` positions in every layer.
+    pub fn init(a: std.mem.Allocator, cfg: Config, cap: usize) !KvCache
+    {
+        const k = try a.alloc(f32, cfg.layers * cap * cfg.d_model);
+        errdefer a.free(k);
+        return .{ .cap = cap, .d = cfg.d_model, .k = k, .v = try a.alloc(f32, cfg.layers * cap * cfg.d_model) };
+    }
+
+    pub fn deinit(self: *KvCache, a: std.mem.Allocator) void
+    {
+        a.free(self.k);
+        a.free(self.v);
+        self.* = undefined;
+    }
+
+    pub fn keys(self: KvCache, layer: usize) []f32
+    {
+        return self.k[layer * self.cap * self.d ..][0 .. self.cap * self.d];
+    }
+
+    pub fn values(self: KvCache, layer: usize) []f32
+    {
+        return self.v[layer * self.cap * self.d ..][0 .. self.cap * self.d];
+    }
+};
+
 /// Runs `tokens` (positions 0 to n-1) through the model and writes every
 /// position's logits (n x vocab).
-pub fn forward(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, tokens: []const u32, logits: []f32, trace: ?Trace) !void {
+pub fn forward(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, tokens: []const u32, logits: []f32, trace: ?Trace) !void
+{
+    var cache = try KvCache.init(gpa, w.cfg, tokens.len);
+    defer cache.deinit(gpa);
+    try step(gpa, w, moe, &cache, tokens, logits, trace);
+}
+
+/// Runs `tokens` at the positions after those already in `cache`, adding
+/// them to it. `logits` takes every new position's logits (n x vocab), or
+/// only the last one's if it holds fewer rows than that.
+pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache, tokens: []const u32, logits: []f32, trace: ?Trace) !void
+{
     const cfg = w.cfg;
     const n = tokens.len;
     const d = cfg.d_model;
     const k = cfg.top_k;
+    const pos0 = cache.len;
+    if (pos0 + n > cache.cap)
+    {
+        return error.ContextFull;
+    }
+    const all_logits = logits.len >= n * cfg.vocab;
+    if (logits.len < cfg.vocab)
+    {
+        return error.LogitsTooSmall;
+    }
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a = arena.allocator();
     const h = try a.alloc(f32, n * d);
     const x = try a.alloc(f32, n * d);
     const q = try a.alloc(f32, n * d);
-    const kk = try a.alloc(f32, n * d);
-    const v = try a.alloc(f32, n * d);
     const att = try a.alloc(f32, n * d);
     const tmp = try a.alloc(f32, n * d);
-    const scores = try a.alloc(f32, n);
+    const scores = try a.alloc(f32, pos0 + n);
     const scratch = try a.alloc(f32, @max(d, cfg.d_ff));
     const probs = try a.alloc(f32, n * cfg.experts);
     const idx = try a.alloc(u32, n * k);
     const wts = try a.alloc(f32, n * k);
 
-    for (tokens, 0..) |tok, t| {
-        if (tok >= cfg.vocab) return error.BadToken;
+    for (tokens, 0..) |tok, t|
+    {
+        if (tok >= cfg.vocab)
+        {
+            return error.BadToken;
+        }
         w.embed.row(tok, h[t * d ..][0..d]);
     }
     const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.head_dim)));
-    for (w.layers, 0..) |*l, li| {
-        // Attention.
-        for (0..n) |t| rmsnorm(h[t * d ..][0..d], l.attn_norm, cfg.eps, x[t * d ..][0..d]);
+    for (w.layers, 0..) |*l, li|
+    {
+        // New keys and values go straight into the cache, after the old ones.
+        const kc = cache.keys(li);
+        const vc = cache.values(li);
+        const kn = kc[pos0 * d ..][0 .. n * d];
+        for (0..n) |t|
+        {
+            rmsnorm(h[t * d ..][0..d], l.attn_norm, cfg.eps, x[t * d ..][0..d]);
+        }
         l.q.matmul(x, n, q, scratch);
-        l.k.matmul(x, n, kk, scratch);
-        l.v.matmul(x, n, v, scratch);
-        for (0..n) |t| {
+        l.k.matmul(x, n, kn, scratch);
+        l.v.matmul(x, n, vc[pos0 * d ..][0 .. n * d], scratch);
+        for (0..n) |t|
+        {
             const qt = q[t * d ..][0..d];
-            const kt = kk[t * d ..][0..d];
+            const kt = kn[t * d ..][0..d];
             @memcpy(tmp[0..d], qt);
             rmsnorm(tmp[0..d], l.q_norm, cfg.eps, qt);
             @memcpy(tmp[0..d], kt);
             rmsnorm(tmp[0..d], l.k_norm, cfg.eps, kt);
-            rope(qt, cfg.heads, cfg.head_dim, t, cfg.rope_theta);
-            rope(kt, cfg.heads, cfg.head_dim, t, cfg.rope_theta);
+            rope(qt, cfg.heads, cfg.head_dim, pos0 + t, cfg.rope_theta);
+            rope(kt, cfg.heads, cfg.head_dim, pos0 + t, cfg.rope_theta);
         }
-        for (0..n) |t| {
-            for (0..cfg.heads) |hd| {
-                const qh = q[t * d + hd * cfg.head_dim ..][0..cfg.head_dim];
+        for (0..n) |t|
+        {
+            const last = pos0 + t;
+            for (0..cfg.heads) |hd|
+            {
+                const off = hd * cfg.head_dim;
+                const qh = q[t * d + off ..][0..cfg.head_dim];
                 var mx: f32 = -std.math.inf(f32);
-                for (0..t + 1) |s| {
-                    scores[s] = dot(qh, kk[s * d + hd * cfg.head_dim ..][0..cfg.head_dim]) * scale;
+                for (0..last + 1) |s|
+                {
+                    scores[s] = dot(qh, kc[s * d + off ..][0..cfg.head_dim]) * scale;
                     mx = @max(mx, scores[s]);
                 }
                 var sum: f32 = 0;
-                for (scores[0 .. t + 1]) |*sc| {
+                for (scores[0 .. last + 1]) |*sc|
+                {
                     sc.* = @exp(sc.* - mx);
                     sum += sc.*;
                 }
-                const out = att[t * d + hd * cfg.head_dim ..][0..cfg.head_dim];
+                const out = att[t * d + off ..][0..cfg.head_dim];
                 @memset(out, 0);
-                for (0..t + 1) |s| {
+                for (0..last + 1) |s|
+                {
                     const p = scores[s] / sum;
-                    for (out, v[s * d + hd * cfg.head_dim ..][0..cfg.head_dim]) |*o, vv| o.* += p * vv;
+                    for (out, vc[s * d + off ..][0..cfg.head_dim]) |*o, vv|
+                    {
+                        o.* += p * vv;
+                    }
                 }
             }
         }
         l.o.matmul(att, n, tmp, scratch);
-        for (h, tmp) |*hh, o| hh.* += o;
+        for (h, tmp) |*hh, o|
+        {
+            hh.* += o;
+        }
 
-        // Sparse MoE.
-        for (0..n) |t| rmsnorm(h[t * d ..][0..d], l.ffn_norm, cfg.eps, x[t * d ..][0..d]);
+        for (0..n) |t|
+        {
+            rmsnorm(h[t * d ..][0..d], l.ffn_norm, cfg.eps, x[t * d ..][0..d]);
+        }
         l.router.matmul(x, n, probs, scratch);
-        for (0..n) |t| {
+        for (0..n) |t|
+        {
             const p = probs[t * cfg.experts ..][0..cfg.experts];
             var mx: f32 = -std.math.inf(f32);
-            for (p) |pv| mx = @max(mx, pv);
+            for (p) |pv|
+            {
+                mx = @max(mx, pv);
+            }
             var sum: f32 = 0;
-            for (p) |*pv| {
+            for (p) |*pv|
+            {
                 pv.* = @exp(pv.* - mx);
                 sum += pv.*;
             }
-            for (p) |*pv| pv.* /= sum;
+            for (p) |*pv|
+            {
+                pv.* /= sum;
+            }
             topK(p, k, idx[t * k ..][0..k], wts[t * k ..][0..k]);
         }
         @memset(tmp, 0);
         try moe.run(moe.ctx, li, x, n, idx, wts, tmp);
-        for (h, tmp) |*hh, o| hh.* += o;
+        for (h, tmp) |*hh, o|
+        {
+            hh.* += o;
+        }
 
-        if (trace) |tr| {
+        if (trace) |tr|
+        {
             @memcpy(tr.hidden[li * n * d ..][0 .. n * d], h);
             @memcpy(tr.topk[li * n * k ..][0 .. n * k], idx);
         }
     }
-    for (0..n) |t| rmsnorm(h[t * d ..][0..d], w.out_norm, cfg.eps, x[t * d ..][0..d]);
-    w.head.matmul(x, n, logits, scratch);
+    cache.len = pos0 + n;
+    if (all_logits)
+    {
+        for (0..n) |t|
+        {
+            rmsnorm(h[t * d ..][0..d], w.out_norm, cfg.eps, x[t * d ..][0..d]);
+        }
+        w.head.matmul(x, n, logits, scratch);
+    }
+    else
+    {
+        rmsnorm(h[(n - 1) * d ..][0..d], w.out_norm, cfg.eps, x[0..d]);
+        w.head.matmul(x, 1, logits, scratch);
+    }
 }
 
-/// Experts held in this process, by (layer, expert); null if not owned.
+/// Index of the largest value; ties go to the lowest index, as torch.argmax.
+pub fn argmax(x: []align(1) const f32) usize
+{
+    var best: usize = 0;
+    for (x, 0..) |v, i|
+    {
+        if (v > x[best])
+        {
+            best = i;
+        }
+    }
+    return best;
+}
+
+/// Picks the next token from a row of logits: the highest one when
+/// `temperature` is 0, otherwise a seeded draw, so a run can be repeated.
+pub const Sampler = struct {
+    temperature: f32 = 0,
+    /// Draw only from this many of the most likely tokens; 0 keeps them all.
+    top_k: usize = 0,
+    rng: std.Random.DefaultPrng = .init(0),
+
+    pub fn seeded(temperature: f32, top_k: usize, seed: u64) Sampler
+    {
+        return .{ .temperature = temperature, .top_k = top_k, .rng = .init(seed) };
+    }
+
+    /// `scratch` needs as many values as `logits`.
+    pub fn pick(self: *Sampler, logits: []const f32, scratch: []f32) u32
+    {
+        const best = argmax(logits);
+        if (self.temperature <= 0)
+        {
+            return @intCast(best);
+        }
+        const p = scratch[0..logits.len];
+        var floor: f32 = -std.math.inf(f32);
+        if (self.top_k > 0 and self.top_k < logits.len)
+        {
+            @memcpy(p, logits);
+            std.sort.pdq(f32, p, {}, std.sort.desc(f32));
+            floor = p[self.top_k - 1];
+        }
+        var sum: f32 = 0;
+        for (logits, p) |v, *pv|
+        {
+            pv.* = if (v >= floor) @exp((v - logits[best]) / self.temperature) else 0;
+            sum += pv.*;
+        }
+        var r = self.rng.random().float(f32) * sum;
+        for (p, 0..) |pv, i|
+        {
+            r -= pv;
+            if (pv > 0 and r < 0)
+            {
+                return @intCast(i);
+            }
+        }
+        return @intCast(best);
+    }
+};
+
+/// Feeds `prompt` from an empty cache, then picks `out.len` tokens one at a
+/// time. If set, `step_logits` gets the logits each token was picked from
+/// (out.len x vocab). The cache needs room for prompt.len + out.len - 1.
+pub fn generate(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache, prompt: []const u32, sampler: *Sampler, out: []u32, step_logits: ?[]f32) !void
+{
+    const vocab = w.cfg.vocab;
+    const row = try gpa.alloc(f32, 2 * vocab);
+    defer gpa.free(row);
+    cache.len = 0;
+    try step(gpa, w, moe, cache, prompt, row[0..vocab], null);
+    for (out, 0..) |*tok, i|
+    {
+        if (step_logits) |sl|
+        {
+            @memcpy(sl[i * vocab ..][0..vocab], row[0..vocab]);
+        }
+        tok.* = sampler.pick(row[0..vocab], row[vocab..]);
+        if (i + 1 < out.len)
+        {
+            try step(gpa, w, moe, cache, out[i..][0..1], row[0..vocab], null);
+        }
+    }
+}
+
+// Experts held in this process, by (layer, expert); null if not owned.
 pub const LocalExperts = struct {
     cfg: Config,
     experts: []?Expert,
@@ -483,6 +674,81 @@ test "tiny OLMoE matches transformers (tools/ref/ref_olmoe.py --tiny)" {
             for (trace.topk[l * ids.len * cfg.top_k ..][0 .. ids.len * cfg.top_k], gi) |got, exp| try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
         }
     }
+}
+
+test "cached generation matches a full recompute and transformers' generate() on the tiny OLMoE" {
+    const tfref = @import("tfref.zig");
+    const gpa = std.testing.allocator;
+    const file = @embedFile("olmoe_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [8]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+
+    const golden = try tfref.File.parse(@embedFile("olmoe_tiny.tfref"));
+    const prompts: usize = @intCast((try golden.get("config")).i32s()[0]);
+    for (0..prompts) |p|
+    {
+        var buf: [64]u8 = undefined;
+        const ids = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
+        const want = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_tokens", .{p}))).i32s();
+        const want_logits = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_logits", .{p}))).f32s();
+        const g = want.len;
+        const all = try gpa.alloc(u32, ids.len + g);
+        defer gpa.free(all);
+        for (all[0..ids.len], ids) |*t, id|
+        {
+            t.* = @intCast(id);
+        }
+        var cache = try KvCache.init(gpa, cfg, ids.len + g);
+        defer cache.deinit(gpa);
+        var sampler: Sampler = .{};
+        const step_logits = try gpa.alloc(f32, g * cfg.vocab);
+        defer gpa.free(step_logits);
+        try generate(gpa, &w, local.moe(), &cache, all[0..ids.len], &sampler, all[ids.len..], step_logits);
+
+        for (all[ids.len..], want) |got, exp|
+        {
+            try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+        }
+        for (step_logits, want_logits) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-4);
+        }
+        // The same logits with no cache: one pass over the prompt and every generated token but the last.
+        const full = try gpa.alloc(f32, (ids.len + g - 1) * cfg.vocab);
+        defer gpa.free(full);
+        try forward(gpa, &w, local.moe(), all[0 .. ids.len + g - 1], full, null);
+        for (step_logits, full[(ids.len - 1) * cfg.vocab ..]) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-5);
+        }
+    }
+}
+
+test "seeded sampling repeats with the same seed and stays inside top_k" {
+    const logits = [_]f32{ 0.1, 2.0, 1.9, -1.0, 1.8, 0.0 };
+    var scratch: [logits.len]f32 = undefined;
+    var a = Sampler.seeded(1.0, 3, 42);
+    var b = Sampler.seeded(1.0, 3, 42);
+    for (0..200) |_|
+    {
+        const x = a.pick(&logits, &scratch);
+        try std.testing.expectEqual(x, b.pick(&logits, &scratch));
+        try std.testing.expect(x == 1 or x == 2 or x == 4);
+    }
+    var greedy: Sampler = .{};
+    try std.testing.expectEqual(@as(u32, 1), greedy.pick(&logits, &scratch));
 }
 
 test "rope matches rotate_half on one pair" {

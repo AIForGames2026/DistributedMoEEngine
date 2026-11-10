@@ -8,7 +8,10 @@
 //!   olmoe rdma-expert / rdma-router                    the same over RDMA
 //!
 //! options: --payload fp8|bf16|f32 (default fp8), --placement FILE, --slots S,
-//!          --dev D, --gid G (RDMA), --gpu (Q8_0 matmuls on CUDA; -Dgpu=true)
+//!          --dev D, --gid G (RDMA), --gpu (Q8_0 matmuls on CUDA; -Dgpu=true),
+//!          --generate N (TASK-24: N new tokens per prompt, one at a time),
+//!          --temperature T, --top-k K, --seed S (seeded sampling; default greedy),
+//!          --minutes M (repeat generation for M minutes, checking memory)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -23,7 +26,9 @@
 //! MODEL is the GGUF file with its `.tfsum` index (`tfload index`); G.tfref
 //! comes from tools/ref/ref_olmoe.py. Rank 0 runs each golden prompt and
 //! compares every position's logits and top-1 token, each layer's hidden
-//! state, and the chosen experts with the reference.
+//! state, and the chosen experts with the reference. With --generate, it then
+//! generates after each prompt using a KV cache and, when greedy, compares the
+//! tokens and the logits each was picked from with transformers' generate().
 const std = @import("std");
 const c = std.c;
 const build_options = @import("build_options");
@@ -58,6 +63,11 @@ const Options = struct {
     device: ?[:0]const u8 = null,
     gid: i32 = -1,
     gpu: bool = false,
+    generate: usize = 0,
+    temperature: f32 = 0,
+    top_k: usize = 0,
+    seed: u64 = 0,
+    minutes: f64 = 0,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -68,6 +78,7 @@ pub fn main(init: std.process.Init) !void {
             \\       olmoe expert|rdma-expert MODEL --port P [options]
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
             \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu
+            \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
             \\
         , .{});
         std.process.exit(2);
@@ -80,7 +91,7 @@ pub fn main(init: std.process.Init) !void {
         var l = try Loaded.init(gpa, opts.model, &all, true);
         defer l.deinit(gpa);
         if (opts.gpu) try gpu.map(l.weightRegion());
-        return runGolden(gpa, &l.weights.?, l.local.moe(), opts.golden orelse return error.MissingGolden, "local");
+        return runGolden(gpa, &l.weights.?, l.local.moe(), opts, "local");
     }
     const is_rdma = std.mem.startsWith(u8, mode, "rdma");
     if (is_rdma and !build_options.rdma) {
@@ -129,6 +140,16 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.device = value;
         } else if (std.mem.eql(u8, arg, "--gid")) {
             opts.gid = try std.fmt.parseInt(i32, value, 10);
+        } else if (std.mem.eql(u8, arg, "--generate")) {
+            opts.generate = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--temperature")) {
+            opts.temperature = try std.fmt.parseFloat(f32, value);
+        } else if (std.mem.eql(u8, arg, "--top-k")) {
+            opts.top_k = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--seed")) {
+            opts.seed = try std.fmt.parseInt(u64, value, 10);
+        } else if (std.mem.eql(u8, arg, "--minutes")) {
+            opts.minutes = try std.fmt.parseFloat(f64, value);
         } else return error.Usage;
     }
     return opts;
@@ -346,6 +367,7 @@ fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []co
     defer std.heap.page_allocator.destroy(out);
     out.* = std.mem.zeroes(wire.Packet);
     var served: u64 = 0;
+    std.debug.print("expert: serving, resident memory {d:.0} MB\n", .{mb(rssBytes())});
     // A call's chunks arrive back to back (one sender, in-order transport).
     var have: usize = 0;
     var first: wire.Header = undefined;
@@ -376,7 +398,7 @@ fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []co
         served += 1;
     }
     try ep.finish();
-    std.debug.print("expert: ran {d} expert FFNs for rank 0\n", .{served});
+    std.debug.print("expert: ran {d} expert FFNs for rank 0; resident memory {d:.0} MB\n", .{ served, mb(rssBytes()) });
 }
 
 /// Loads this rank's weights and runs its side over `ep`.
@@ -405,7 +427,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .pkt = pkt,
     };
     defer gpa.free(split.contrib);
-    const result = runGolden(gpa, &l.weights.?, split.moe(), opts.golden orelse return error.MissingGolden, name);
+    const result = runGolden(gpa, &l.weights.?, split.moe(), opts, name);
     try ep.finish();
     std.debug.print("{s}: {d} expert calls sent to rank 1, {d} run locally; payload {t}\n", .{ name, split.remote, split.local_calls, opts.payload });
     return result;
@@ -495,18 +517,10 @@ fn maxErr(a: []const f32, b: []align(1) const f32) f32 {
     return m;
 }
 
-fn argmax(x: []align(1) const f32) usize {
-    var best: usize = 0;
-    for (x, 0..) |v, i| if (v > x[best]) {
-        best = i;
-    };
-    return best;
-}
-
 /// Runs every golden prompt and compares with the reference. Fails if any
 /// position's top-1 token differs or the logits differ by more than 1e-2.
-pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, golden_path: []const u8, name: []const u8) !void {
-    const gbytes = try mf.readWhole(gpa, golden_path);
+pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts: Options, name: []const u8) !void {
+    const gbytes = try mf.readWhole(gpa, opts.golden orelse return error.MissingGolden);
     defer gpa.free(gbytes);
     const golden = try tfref.File.parse(gbytes);
     const gcfg = (try golden.get("config")).i32s();
@@ -557,7 +571,7 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         const gl = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits", .{p}))).f32s();
         const lerr = maxErr(logits, gl);
         var top1: usize = 0;
-        for (0..n) |t| top1 += @intFromBool(argmax(logits[t * cfg.vocab ..][0..cfg.vocab]) == argmax(gl[t * cfg.vocab ..][0..cfg.vocab]));
+        for (0..n) |t| top1 += @intFromBool(olmoe.argmax(logits[t * cfg.vocab ..][0..cfg.vocab]) == olmoe.argmax(gl[t * cfg.vocab ..][0..cfg.vocab]));
         worst_logit = @max(worst_logit, lerr);
         const pass = top1 == n and lerr <= 1e-2;
         ok = ok and pass;
@@ -570,4 +584,188 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         return error.ForwardMismatch;
     }
     std.debug.print("{s}: PASS: OLMoE-1B-7B logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, worst_logit });
+    if (opts.generate > 0)
+    {
+        try runGenerate(gpa, w, moe, golden, opts, name);
+    }
+    if (opts.minutes > 0)
+    {
+        try runSoak(gpa, w, moe, golden, opts, name);
+    }
+}
+
+fn goldenTokens(gpa: std.mem.Allocator, golden: tfref.File, p: usize) ![]u32
+{
+    var buf: [64]u8 = undefined;
+    const ids = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
+    const tokens = try gpa.alloc(u32, ids.len);
+    for (tokens, ids) |*t, id|
+    {
+        t.* = @intCast(id);
+    }
+    return tokens;
+}
+
+fn mb(bytes: u64) f64
+{
+    return @as(f64, @floatFromInt(bytes)) / 1e6;
+}
+
+/// Resident memory of this process in bytes, or 0 if /proc is unreadable.
+fn rssBytes() u64
+{
+    const fd = c.open("/proc/self/statm", .{ .ACCMODE = .RDONLY });
+    if (fd < 0)
+    {
+        return 0;
+    }
+    defer _ = c.close(fd);
+    var buf: [128]u8 = undefined;
+    const n = c.read(fd, &buf, buf.len);
+    if (n <= 0)
+    {
+        return 0;
+    }
+    var it = std.mem.tokenizeScalar(u8, buf[0..@intCast(n)], ' ');
+    _ = it.next();
+    const pages = std.fmt.parseInt(u64, it.next() orelse return 0, 10) catch return 0;
+    return pages * std.heap.pageSize();
+}
+
+/// Generates `opts.generate` tokens after each golden prompt. When greedy and
+/// the golden file has transformers' generate() output, every token must
+/// match and the logits each was picked from must be within 1e-2.
+fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, golden: tfref.File, opts: Options, name: []const u8) !void
+{
+    const cfg = w.cfg;
+    const greedy = opts.temperature <= 0;
+    var sampler = olmoe.Sampler.seeded(opts.temperature, opts.top_k, opts.seed);
+    const out = try gpa.alloc(u32, opts.generate);
+    defer gpa.free(out);
+    const step_logits = try gpa.alloc(f32, opts.generate * cfg.vocab);
+    defer gpa.free(step_logits);
+    var ok = true;
+    var compared = false;
+    for (0..@intCast((try golden.get("config")).i32s()[0])) |p|
+    {
+        const prompt = try goldenTokens(gpa, golden, p);
+        defer gpa.free(prompt);
+        var cache = try olmoe.KvCache.init(gpa, cfg, prompt.len + opts.generate);
+        defer cache.deinit(gpa);
+        const t0 = mf.nowNs();
+        try olmoe.generate(gpa, w, moe, &cache, prompt, &sampler, out, step_logits);
+        const s = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9;
+        std.debug.print("{s}: generate prompt {d}: {d} tokens in {d:.2} s ({d:.1} tokens/s, prompt included)\n", .{ name, p, out.len, s, @as(f64, @floatFromInt(out.len)) / s });
+        std.debug.print("{s}:   tokens:", .{name});
+        for (out) |t|
+        {
+            std.debug.print(" {d}", .{t});
+        }
+        std.debug.print("\n", .{});
+
+        var buf: [64]u8 = undefined;
+        const want = golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_tokens", .{p})) catch continue;
+        const want_logits = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_logits", .{p}))).f32s();
+        if (!greedy)
+        {
+            continue;
+        }
+        compared = true;
+        const g = @min(out.len, want.len());
+        var same: usize = 0;
+        while (same < g and out[same] == @as(u32, @intCast(want.i32s()[same])))
+        {
+            same += 1;
+        }
+        // Logits stay comparable up to and including the first differing token.
+        const steps = @min(g, same + 1);
+        const lerr = maxErr(step_logits[0 .. steps * cfg.vocab], want_logits[0 .. steps * cfg.vocab]);
+        const pass = same == g and lerr <= 1e-2;
+        ok = ok and pass;
+        std.debug.print("{s}:   same as transformers' generate(): {d}/{d} tokens, logits max err {e:.2} {s}\n", .{ name, same, g, lerr, if (pass) "ok" else "FAIL" });
+    }
+    if (!compared)
+    {
+        std.debug.print("{s}: generated without a check (sampling, or no generate() output in the golden file)\n", .{name});
+        return;
+    }
+    if (!ok)
+    {
+        std.debug.print("{s}: FAIL: generated tokens or their logits differ from transformers' generate()\n", .{name});
+        return error.GenerateMismatch;
+    }
+    std.debug.print("{s}: PASS: every generated token matches transformers' generate(), logits within 1e-2\n", .{name});
+}
+
+/// Repeats generation over the golden prompts for `opts.minutes`. Fails if a
+/// round's tokens differ from the first round's or resident memory grows by
+/// 1% or more after the first round.
+fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, golden: tfref.File, opts: Options, name: []const u8) !void
+{
+    const cfg = w.cfg;
+    const n_new = if (opts.generate > 0) opts.generate else 64;
+    const prompts: usize = @intCast((try golden.get("config")).i32s()[0]);
+    var longest: usize = 0;
+    for (0..prompts) |p|
+    {
+        const t = try goldenTokens(gpa, golden, p);
+        defer gpa.free(t);
+        longest = @max(longest, t.len);
+    }
+    var cache = try olmoe.KvCache.init(gpa, cfg, longest + n_new);
+    defer cache.deinit(gpa);
+    const first = try gpa.alloc(u32, prompts * n_new);
+    defer gpa.free(first);
+    const out = try gpa.alloc(u32, n_new);
+    defer gpa.free(out);
+    const t0 = mf.nowNs();
+    const end = t0 + @as(u64, @intFromFloat(opts.minutes * 60e9));
+    var rounds: usize = 0;
+    var tokens: u64 = 0;
+    var rss_base: u64 = 0;
+    var rss_max: u64 = 0;
+    var same = true;
+    while (rounds == 0 or mf.nowNs() < end)
+    {
+        const r0 = mf.nowNs();
+        // The same seed every round, so a healthy run repeats its tokens exactly.
+        var sampler = olmoe.Sampler.seeded(opts.temperature, opts.top_k, opts.seed);
+        for (0..prompts) |p|
+        {
+            const prompt = try goldenTokens(gpa, golden, p);
+            defer gpa.free(prompt);
+            try olmoe.generate(gpa, w, moe, &cache, prompt, &sampler, out, null);
+            const ref = first[p * n_new ..][0..n_new];
+            if (rounds == 0)
+            {
+                @memcpy(ref, out);
+            }
+            else if (!std.mem.eql(u32, ref, out))
+            {
+                same = false;
+            }
+            tokens += n_new;
+        }
+        rounds += 1;
+        const rss = rssBytes();
+        if (rounds == 1)
+        {
+            rss_base = rss;
+        }
+        rss_max = @max(rss_max, rss);
+        const rs = @as(f64, @floatFromInt(mf.nowNs() - r0)) / 1e9;
+        std.debug.print("{s}: soak round {d}: {d:.1} tokens/s, resident memory {d:.0} MB{s}\n", .{
+            name, rounds, @as(f64, @floatFromInt(prompts * n_new)) / rs, mb(rss), if (same) "" else ", tokens differ from round 1",
+        });
+    }
+    const secs = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9;
+    const drift = if (rss_base > 0) (mb(rss_max) - mb(rss_base)) / mb(rss_base) * 100 else 0;
+    const pass = same and drift < 1;
+    std.debug.print("{s}: soak: {d} tokens in {d:.1} min ({d:.1} tokens/s), {d} rounds, every round identical: {s}, resident memory {d:.0} MB after round 1, max {d:.0} MB (+{d:.2}%) {s}\n", .{
+        name, tokens, secs / 60, @as(f64, @floatFromInt(tokens)) / secs, rounds, if (same) "yes" else "no", mb(rss_base), mb(rss_max), drift, if (pass) "PASS" else "FAIL",
+    });
+    if (!pass)
+    {
+        return error.SoakFailed;
+    }
 }

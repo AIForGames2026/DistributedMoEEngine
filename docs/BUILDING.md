@@ -82,6 +82,8 @@ zig build olmoe -Doptimize=ReleaseFast -Drdma=true -Dgpu=true && zig-out/bin/olm
 
 `--payload f32` is exact (two packets per expert call); `bf16` and `fp8` (the default) are smaller but round the hidden state. Results: [`bench/olmoe/2026-11-05.md`](../bench/olmoe/2026-11-05.md). A tiny random OLMoE (`ref_olmoe.py --tiny`, in `tests/golden/`) runs the same forward pass in `zig build test`.
 
+Token generation (TASK-24): add `--generate 64` to the reference command to also record 64 tokens of transformers' greedy `generate()` after each prompt (written to `--out` with the rest), then add `--generate 64` to any `olmoe` command. After the prompt check, it generates one token at a time with a KV cache and compares every token, and the logits it was picked from, with the reference. `--temperature T`, `--top-k K`, and `--seed S` sample instead (repeatable for a given seed, so not compared). `--minutes 10` then repeats the generation for 10 minutes and fails if any round's tokens change or resident memory grows by 1% or more after the first round.
+
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 
 ```bash

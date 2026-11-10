@@ -13,7 +13,7 @@ norm, rotary embeddings, routing, combining) is transformers' code.
 
 Usage:
   python3 tools/ref/ref_olmoe.py --gguf MODEL.gguf --config config.json \\
-      --tokenizer tokenizer.json --out olmoe_golden.tfref [--generate 24]
+      --tokenizer tokenizer.json --out olmoe_golden.tfref [--generate 64]
   python3 tools/ref/ref_olmoe.py --tiny [--check]
       writes tests/golden/olmoe_tiny.{gguf,tfref}: a tiny OLMoE with random
       weights (seeded) in Q8_0, and transformers' outputs for it, for the
@@ -116,8 +116,9 @@ def build(gguf_path, config_path):
     return model.eval(), cfg
 
 
-def record(model, cfg, prompts):
-    """Golden values for each token-id list in `prompts`."""
+def record(model, cfg, prompts, gen):
+    """Golden values for each token-id list in `prompts`, plus `gen` tokens of
+    greedy generate() and the logits each was picked from (TASK-24)."""
     out = {"config": torch.tensor([len(prompts), cfg.num_hidden_layers, cfg.num_experts, cfg.num_experts_per_tok,
                                    cfg.hidden_size, cfg.vocab_size], dtype=torch.int32)}
     k = cfg.num_experts_per_tok
@@ -137,6 +138,12 @@ def record(model, cfg, prompts):
                 min_gap = min(min_gap, float((w[:, k - 1] - w[:, k]).min()))
                 out[f"prompt{p}.layer{l}.topk_idx"] = idx[:, :k].to(torch.int32).contiguous()
                 out[f"prompt{p}.layer{l}.topk_w"] = w[:, :k].contiguous()
+            if gen:
+                # No end-of-text stop, so every prompt yields exactly `gen` tokens.
+                g = model.generate(torch.tensor([ids]), max_new_tokens=gen, min_new_tokens=gen, do_sample=False,
+                                   eos_token_id=None, pad_token_id=0, output_logits=True, return_dict_in_generate=True)
+                out[f"prompt{p}.gen_tokens"] = g.sequences[0, len(ids):].to(torch.int32).contiguous()
+                out[f"prompt{p}.gen_logits"] = torch.cat([x.float() for x in g.logits]).contiguous()
     return out, min_gap
 
 
@@ -145,6 +152,7 @@ TINY = dict(vocab_size=256, hidden_size=64, intermediate_size=64, num_hidden_lay
             norm_topk_prob=False, tie_word_embeddings=False, max_position_embeddings=64)
 TINY_SEED = 20261106
 TINY_PROMPTS = [[3, 17, 200, 45, 9], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], [250, 128, 64, 32, 16, 8, 4]]
+TINY_GENERATE = 16
 GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tests", "golden")
 
 
@@ -221,7 +229,7 @@ def write_tiny(out_dir):
     w.write_kv_data_to_file()
     w.write_tensors_to_file()
     w.close()
-    out, gap = record(model, cfg, TINY_PROMPTS)
+    out, gap = record(model, cfg, TINY_PROMPTS, TINY_GENERATE)
     with open(os.path.join(out_dir, "olmoe_tiny.tfref"), "wb") as fh:
         fh.write(serialize(out))
     return gap
@@ -255,20 +263,18 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--tokenizer", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--generate", type=int, default=0, help="also print a greedy continuation (sanity check)")
+    ap.add_argument("--generate", type=int, default=0, help="also record this many tokens of greedy generate()")
     args = ap.parse_args()
     torch.manual_seed(0)
     model, cfg = build(args.gguf, args.config)
     tok = Tokenizer.from_file(args.tokenizer)
     prompts = [tok.encode(text).ids for text in PROMPTS]
-    out, _ = record(model, cfg, prompts)
-    with torch.no_grad():
-        for p, ids in enumerate(prompts):
-            top1 = out[f"prompt{p}.logits"].argmax(-1).tolist()
-            print(f"prompt {p}: {len(ids)} tokens; next token after the prompt: {tok.decode([top1[-1]])!r}")
-            if args.generate:
-                g = model.generate(torch.tensor([ids]), max_new_tokens=args.generate, do_sample=False)
-                print(f"  greedy: {tok.decode(g[0].tolist())!r}")
+    out, _ = record(model, cfg, prompts, args.generate)
+    for p, ids in enumerate(prompts):
+        top1 = out[f"prompt{p}.logits"].argmax(-1).tolist()
+        print(f"prompt {p}: {len(ids)} tokens; next token after the prompt: {tok.decode([top1[-1]])!r}")
+        if args.generate:
+            print(f"  greedy: {tok.decode(ids + out[f'prompt{p}.gen_tokens'].tolist())!r}")
     with open(args.out, "wb") as f:
         f.write(serialize(out))
     print(f"wrote {args.out} ({os.path.getsize(args.out)} bytes, {len(out)} tensors)")

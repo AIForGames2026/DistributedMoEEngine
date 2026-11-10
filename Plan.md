@@ -234,11 +234,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-24] Token Generation Loop & In-Memory KV Cache
 - **Milestone**: Beta (Nov 22)
-- **Status**: In Progress
+- **Status**: Review
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Added Nov 5. TASK-10 processes a whole prompt in one forward pass, and TASK-15's soak has to generate tokens for an hour, but no task owned the step between them. Add a per-layer KV cache in memory, one-token-at-a-time forward passes, greedy and seeded sampling, and an `olmoe generate` mode over every transport. TASK-12 (NVMe offload) stays separate and optional.
 - **Acceptance Criteria**: Done when greedy generation over RDMA on `gx10-03` produces the same tokens as transformers' `generate()` for the three TASK-10 prompts (at least 64 new tokens each, F32 payload), per-token logits stay within TASK-10's tolerance, and memory stays flat across a 10-minute run. Results recorded in `bench/`.
-- **Progress (Nov 10)**: KV cache, one-token decode, greedy and seeded sampling, and `olmoe --generate N` / `--minutes M` on every transport. On the desktop 5070 Ti, all 3 x 64 greedy tokens match transformers' `generate()` in one process and two (logits within 4.53e-5), and a 2-minute two-process run held memory flat (+0.00%) with identical tokens every round. The RDMA run on `gx10-03` is next. See `bench/olmoe/2026-11-10-generate.md`.
+- **Results (Nov 10)**: acceptance met. KV cache, one-token decode, greedy and seeded sampling, and `olmoe --generate N` / `--minutes M` on every transport. Over RDMA on `gx10-03` (two processes, F32 payload), all 3 x 64 greedy tokens match transformers' `generate()` with logits within 4.53e-5, and a 10.1-minute run generated 12,288 tokens at 20.4 tokens/s with identical tokens in all 64 rounds and flat memory (rank 0 +0.00%, rank 1 3,539 to 3,540 MB). The desktop 5070 Ti gives the same tokens and errors in one process and two. See `bench/olmoe/2026-11-10-generate.md`.
 
 #### [TASK-26] Ampere GPU Expert Nodes (RTX 30-Series)
 - **Milestone**: Beta (Nov 22)
@@ -357,8 +357,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22, TASK-25 |
 | **To Do** | (none) |
-| **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left), TASK-24 (started Nov 10) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`) |
+| **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |

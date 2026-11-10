@@ -39,7 +39,7 @@ Machine time is informal and flexible: there is no booking schedule. Because `gx
 | Milestone | Target Date | Core Focus | Git Tag |
 |---|---|---|---|
 | **PoC** | Nov 1, 2026 | Zig engine loop, mock token dispatch, io_uring prototype, platform probe, wire format, & WebGL mockup | `v0.1.0-poc` (released Oct 27) |
-| **Alpha** | Nov 8, 2026 | RDMA transport (single-node loopback first), quantized expert loader, & first two-process forward pass | `v0.2.0-alpha` |
+| **Alpha** | Nov 8, 2026 | RDMA transport (single-node loopback first), quantized expert loader, & first two-process forward pass | `v0.2.0-alpha` (released Nov 10) |
 | **Beta** | Nov 22, 2026 | Predictive lookahead router, miss handling, swarm tracker, & (stretch) KV tiering and compressed streaming | `v0.3.0-beta` |
 | **Release Candidate** | Nov 29, 2026 | 1-hour soak on `gx10-03`, cross-machine run with the desktop, recorded-trace visualizer, & capacity guardrails | `v0.9.0-rc1` |
 | **Final** | Dec 6, 2026 | Public release, docs freeze, and benchmark report | `v1.0.0` |
@@ -330,7 +330,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 | Cut | Tag | Name | Tasks dropped | Trigger |
 |---|---|---|---|---|
-| **First cut** | `cut-1` | **Stretch** | 12, 13, 15b, 16b, 22 | Alpha (`v0.2.0-alpha`) not tagged by Tue Nov 10. TASK-15b alone drops if neither `gx10-01` nor `gx10-02` is free by Sun Nov 22. |
+| **First cut** | `cut-1` | **Stretch** | 12, 13, 15b, 16b, 22 | Alpha (`v0.2.0-alpha`) not tagged by Tue Nov 10 (not triggered: tagged Nov 10). TASK-15b alone drops if neither `gx10-01` nor `gx10-02` is free by Sun Nov 22. |
 | **Second cut** | `cut-2` | **Speculation & Swarm** | 09, 11, 14, 17 (engine runs with resident experts and a static manifest) | TASK-11 not in `Review` by Wed Nov 18 |
 | **Emergency** | (none) | **TCP Floor** | Replace TASK-07 RDMA with the TASK-02 shared-memory and TCP backends for all later tasks; report those numbers as such | RDMA loopback on `gx10-03` not passing by Wed Nov 4 |
 
@@ -348,7 +348,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22, TASK-24, TASK-25 |
 | **To Do** | (none) |
-| **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; first-time tester and tag left) |
+| **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
 | **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 

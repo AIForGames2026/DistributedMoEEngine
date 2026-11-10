@@ -18,8 +18,8 @@ Run AI models too big for one machine across a small cluster of NVIDIA DGX Spark
 ```bash
 git clone https://github.com/AIForGames2026/DistributedMoEEngine.git
 cd DistributedMoEEngine
-sudo apt install liburing-dev                 # io_uring, for reading model files
-bash tools/setup/install-zig.sh               # Zig 0.17.0 in ~/tools/zig, no sudo
+sudo apt install liburing-dev # io_uring, for reading model files
+bash tools/setup/install-zig.sh # Zig 0.17.0 in ~/tools/zig, no sudo
 export PATH="$HOME/tools/zig:$PATH"
 zig build install -Doptimize=ReleaseFast
 ```
@@ -37,14 +37,14 @@ Prefer not to build? [Releases](https://github.com/AIForGames2026/DistributedMoE
 Split a tiny model across two processes and check the output against PyTorch. It ends with `PASS`.
 
 ```bash
-zig-out/bin/dispatch shm --moe                # Windows: .\zig-out\bin\dispatch.exe shm --moe
+zig-out/bin/dispatch shm --moe # Windows: .\zig-out\bin\dispatch.exe shm --moe
 ```
 
 Or across two machines, starting the first one first:
 
 ```bash
-zig-out/bin/dispatch expert --port 7470 --moe                      # first machine
-zig-out/bin/dispatch router --host <first machine's IP> --port 7470 --moe   # second machine
+zig-out/bin/dispatch expert --port 7470 --moe # first machine
+zig-out/bin/dispatch router --host <first machine's IP> --port 7470 --moe # second machine
 ```
 
 Run the browser inspector locally (needs [Node.js 22](https://nodejs.org)):

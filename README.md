@@ -70,6 +70,8 @@ To run the real 7 GB model, over RDMA or on a GPU, see [Building and running eve
 
 Played through on the live site from a second machine, a laptop separate from the build desktop (Nov 5).
 
+Changed after the Nov 8 deadline: on Nov 10, a "Desktop + laptop (RTX 3060), Tailscale" cluster option and its real result were added to the inspector. The guided mission is unchanged.
+
 **In this build**
 - Guided mission on first load: intro, three experiments with check questions, final challenge, report card, Play again, and Exit.
 - The full inspector, with three clusters (including the direct TCP link measured this week), the stress trace, and loading your own trace file. It opens directly with `?explore=1`.

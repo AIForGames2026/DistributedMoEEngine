@@ -19,6 +19,7 @@ const COLORS = {
   rdma: new THREE.Color(0x38bdf8),
   tcp: new THREE.Color(0xfb923c),
   'tcp-direct': new THREE.Color(0xfacc15),
+  'tcp-tailscale': new THREE.Color(0xf472b6),
   shm: new THREE.Color(0xc4b5fd),
 };
 const STATUS_COLOR = STATUS.map((s) => COLORS[s]);
@@ -437,7 +438,7 @@ function start() {
       tps: s.tokens / (s.durationNs * 1e-9),
       misses: s.misses,
       lookahead: state.lookahead,
-      label: { sparks: 'Three Sparks', today: 'Two machines, relay', direct: 'Two machines, direct' }[state.preset],
+      label: { sparks: 'Three Sparks', today: 'Two machines, relay', direct: 'Two machines, direct', laptop: 'Desktop and laptop' }[state.preset],
     });
   }
 
@@ -598,6 +599,7 @@ function bindControls({ reload, loadFile, regenerate, restart, play: onPlay, ope
     `RDMA latency: ${LINKS.rdma.us} µs (${LINKS.rdma.source})`,
     `TCP latency: ${LINKS.tcp.us.toLocaleString()} µs (${LINKS.tcp.source})`,
     `Direct TCP latency: ${LINKS['tcp-direct'].us} µs (${LINKS['tcp-direct'].source})`,
+    `Laptop link latency: ${LINKS['tcp-tailscale'].us.toLocaleString()} µs (${LINKS['tcp-tailscale'].source})`,
     `Memory bandwidth: ${HW.memGBps.value} GB/s (${HW.memGBps.source})`,
     `NVMe bandwidth: ${HW.nvmeGBps.value} GB/s (${HW.nvmeGBps.source})`,
   ].map((s) => `<li>${s}</li>`).join('');

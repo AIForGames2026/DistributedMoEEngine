@@ -29,6 +29,7 @@ function check() {
     'live sparks': generateTrace({ preset: 'sparks' }),
     'live today': generateTrace({ preset: 'today' }),
     'live direct': generateTrace({ preset: 'direct' }),
+    'live laptop': generateTrace({ preset: 'laptop' }),
     'no lookahead': generateTrace({ lookahead: false }),
     stress: generateTrace(STRESS),
   };

@@ -65,7 +65,7 @@ const STEPS = [
     body: `<p>Get these two machines to <b>${MISSION.targetTps} tok/s</b> or more. Use the left panel and run as many times as you like, but it has to stay two machines.</p>`,
     spot: ['preset', 'lookahead'],
     challenge: true,
-    need: (c) => (c.preset === 'sparks' ? 'This challenge is for two machines. Pick a two-machine Cluster.' : null),
+    need: (c) => (c.preset === 'today' || c.preset === 'direct' ? null : 'This challenge is for the Spark and the desktop. Pick one of the two "Today" Cluster options.'),
     result: (r, runs, tries) => {
       if (r.tps >= MISSION.targetTps) return `<p><b>${tps(r)}: target reached.</b></p>`;
       const hint = tries >= 2

@@ -118,6 +118,7 @@ button:hover { border-color: var(--accent); }
 .link-label.tcp { color: #fdba74; }
 
 .link-label.tcp-direct { color: #fde047; }
+.link-label.tcp-tailscale { color: #f9a8d4; }
 
 .fallback { max-width: 520px; margin: 15vh auto; padding: 24px; text-align: center; }
 

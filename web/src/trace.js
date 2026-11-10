@@ -87,7 +87,7 @@ export function generateTrace({
     source: 'synthetic',
     time_unit: 'ns',
     model: { name: MODEL.name, layers: MODEL.layers, experts: MODEL.experts, top_k: topK, d_model: MODEL.dModel, d_ff: MODEL.dFf },
-    nodes: nodes.map((id) => ({ id, label: NODES[id].label, kind: id === 'desktop' ? 'desktop' : 'gb10' })),
+    nodes: nodes.map((id) => ({ id, label: NODES[id].label, kind: id === 'desktop' || id === 'laptop' ? 'desktop' : 'gb10' })),
     links: p.links.map(([a, b, transport]) => ({ a: nodes.indexOf(a), b: nodes.indexOf(b), transport })),
     processes: nodes.map((_, i) => ({ id: i, node: i, rank: i })),
     expert_owner: [...Array(MODEL.experts).keys()].map(proc),

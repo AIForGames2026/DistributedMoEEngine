@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #27 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #27 are TASK-22 to TASK-25). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #28 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #28 are TASK-22 to TASK-26). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -239,6 +239,14 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Added Nov 5. TASK-10 processes a whole prompt in one forward pass, and TASK-15's soak has to generate tokens for an hour, but no task owned the step between them. Add a per-layer KV cache in memory, one-token-at-a-time forward passes, greedy and seeded sampling, and an `olmoe generate` mode over every transport. TASK-12 (NVMe offload) stays separate and optional.
 - **Acceptance Criteria**: Done when greedy generation over RDMA on `gx10-03` produces the same tokens as transformers' `generate()` for the three TASK-10 prompts (at least 64 new tokens each, F32 payload), per-token logits stay within TASK-10's tolerance, and memory stays flat across a 10-minute run. Results recorded in `bench/`.
 
+#### [TASK-26] Ampere GPU Expert Nodes (RTX 30-Series)
+- **Milestone**: Beta (Nov 22)
+- **Status**: Review
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 10. Most classroom desktops have RTX 3070-class GPUs (Ampere, compute capability 8.6, 8 GB). The Q8_0 matmul kernel is plain CUDA, so the build adds an `sm_86` target (`build.zig`) next to the Blackwell ones; nothing else assumes Blackwell. Ampere has no FP4 or FP8 tensor cores, so the planned NVFP4 kernels stay Blackwell-only and Ampere nodes keep the Q8_0 path. An 8 GB card holds one half of the OLMoE split (about 3.9 GB), not the whole model. Tested on the owner's laptop, whose RTX 3060 Laptop GPU is the same architecture with 6 GB.
+- **Acceptance Criteria**: Done when OLMoE-1B-7B split between an Ampere GPU and a second machine passes the TASK-10 checks (logits within 1e-2, top-1 identical, every routing choice identical) with `TF_GPU_CHECK=1` finding no GPU result off by more than 1e-3, and the run is recorded in `bench/` labeled with the GPU.
+- **Results (Nov 10)**: acceptance met. OLMoE-1B-7B split between the laptop's RTX 3060 Laptop GPU (rank 0, 3.94 GB on the GPU) and the desktop's 5070 Ti, over direct Tailscale TCP: logits within 3.53e-5, top-1 43/43, every expert choice identical, and `TF_GPU_CHECK=1` found no GPU result more than 1e-3 off the CPU. Without the check it takes 0.61 / 2.34 / 2.10 s per prompt (5 / 21 / 17 tokens), largely bound by the link (`dispatch` laptop to desktop: 1.69 ms one way, 0.18 Gb/s); the inspector gained a matching "Desktop + laptop (RTX 3060)" cluster. The 5070 Ti still passes with the `sm_86` target added. See `bench/olmoe/2026-11-10-ampere.md`.
+
 ---
 
 ### Milestone 4: Release Candidate (Target: Nov 29)
@@ -322,7 +330,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, shown in a browser replay. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 18, 19, 23, 24 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25 is post-v1. | 12, 13, 15b, 16b, 22, 25 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25 is post-v1. | 12, 13, 15b, 16b, 22, 25, 26 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, live telemetry, and CPU-only expert nodes.
 
@@ -349,12 +357,12 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | **Backlog** | TASK-09, TASK-11 to TASK-20 (including 15b, 16b), TASK-22, TASK-24, TASK-25 |
 | **To Do** | (none) |
 | **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24 | 13 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26 | 14 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b, 23, 25 | 5 |
@@ -364,7 +372,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 15 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 6 | 5 tagged `cut-1`; TASK-25 is post-v1 |
+| `could` | 7 | 5 tagged `cut-1`; TASK-25 is post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 
@@ -405,6 +413,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-23 | 04, 21 (the direct link it teaches) | Testing Session 1 |
 | TASK-24 | 10 | 15 |
 | TASK-25 | 09, 16b, v1 release | (none) |
+| TASK-26 | 10 | 09 (classroom machines as swarm nodes) |
 
 **Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-24 → TASK-15 → TASK-16 → TASK-18.
 

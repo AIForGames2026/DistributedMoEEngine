@@ -29,6 +29,11 @@ export const LINKS = {
     us: 772,
     source: 'measured: dispatch --latency p50 over plain TCP, gx10-03 to desktop (bench/transport/2026-11-05-direct-path.md)',
   },
+  'tcp-tailscale': {
+    label: 'TCP over Tailscale, direct',
+    us: 1686,
+    source: 'measured: dispatch --latency p50 (1,672 and 1,701 us), laptop to desktop over Wi-Fi (bench/olmoe/2026-11-10-ampere.md)',
+  },
 };
 
 export const HW = {
@@ -41,6 +46,7 @@ export const NODES = {
   'gx10-02': { label: 'gx10-02', sub: 'DGX Spark / GB10' },
   'gx10-03': { label: 'gx10-03', sub: 'DGX Spark / GB10' },
   desktop: { label: 'Desktop', sub: 'RTX 5070 Ti', note: 'dev workstation' },
+  laptop: { label: 'Laptop', sub: 'RTX 3060 Laptop GPU', note: 'Ampere, like classroom 3070s' },
 };
 
 export const PRESETS = {
@@ -62,6 +68,11 @@ export const PRESETS = {
     label: 'Today: gx10-03 + desktop, direct TCP',
     nodes: ['gx10-03', 'desktop'],
     links: [['gx10-03', 'desktop', 'tcp-direct']],
+  },
+  laptop: {
+    label: 'Desktop + laptop (RTX 3060), Tailscale',
+    nodes: ['desktop', 'laptop'],
+    links: [['desktop', 'laptop', 'tcp-tailscale']],
   },
 };
 

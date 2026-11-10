@@ -156,13 +156,15 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         olmoe_mod.linkSystemLibrary("ibverbs", .{});
     }
     if (gpu) {
-        // Kernels for the RTX 5070 Ti (sm_120) and GB10 (sm_121), plus PTX
-        // for anything newer; loaded at run time through the driver API.
+        // Kernels for Ampere (sm_86, such as the RTX 3060 Ti and 3070), the RTX 5070 Ti (sm_120),
+        // and GB10 (sm_121), plus PTX for anything newer; loaded at run time through the driver API.
         const nvcc = b.addSystemCommand(&.{
-            b.pathJoin(&.{ cuda, "bin", "nvcc" }), "-fatbin",                      "-O3",
-            "-gencode",                            "arch=compute_120,code=sm_120", "-gencode",
-            "arch=compute_121,code=sm_121",        "-gencode",                     "arch=compute_120,code=compute_120",
-            "-o",
+            b.pathJoin(&.{ cuda, "bin", "nvcc" }), "-fatbin",
+            "-O3",                                 "-gencode",
+            "arch=compute_86,code=sm_86",          "-gencode",
+            "arch=compute_120,code=sm_120",        "-gencode",
+            "arch=compute_121,code=sm_121",        "-gencode",
+            "arch=compute_120,code=compute_120",   "-o",
         });
         const fatbin = nvcc.addOutputFileArg("kernels.fatbin");
         nvcc.addFileArg(b.path("csrc/cuda/kernels.cu"));

@@ -1,0 +1,23 @@
+== golden checks, plain rope and YaRN 4
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.65e-4), every top-1 token identical
+local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.65e-4), every top-1 token identical
+local: PASS: every generated token matches transformers' generate(), logits within 1e-2
+== 128k, all in RAM
+== 128k, middle offloaded to NVMe
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: time to first token 1918.4 s (68 tokens/s prefill); decode 0.230 s per token (4.34 tokens/s) over 31 steps from position 131040; resident memory 58591 MB
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --save /tmp/lh_long_ram.bin"
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 32:19.46
+	Maximum resident set size (kbytes): 57335572
+	Voluntary context switches: 50178
+	Involuntary context switches: 21180
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache offloaded to NVMe: 3.07 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: time to first token 1947.3 s (67 tokens/s prefill); decode 3.831 s per token (0.26 tokens/s) over 31 steps from position 131040; resident memory 35891 MB
+local: kv offload during decode: read 747.96 GB from NVMe at 6.31 GB/s (3.825 s per token), attention waited 3.599 s per token; over the whole run, read 1459.2 GB and wrote 24.1 GB (2.80 GB/s)
+local: PASS: all 32 generated tokens and their logits match /tmp/lh_long_ram.bin bit for bit
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --kv-offload kvtmp --compare /tmp/lh_long_ram.bin"
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 34:36.00
+	Maximum resident set size (kbytes): 35167380
+	Voluntary context switches: 1715798
+	Involuntary context switches: 28307
+LONG_DONE

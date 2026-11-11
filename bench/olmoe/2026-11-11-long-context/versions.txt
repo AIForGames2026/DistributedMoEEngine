@@ -1,0 +1,4 @@
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, 0.17.0, 5P1250820001002529 ESL01TBTLCZ-27J2-TYN 0x1
+               total        used        free      shared  buff/cache   available
+Mem:             121           5          71           0          44         115
+Swap:             15           0          15

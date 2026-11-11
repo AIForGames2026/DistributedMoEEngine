@@ -80,9 +80,21 @@ Then, for example over RDMA with CUDA matmuls (drop `-Dgpu=true` and `--gpu` for
 zig build olmoe -Doptimize=ReleaseFast -Drdma=true -Dgpu=true && zig-out/bin/olmoe rdma ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --golden ~/models/olmoe_forward.tfref --payload f32 --gpu
 ```
 
+Qwen3-MoE and long context (TASK-12): every `olmoe` mode also runs Qwen3-30B-A3B from Qwen's [Q8_0 GGUF](https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF) (32.5 GB). It has grouped KV heads, per-head QK norm, and renormalized top-8 routing. `--yarn 4` turns on YaRN rope scaling, which Qwen documents for 128k tokens (4 × its 32,768 native positions). `tools/ref/ref_qwen3.py` makes the goldens, with transformers' own `Qwen3MoeForCausalLM`; it takes the same arguments as `ref_olmoe.py`, plus `--yarn F`. With `--gpu`, attention runs on the GPU too, reading the KV cache in place, and each layer's experts run in one GPU call. `TF_GPU_ATTENTION=0` keeps attention on the CPU, and `TF_ATT_KERNEL=1` selects the first, simpler attention kernel. Large CPU matmuls (the f32 router, say) use every CPU thread; `TF_THREADS=N` sets how many. `zig build attbench -Dgpu=true` builds a benchmark of both attention kernels (`attbench --pos 16384,65536`).
+
+For a long prompt, `tools/ref/make_tokens.py --tokenizer tokenizer.json --out long.tokens FILE...` tokenizes text files. Then `--context N --tokens long.tokens` prefills N tokens `--chunk` at a time (default 2048), decodes `--generate M` tokens greedily, and reports the time to first token and the decode speed. `--kv-offload DIR` keeps only the first 128 positions and the most recent `--kv-window` (default 8192) in memory and moves the rest of the KV cache to a file in DIR on NVMe. Each layer's middle is read back through the io_uring reader while the previous layer runs. `--save F` and `--compare F` check that two runs, say all in memory and offloaded, produce the same tokens and logits bit for bit:
+
+```bash
+zig-out/bin/olmoe local Qwen3-30B-A3B-Q8_0.gguf --gpu --yarn 4 --tokens long.tokens --context 131040 --generate 32 --save ram.bin
+```
+
+```bash
+zig-out/bin/olmoe local Qwen3-30B-A3B-Q8_0.gguf --gpu --yarn 4 --tokens long.tokens --context 131040 --generate 32 --kv-offload /path/on/nvme --compare ram.bin
+```
+
 CPU-only expert node (TASK-22): any `olmoe` process run without `--gpu` (or built without `-Dgpu=true`) runs its experts on the CPU, so a machine with no NVIDIA GPU can be rank 1, for example `olmoe expert` in WSL2 on a desktop with a GPU router on a Spark. When the Spark has to dial in through a relay on Windows, point the relay at the WSL2 VM's own address (`hostname -I` in WSL2), not `localhost`: WSL2's localhost relay made generation 3.7x slower ([`bench/olmoe/2026-11-11-cpu-expert.md`](../bench/olmoe/2026-11-11-cpu-expert.md)).
 
-`--payload f32` is exact (two packets per expert call); `bf16` and `fp8` (the default) are smaller but round the hidden state. Results: [`bench/olmoe/2026-11-05.md`](../bench/olmoe/2026-11-05.md). A tiny random OLMoE (`ref_olmoe.py --tiny`, in `tests/golden/`) runs the same forward pass in `zig build test`.
+`--payload f32` is exact (two packets per expert call); `bf16` and `fp8` (the default) are smaller but round the hidden state. Results: [`bench/olmoe/2026-11-05.md`](../bench/olmoe/2026-11-05.md). A tiny random OLMoE (`ref_olmoe.py --tiny`, in `tests/golden/`) runs the same forward pass in `zig build test`, and so does a tiny Qwen3-MoE with YaRN (`ref_qwen3.py --tiny`).
 
 Token generation (TASK-24): add `--generate 64` to the reference command to also record 64 tokens of transformers' greedy `generate()` after each prompt (written to `--out` with the rest), then add `--generate 64` to any `olmoe` command. After the prompt check, it generates one token at a time with a KV cache and compares every token, and the logits it was picked from, with the reference. `--temperature T`, `--top-k K`, and `--seed S` sample instead (repeatable for a given seed, so not compared). `--minutes 10` then repeats the generation for 10 minutes and fails if any round's tokens or logits change or resident memory grows by 1% or more after the first round. It names each round that differs (prompt, first differing token, largest logit difference), and each process checks at exit that its weights in memory are unchanged.
 

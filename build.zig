@@ -26,6 +26,9 @@ pub fn build(b: *std.Build) void {
     // Tiny random OLMoE and transformers' outputs for it (tools/ref/ref_olmoe.py --tiny).
     engine.addAnonymousImport("olmoe_tiny.gguf", .{ .root_source_file = b.path("tests/golden/olmoe_tiny.gguf") });
     engine.addAnonymousImport("olmoe_tiny.tfref", .{ .root_source_file = b.path("tests/golden/olmoe_tiny.tfref") });
+    // Tiny random Qwen3-MoE with YaRN and transformers' outputs for it (tools/ref/ref_qwen3.py --tiny).
+    engine.addAnonymousImport("qwen3_tiny.gguf", .{ .root_source_file = b.path("tests/golden/qwen3_tiny.gguf") });
+    engine.addAnonymousImport("qwen3_tiny.tfref", .{ .root_source_file = b.path("tests/golden/qwen3_tiny.tfref") });
     // The TCP transport uses Winsock on Windows.
     if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 
@@ -167,6 +170,7 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         olmoe_mod.addCSourceFile(.{ .file = b.path("csrc/tf_rdma.c"), .flags = &c_flags });
         olmoe_mod.linkSystemLibrary("ibverbs", .{});
     }
+    var fatbin_file: ?std.Build.LazyPath = null;
     if (gpu) {
         // Kernels for Ampere (sm_86, such as the RTX 3060 Ti and 3070), the RTX 5070 Ti (sm_120),
         // and GB10 (sm_121), plus PTX for anything newer; loaded at run time through the driver API.
@@ -179,6 +183,7 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
             "arch=compute_120,code=compute_120",   "-o",
         });
         const fatbin = nvcc.addOutputFileArg("kernels.fatbin");
+        fatbin_file = fatbin;
         nvcc.addFileArg(b.path("csrc/cuda/kernels.cu"));
         olmoe_mod.addAnonymousImport("kernels.fatbin", .{ .root_source_file = fatbin });
         olmoe_mod.addCSourceFile(.{ .file = b.path("csrc/tf_gpu.c"), .flags = &c_flags });
@@ -189,6 +194,24 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
     }
     const olmoe = b.addExecutable(.{ .name = "olmoe", .root_module = olmoe_mod });
     b.step("olmoe", "Build the OLMoE forward-pass tool (needs liburing)").dependOn(&b.addInstallArtifact(olmoe, .{}).step);
+
+    // Attention kernel benchmark (TASK-12), with the same kernels.
+    if (gpu) {
+        const bench_mod = b.createModule(.{
+            .root_source_file = b.path("src/attbench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        bench_mod.addIncludePath(b.path("include"));
+        bench_mod.addAnonymousImport("kernels.fatbin", .{ .root_source_file = fatbin_file.? });
+        bench_mod.addCSourceFile(.{ .file = b.path("csrc/tf_gpu.c"), .flags = &c_flags });
+        bench_mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "include" }) });
+        bench_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "lib64", "stubs" }) });
+        bench_mod.linkSystemLibrary("cuda", .{});
+        const bench = b.addExecutable(.{ .name = "attbench", .root_module = bench_mod });
+        b.step("attbench", "Build the attention kernel benchmark (needs -Dgpu=true)").dependOn(&b.addInstallArtifact(bench, .{}).step);
+    }
 }
 
 /// Toolchain gate (TASK-01): links liburing and the CUDA runtime, so it is a

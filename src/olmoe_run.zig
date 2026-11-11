@@ -1,4 +1,5 @@
-//! OLMoE-1B-7B forward pass split across two processes (TASK-10). Linux.
+//! OLMoE-1B-7B (TASK-10) or Qwen3-MoE (TASK-12) forward pass split across
+//! two processes. Linux.
 //!
 //!   olmoe local MODEL --golden G.tfref                 one process, every expert
 //!   olmoe shm   MODEL --golden G.tfref [options]       two processes, shared memory
@@ -24,7 +25,9 @@
 //!          announces its address and experts there, and a router given no
 //!          --host connects to a healthy expert it lists and refuses to route
 //!          to it once the tracker marks it unhealthy), --advertise IP (the
-//!          address an expert announces; default the one the tracker sees)
+//!          address an expert announces; default the one the tracker sees),
+//!          --yarn F (TASK-12: YaRN rope scaling by F over 32,768 positions,
+//!          for Qwen3-MoE past its native context; Qwen uses 4 for 128k)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -57,6 +60,7 @@ const ExpertCache = @import("expert_cache.zig").ExpertCache;
 const Want = @import("expert_cache.zig").Want;
 const CacheSource = @import("expert_cache.zig").Source;
 const tracker = @import("tracker.zig");
+const kv_tier = @import("kv_tier.zig");
 const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
@@ -71,6 +75,10 @@ const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
 };
 
 const max_experts = 1024;
+
+/// `--yarn F` (TASK-12): YaRN rope scaling by F over Qwen3's 32,768 native positions.
+var yarn_factor: f32 = 0;
+const yarn_original = 32768;
 
 const Options = struct {
     mode: []const u8,
@@ -97,6 +105,13 @@ const Options = struct {
     mispredict: f32 = 0,
     tracker: ?[]const u8 = null,
     advertise: ?[]const u8 = null,
+    context: usize = 0,
+    chunk: usize = 2048,
+    tokens: ?[]const u8 = null,
+    kv_offload: ?[]const u8 = null,
+    kv_window: usize = 8192,
+    save: ?[]const u8 = null,
+    compare: ?[]const u8 = null,
     swarm: ?*const Swarm = null,
 };
 
@@ -115,7 +130,7 @@ pub fn main(init: std.process.Init) !void {
             \\usage: olmoe local|shm|rdma MODEL --golden G.tfref [options]
             \\       olmoe expert|rdma-expert MODEL --port P [options]
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
-            \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu
+            \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu  --yarn F
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
             \\         --lookahead H  --extra E  --cache N  --pin L  --loaders N  --mispredict P
             \\         --tracker IP[:PORT]  --advertise IP  (a router with --tracker needs no --host)
@@ -147,7 +162,7 @@ pub fn main(init: std.process.Init) !void {
         {
             moe.ahead = &la;
         }
-        const result = runGolden(gpa, &l.weights.?, moe, opts, "local");
+        const result = if (opts.context > 0) runLong(gpa, &l.weights.?, moe, opts, "local") else runGolden(gpa, &l.weights.?, moe, opts, "local");
         if (box) |b|
         {
             reportCache("local", b.cache);
@@ -229,6 +244,23 @@ fn parseArgs(init: std.process.Init) !Options {
         } else if (std.mem.eql(u8, arg, "--loaders")) {
             opts.loaders = try std.fmt.parseInt(usize, value, 10);
             if (opts.loaders == 0 or opts.loaders > 16) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--context")) {
+            opts.context = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--chunk")) {
+            opts.chunk = try std.fmt.parseInt(usize, value, 10);
+            if (opts.chunk == 0) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--tokens")) {
+            opts.tokens = value;
+        } else if (std.mem.eql(u8, arg, "--kv-offload")) {
+            opts.kv_offload = value;
+        } else if (std.mem.eql(u8, arg, "--kv-window")) {
+            opts.kv_window = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--save")) {
+            opts.save = value;
+        } else if (std.mem.eql(u8, arg, "--compare")) {
+            opts.compare = value;
+        } else if (std.mem.eql(u8, arg, "--yarn")) {
+            yarn_factor = try std.fmt.parseFloat(f32, value);
         } else if (std.mem.eql(u8, arg, "--tracker")) {
             opts.tracker = value;
         } else if (std.mem.eql(u8, arg, "--advertise")) {
@@ -285,7 +317,11 @@ const Loaded = struct {
         var state = try mf.openModel(gpa, file, null);
         errdefer state.deinit(gpa);
         const h = state.gguf_header orelse return error.NotGguf;
-        const cfg = try olmoe.Config.fromGguf(h);
+        var cfg = try olmoe.Config.fromGguf(h);
+        if (yarn_factor > 0)
+        {
+            cfg = cfg.withYarn(yarn_factor, yarn_original);
+        }
         if (cfg.experts > max_experts) return error.TooManyExperts;
         const m = state.model;
 
@@ -341,6 +377,7 @@ const Loaded = struct {
     }
 
     fn deinit(self: *Loaded, gpa: std.mem.Allocator) void {
+        self.local.deinit();
         self.heap.deinit();
         if (self.weights) |*w| w.deinit();
         self.arena.deinit();
@@ -1330,6 +1367,207 @@ fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.
     return result;
 }
 
+/// Long context (TASK-12): `--context N` tokens from `--tokens FILE` (u32
+/// ids, repeated if short) are prefilled `--chunk` at a time, then
+/// `--generate M` tokens are decoded greedily. Reports time to first token,
+/// decode speed, and the memory the KV cache holds; `--kv-offload DIR` keeps
+/// the cold middle on NVMe. `--save F` writes the generated tokens and their
+/// logits, and `--compare F` checks a run against them bit for bit.
+fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts: Options, name: []const u8) !void
+{
+    const cfg = w.cfg;
+    const n = opts.context;
+    const tokens = try gpa.alloc(u32, n);
+    defer gpa.free(tokens);
+    const raw = try mf.readWhole(gpa, opts.tokens orelse return error.MissingTokens);
+    defer gpa.free(raw);
+    if (raw.len < 4)
+    {
+        return error.MissingTokens;
+    }
+    const count = raw.len / 4;
+    for (tokens, 0..) |*t, i|
+    {
+        t.* = std.mem.readInt(u32, raw[(i % count) * 4 ..][0..4], .little);
+        if (t.* >= cfg.vocab)
+        {
+            return error.BadToken;
+        }
+    }
+    const cap = n + opts.generate;
+    var tier: ?*kv_tier.TierCache = null;
+    defer if (tier) |t| t.close(gpa);
+    var cache: olmoe.KvCache = undefined;
+    var path_buf: [512]u8 = undefined;
+    if (opts.kv_offload) |dir|
+    {
+        const path = try zPrint(&path_buf, "{s}/tf_kv_{d}.bin", .{ dir, c.getpid() });
+        tier = try kv_tier.TierCache.open(gpa, cfg, cap, .{ .max_chunk = opts.chunk, .window = opts.kv_window, .path = path });
+        cache = olmoe.KvCache.tiered(cfg, cap, tier.?.tier());
+    }
+    else
+    {
+        cache = try olmoe.KvCache.init(gpa, cfg, cap);
+    }
+    defer cache.deinit(gpa);
+    const kv_bytes = if (tier) |t| t.memoryBytes() else (cache.k.len + cache.v.len) * @sizeOf(f32);
+    const full_bytes = cfg.layers * 2 * cap * cfg.kvDim() * @sizeOf(f32);
+    std.debug.print("{s}: context {d} tokens + {d} generated, chunks of {d}; KV cache {s}: {d:.2} GB in memory (all of it would be {d:.2} GB), GPU attention {s}\n", .{
+        name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
+    });
+
+    const logits = try gpa.alloc(f32, cfg.vocab);
+    defer gpa.free(logits);
+    const t0 = mf.nowNs();
+    var pos: usize = 0;
+    var next_report: usize = n / 10;
+    while (pos < n)
+    {
+        const e = @min(pos + opts.chunk, n);
+        try olmoe.step(gpa, w, moe, &cache, tokens[pos..e], logits, null);
+        pos = e;
+        if (pos >= next_report and pos < n)
+        {
+            std.debug.print("{s}: prefill {d} of {d} positions, {d:.1} s\n", .{ name, pos, n, @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9 });
+            next_report += @max(n / 10, 1);
+        }
+    }
+    const ttft = mf.nowNs() - t0;
+    reportProfile(name, "prefill");
+    olmoe.profile = .{};
+    const out_tokens = try gpa.alloc(u32, opts.generate);
+    defer gpa.free(out_tokens);
+    const out_logits = try gpa.alloc(f32, opts.generate * cfg.vocab);
+    defer gpa.free(out_logits);
+    const read0 = if (tier) |t| t.stats else kv_tier.Stats{};
+    const t1 = mf.nowNs();
+    for (0..opts.generate) |i|
+    {
+        @memcpy(out_logits[i * cfg.vocab ..][0..cfg.vocab], logits);
+        const tok: u32 = @intCast(olmoe.argmax(logits));
+        out_tokens[i] = tok;
+        if (i + 1 < opts.generate)
+        {
+            try olmoe.step(gpa, w, moe, &cache, &.{tok}, logits, null);
+        }
+    }
+    const decode_ns = mf.nowNs() - t1;
+    reportProfile(name, "decode");
+    const steps = @max(@max(opts.generate, 1) - 1, 1);
+    const per_step = @as(f64, @floatFromInt(decode_ns)) / 1e9 / @as(f64, @floatFromInt(steps));
+    std.debug.print("{s}: time to first token {d:.1} s ({d:.0} tokens/s prefill); decode {d:.3} s per token ({d:.2} tokens/s) over {d} steps from position {d}; resident memory {d:.0} MB\n", .{
+        name,
+        @as(f64, @floatFromInt(ttft)) / 1e9,
+        @as(f64, @floatFromInt(n)) / (@as(f64, @floatFromInt(ttft)) / 1e9),
+        per_step,
+        1 / per_step,
+        steps,
+        n,
+        mb(rssBytes()),
+    });
+    if (tier) |t|
+    {
+        const st = t.stats;
+        const rb = st.read_bytes - read0.read_bytes;
+        const rn = st.read_ns - read0.read_ns;
+        const wn = st.wait_ns - read0.wait_ns;
+        std.debug.print("{s}: kv offload during decode: read {d:.2} GB from NVMe at {d:.2} GB/s ({d:.3} s per token), attention waited {d:.3} s per token; over the whole run, read {d:.1} GB and wrote {d:.1} GB ({d:.2} GB/s)\n", .{
+            name,
+            @as(f64, @floatFromInt(rb)) / 1e9,
+            @as(f64, @floatFromInt(rb)) / @max(@as(f64, @floatFromInt(rn)), 1),
+            @as(f64, @floatFromInt(rn)) / 1e9 / @as(f64, @floatFromInt(steps)),
+            @as(f64, @floatFromInt(wn)) / 1e9 / @as(f64, @floatFromInt(steps)),
+            @as(f64, @floatFromInt(st.read_bytes)) / 1e9,
+            @as(f64, @floatFromInt(st.write_bytes)) / 1e9,
+            @as(f64, @floatFromInt(st.write_bytes)) / @max(@as(f64, @floatFromInt(st.write_ns)), 1),
+        });
+    }
+    const record = try gpa.alloc(u8, 16 + out_tokens.len * 4 + out_logits.len * 4);
+    defer gpa.free(record);
+    std.mem.writeInt(u64, record[0..8], n, .little);
+    std.mem.writeInt(u64, record[8..16], opts.generate, .little);
+    @memcpy(record[16..][0 .. out_tokens.len * 4], std.mem.sliceAsBytes(out_tokens));
+    @memcpy(record[16 + out_tokens.len * 4 ..], std.mem.sliceAsBytes(out_logits));
+    if (opts.save) |path|
+    {
+        try writeFile(path, record);
+        std.debug.print("{s}: saved {d} tokens and their logits to {s}\n", .{ name, opts.generate, path });
+    }
+    if (opts.compare) |path|
+    {
+        const want = try mf.readWhole(gpa, path);
+        defer gpa.free(want);
+        if (want.len != record.len or !std.mem.eql(u8, want[0..16], record[0..16]))
+        {
+            std.debug.print("{s}: FAIL: {s} is from a run of another shape\n", .{ name, path });
+            return error.CompareFailed;
+        }
+        const tb = out_tokens.len * 4;
+        const same_tokens = std.mem.eql(u8, want[16..][0..tb], record[16..][0..tb]);
+        const same_logits = std.mem.eql(u8, want[16 + tb ..], record[16 + tb ..]);
+        if (!same_tokens or !same_logits)
+        {
+            std.debug.print("{s}: FAIL: generated tokens {s}, logits {s} compared with {s}\n", .{ name, if (same_tokens) "match" else "differ", if (same_logits) "match bit for bit" else "differ", path });
+            return error.CompareFailed;
+        }
+        std.debug.print("{s}: PASS: all {d} generated tokens and their logits match {s} bit for bit\n", .{ name, opts.generate, path });
+    }
+}
+
+/// Where `olmoe.step`'s time went, in seconds.
+fn reportProfile(name: []const u8, what: []const u8) void
+{
+    const p = olmoe.profile;
+    const s = struct {
+        fn f(ns: u64) f64
+        {
+            return @as(f64, @floatFromInt(ns)) / 1e9;
+        }
+    }.f;
+    std.debug.print("{s}: {s} time: projections {d:.1} s, QK norm and rope {d:.1} s, attention {d:.1} s, output {d:.1} s, router {d:.1} s, experts {d:.1} s, LM head {d:.1} s\n", .{
+        name, what, s(p.projections), s(p.qk_rope), s(p.attention), s(p.output), s(p.router), s(p.experts), s(p.head),
+    });
+}
+
+/// Formats into `buf` with a terminating zero.
+fn zPrint(buf: []u8, comptime fmt: []const u8, args: anytype) ![:0]const u8
+{
+    const text = try std.fmt.bufPrint(buf[0 .. buf.len - 1], fmt, args);
+    buf[text.len] = 0;
+    return buf[0..text.len :0];
+}
+
+fn writeFile(path: []const u8, bytes: []const u8) !void
+{
+    var buf: [512]u8 = undefined;
+    const z = try zPrint(&buf, "{s}", .{path});
+    const fd = c.open(z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(c.mode_t, 0o644));
+    if (fd < 0)
+    {
+        return error.WriteFailed;
+    }
+    defer _ = c.close(fd);
+    var off: usize = 0;
+    while (off < bytes.len)
+    {
+        const n = c.write(fd, bytes[off..].ptr, bytes.len - off);
+        if (n <= 0)
+        {
+            return error.WriteFailed;
+        }
+        off += @intCast(n);
+    }
+}
+
+/// The model, for messages.
+fn modelName(cfg: olmoe.Config) []const u8
+{
+    return switch (cfg.arch) {
+        .olmoe => "OLMoE",
+        .qwen3moe => if (cfg.yarn > 0) "Qwen3-MoE (YaRN)" else "Qwen3-MoE",
+    };
+}
+
 /// Largest absolute difference; a NaN anywhere counts as infinitely wrong
 /// (@max would otherwise drop it).
 fn maxErr(a: []const f32, b: []align(1) const f32) f32 {
@@ -1418,7 +1656,7 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         std.debug.print("{s}: FAIL: logits differ by up to {e:.2} (target 1e-2) or a top-1 token differs\n", .{ name, worst_logit });
         return error.ForwardMismatch;
     }
-    std.debug.print("{s}: PASS: OLMoE-1B-7B logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, worst_logit });
+    std.debug.print("{s}: PASS: {s} logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, modelName(cfg), worst_logit });
     if (moe.ahead) |la|
     {
         try reportLookahead(la, name, "prompts", same_bits, compared);

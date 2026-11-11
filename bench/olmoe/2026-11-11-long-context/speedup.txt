@@ -1,0 +1,18 @@
+Output of speedup.sh on gx10-02, Nov 11 (the per-run logs stayed on the Spark).
+
+== 16k, build used for the 128k runs
+== 16k, with the router and expert speedups
+local: prefill time: projections 11.3 s, QK norm and rope 5.3 s, attention 13.2 s, output 9.8 s, router 4.1 s, experts 51.4 s, LM head 0.0 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.0 s, experts 0.3 s, LM head 0.0 s
+local: time to first token 95.7 s (171 tokens/s prefill); decode 0.079 s per token (12.71 tokens/s) over 7 steps from position 16384; resident memory 36253 MB
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache offloaded to NVMe: 2.13 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: prefill time: projections 11.4 s, QK norm and rope 5.5 s, attention 13.4 s, output 9.8 s, router 4.1 s, experts 51.7 s, LM head 0.0 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 1.6 s, output 0.0 s, router 0.0 s, experts 0.3 s, LM head 0.0 s
+local: time to first token 97.0 s (169 tokens/s prefill); decode 0.288 s per token (3.47 tokens/s) over 7 steps from position 16384; resident memory 35156 MB
+local: kv offload during decode: read 11.10 GB from NVMe at 5.59 GB/s (0.284 s per token), attention waited 0.209 s per token; over the whole run, read 13.4 GB and wrote 1.6 GB (2.84 GB/s)
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_s16.bin bit for bit
+local: time to first token 139.1 s (118 tokens/s prefill); decode 0.088 s per token (11.38 tokens/s) over 7 steps from position 16384; resident memory 36029 MB
+SPEEDUP_DONE
+
+The last time-to-first-token line is from the "before" build (it has no profile lines),
+grep printed the logs in file order: speedup-after, speedup-after-offload, speedup-before.

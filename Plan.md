@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #30 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #30 are TASK-22 to TASK-28). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #31 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #31 are TASK-22 to TASK-29). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -217,10 +217,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-12] Tiered NVMe KV Cache Offloader
 - **Milestone**: Beta (Nov 22)
-- **Status**: Backlog
+- **Status**: Review
 - **Priority**: `could` | **Area**: `code` | **Tag**: `cut-1`
-- **Description**: Implement a ring-buffer KV manager that pins attention sink tokens (first 128) and the most recent 8,192 tokens in memory, and offloads cold middle context to NVMe via `io_uring`, paging it back on demand with prefetch.
-- **Acceptance Criteria**: Done when context length reaches 128k tokens with under 15% decode throughput degradation versus an all-RAM KV cache at a context length where both fit, and output matches the all-RAM run exactly.
+- **Description**: Implement a ring-buffer KV manager that pins attention sink tokens (first 128) and the most recent 8,192 tokens in memory, and offloads cold middle context to NVMe via `io_uring`, paging it back on demand with prefetch. Changed Nov 11: OLMoE's context is 4,096 tokens, so this task runs on Qwen3-30B-A3B (Q8_0, about 32 GB; 32k native context, 128k with YaRN factor 4), which needs Qwen3-MoE support in the engine (grouped KV heads, per-head QK norm, renormalized top-8 routing, YaRN) and attention on the GPU, since a 128k prefill on the CPU takes hours. The acceptance criteria were rewritten the same day: the old target, under 15% decode slowdown against an all-RAM cache, cannot be met with exact full attention. Every new token reads every cached position, so at 128k the offloaded middle (about 23.6 GB in f32) takes about 3.4 s per token to read at the drive's 7 GB/s, against about 0.1 s from RAM. Compact formats (TASK-27) and saved prefixes (TASK-28) are follow-ups that make this faster and easier to test, not fixes.
+- **Acceptance Criteria**: Done when (1) Qwen3-30B-A3B with YaRN passes TASK-10's checks (logits within 1e-2 of transformers, top-1 identical, every routing choice identical) and TASK-24's greedy generation check on the golden prompts; (2) a 128k-token context runs with the in-memory KV cache capped to the first 128 plus the most recent 8,192 positions, and its tokens and logits match an all-RAM run at the same length exactly (both fit on `gx10-02`); (3) during decode the offloaded part is read at 5 GB/s or more, with reads overlapping compute; and (4) decode speed and time to first token at 128k, offloaded and all-RAM, are recorded in `bench/`.
+- **Results (Nov 11)**: acceptance met on `gx10-02` with Qwen3-30B-A3B (Q8_0, `--yarn 4`). (1) Against transformers 4.57.1 with YaRN: logits within 2.65e-4, top-1 37/37, every routing choice identical, and all 3 x 32 greedy tokens match `generate()`. (2) A 131,040-token prompt (the repository's own text) plus 32 generated tokens, with only the first 128 and the most recent 8,192 positions in memory (3.07 GB with staging buffers, against 25.77 GB for the whole cache), produced the same 32 tokens and logits as the all-RAM run bit for bit. (3) Decode read the offloaded middle at 6.31 GB/s (24.1 GB per token). (4) Time to first token 1,918 s in RAM and 1,947 s offloaded; decode 0.230 s per token in RAM and 3.83 s offloaded, bound by the drive as estimated. Engine changes: Qwen3-MoE support (grouped KV heads, per-head QK norm, renormalized top-k, YaRN), CUDA attention that reads the cache in place through a tile table (`tf_attention_wide`, 4.6 to 5.9x faster than the first kernel), the tiered cache (`src/kv_tier.zig`, O_DIRECT writes, io_uring reads one layer ahead), `olmoe --context N` for long prompts, expert calls batched by expert with one GPU call per layer, and a threaded router. With the last two, a 16k prefill on GB10 takes 95.7 s, down from 139.1 s; experts still take half of it, so a tiled Q8_0 matmul for many tokens is the next prefill speedup. See `bench/olmoe/2026-11-11-long-context.md`.
 
 #### [TASK-13] Compressed Expert Streaming (nvCOMP, Hardware DE Only If Present)
 - **Milestone**: Beta (Nov 22)
@@ -343,6 +344,13 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Added Nov 10, from the same paper, which keeps every prompt's global KV on SSD for at least 72 hours so a repeated prefix skips prefill. Save the K and V of a prompt prefix to NVMe, keyed by a hash of its tokens, and read them back through the TASK-03 `io_uring` reader when a later prompt starts with the same tokens. OLMoE has no sliding-window cache, so unlike DeepSeek's bounded replay the restored cache is exact. Shares the NVMe paging code with TASK-12 if that task is built.
 - **Acceptance Criteria**: To be written when it is scheduled. Minimum: a prompt that reuses a cached prefix produces exactly the same tokens and logits as a cold run, with time to first token for both recorded in `bench/`.
 
+#### [TASK-29] Qwen3.6-35B-A3B (Hybrid Linear Attention)
+- **Milestone**: None (after v1)
+- **Status**: Backlog
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 11, when choosing a long-context model for TASK-12. Qwen3.6-35B-A3B (April 2026, 35B total, 3B active, 262,144-token native context) fits the lab: its Q8_0 GGUF is 36.9 GB and its BF16 checkpoint 72 GB. But it is a hybrid. Of its 40 layers, 30 are Gated DeltaNet (linear attention with a fixed-size recurrent state) and 10 are full attention with an output gate, 2 KV heads of 256 dims, and partial RoPE (64 of 256 dims). It has 256 experts, 8 routed plus 1 shared per token. Supporting it means a Gated DeltaNet layer (CPU and a CUDA kernel for long prefill), gated attention, partial RoPE, and shared experts on top of TASK-12's Qwen3-MoE work. The MTP head and vision encoder stay out. TASK-12 used Qwen3-30B-A3B instead, because this model's KV cache is small (about 5 GB at 128k tokens in f32) and would not exercise NVMe offload.
+- **Acceptance Criteria**: To be written when it is scheduled. Minimum: the TASK-10 checks (logits within 1e-2 of transformers, top-1 identical, every routing choice identical) and TASK-24's greedy generation check on Qwen3.6-35B-A3B, split across two processes, recorded in `bench/`.
+
 ---
 
 ## 4. Scope Tiers & Cut Lines
@@ -351,7 +359,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, shown in a browser replay. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 18, 19, 23, 24 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, and 28 are post-v1. | 12, 13, 15b, 16b, 22, 25, 26, 27, 28 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, and 29 are post-v1. | 12, 13, 15b, 16b, 22, 25, 26, 27, 28, 29 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, live telemetry, and CPU-only expert nodes.
 
@@ -375,15 +383,15 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-12, TASK-13, TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-28 |
+| **Backlog** | TASK-13, TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-28, TASK-29 |
 | **To Do** | (none) |
 | **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28 | 16 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29 | 17 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b, 23, 25 | 5 |
@@ -393,7 +401,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 15 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 9 | 5 tagged `cut-1`; TASK-25, 27, and 28 are post-v1; TASK-26 untagged |
+| `could` | 10 | 5 tagged `cut-1`; TASK-25, 27, 28, and 29 are post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 
@@ -437,6 +445,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-26 | 10 | 09 (classroom machines as swarm nodes) |
 | TASK-27 | 24 | (none) |
 | TASK-28 | 03, 24 | (none) |
+| TASK-29 | 12 (Qwen3-MoE support) | (none) |
 
 **Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-24 → TASK-15 → TASK-16 → TASK-18.
 

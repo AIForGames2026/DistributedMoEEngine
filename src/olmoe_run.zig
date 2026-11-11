@@ -1507,7 +1507,14 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
         const same_logits = std.mem.eql(u8, want[16 + tb ..], record[16 + tb ..]);
         if (!same_tokens or !same_logits)
         {
-            std.debug.print("{s}: FAIL: generated tokens {s}, logits {s} compared with {s}\n", .{ name, if (same_tokens) "match" else "differ", if (same_logits) "match bit for bit" else "differ", path });
+            var worst: f32 = 0;
+            const a: []align(1) const f32 = std.mem.bytesAsSlice(f32, want[16 + tb ..]);
+            const b: []align(1) const f32 = std.mem.bytesAsSlice(f32, record[16 + tb ..]);
+            for (a, b) |x, y|
+            {
+                worst = @max(worst, @abs(x - y));
+            }
+            std.debug.print("{s}: FAIL: generated tokens {s}, logits {s} (by up to {e:.2}) compared with {s}\n", .{ name, if (same_tokens) "match" else "differ", if (same_logits) "match bit for bit" else "differ", worst, path });
             return error.CompareFailed;
         }
         std.debug.print("{s}: PASS: all {d} generated tokens and their logits match {s} bit for bit\n", .{ name, opts.generate, path });

@@ -30,9 +30,18 @@ void tf_gpu_get_info(const tf_gpu *g, tf_gpu_info *info);
  * a discrete GPU gets a copy in device memory. Call once per region. */
 int tf_gpu_map(tf_gpu *g, void *host, size_t len, uint64_t *dev);
 
-/* y (n x rows) = W x for the n inputs in x (n x cols), W in Q8_0 at device
- * address `w`. Copies x in and y out; returns when y is ready. */
+/* Weight formats for tf_gpu_matmul. */
+#define TF_GPU_Q8_0 0
+#define TF_GPU_F32 1
+
+/* y (n x rows) = W x for x (n x cols), W in `format` at device address `w`.
+ * Copies x in and y out; returns when y is ready. */
+int tf_gpu_matmul(tf_gpu *g, uint64_t w, int format, const float *x, int n, int rows, int cols, float *y);
 int tf_gpu_q8_0_matmul(tf_gpu *g, uint64_t w, const float *x, int n, int rows, int cols, float *y);
+
+/* tf_gpu_matmul for `count` weights on the same inputs, with one copy in. */
+int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const int *rows, const float *x, int n, int cols,
+                   float *const *y);
 
 /* Pins host memory [host, host + len) and maps it for kernels to read in
  * place, on any GPU (TASK-12: the KV cache, which keeps changing). Undo with
@@ -49,18 +58,19 @@ void tf_gpu_unregister(tf_gpu *g, void *host);
 int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int kv_heads, int kvd, float scale,
                      const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out);
 
-/* SwiGLU experts for one layer (TASK-12): expert e takes input rows first[e]
- * to first[e + 1] - 1 of x (rows x d floats, host memory) and writes the
- * same rows of y: down(silu(gate x) * up x), with Q8_0 weights at device
- * addresses gate[e] (f x d), up[e] (f x d) and down[e] (d x f). One copy
- * in, every expert queued, one copy out. */
-int tf_gpu_experts(tf_gpu *g, int experts, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
-                   const int *first, const float *x, int d, int f, float *y);
+/* One layer's experts for n tokens, k calls each: expert e takes batch rows first[e]
+ * on, row i is token src[i], and y[t] adds call j's row inv[t k + j] times w[t k + j]. */
+int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
+                   const int *first, const int *src, const int *inv, const float *w, const float *x, int n, int k,
+                   int d, int f, float *y);
 
-/* Which attention kernel to use: 1 tf_attention, 0 or 2 tf_attention_wide
- * when the device has the shared memory for it (the default; TF_ATT_KERNEL
- * sets it at open). Returns the previous choice. */
+/* Attention kernel: 1 first, 2 wide, 3 and 4 tensor cores (64 or 128 rows), 5 decode,
+ * 0 chosen by shape (default; TF_ATT_KERNEL sets it). Returns the previous choice. */
 int tf_gpu_set_attention_kernel(tf_gpu *g, int which);
+
+/* 1: the first Q8_0 kernel for every matmul; 0: tiled and decode kernels (default;
+ * TF_MM_KERNEL sets it). Returns the previous choice. */
+int tf_gpu_set_matmul_kernel(tf_gpu *g, int which);
 
 void tf_gpu_close(tf_gpu *g);
 

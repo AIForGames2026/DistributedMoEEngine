@@ -2,11 +2,8 @@
 //!
 //!   attbench [--heads H] [--kv-heads K] [--n N] [--pos P[,P...]] [--reps R]
 //!
-//! Times tf_attention and tf_attention_wide on random queries and a random
-//! KV cache read in place, for N new tokens after P cached positions
-//! (defaults: Qwen3-30B-A3B's 32 query and 4 KV heads, a 2,048-token chunk),
-//! and reports how far apart their outputs are. The cache is read in place on
-//! a GPU that shares memory (GB10) and copied to device memory otherwise.
+//! Times each attention kernel on random data for N new tokens after P cached
+//! positions, and reports how far each output is from the wide kernel's.
 const std = @import("std");
 const c = std.c;
 
@@ -20,6 +17,10 @@ extern fn tf_gpu_close(g: *Handle) void;
 const fatbin align(64) = @embedFile("kernels.fatbin").*;
 const hd = 128;
 const tile = 32;
+/// tf_gpu_set_attention_kernel 1 to 5 (decode only up to 16 rows), compared with the wide kernel (2).
+const names = [_][]const u8{ "first", "wide", "tensor cores 64", "tensor cores 128", "decode" };
+const kernels = names.len;
+const max_decode_rows = 16;
 
 pub fn main(init: std.process.Init) !void
 {
@@ -86,9 +87,15 @@ pub fn main(init: std.process.Init) !void
     defer pages.free(v);
     const q = try pages.alloc(f32, n * heads * hd);
     defer pages.free(q);
-    const out = [2][]f32{ try pages.alloc(f32, q.len), try pages.alloc(f32, q.len) };
-    defer pages.free(out[0]);
-    defer pages.free(out[1]);
+    var out: [kernels][]f32 = undefined;
+    for (&out) |*o|
+    {
+        o.* = try pages.alloc(f32, q.len);
+    }
+    defer for (out) |o|
+    {
+        pages.free(o);
+    };
     var rng: std.Random.DefaultPrng = .init(7);
     const r = rng.random();
     for ([_][]f32{ k, v, q }) |buf|
@@ -121,8 +128,9 @@ pub fn main(init: std.process.Init) !void
         const rows = n * (heads / kv_heads);
         const blocks = (rows + 31) / 32 * kv_heads;
         const splits = std.math.clamp(@min((128 + blocks - 1) / blocks, ntiles / 8), 1, 256);
-        var ms: [2]f64 = undefined;
-        for (0..2) |which|
+        var ms: [kernels]f64 = @splat(0);
+        const used: usize = if (rows <= max_decode_rows) kernels else kernels - 1;
+        for (0..used) |which|
         {
             _ = tf_gpu_set_attention_kernel(g.?, @intCast(which + 1));
             var best: u64 = std.math.maxInt(u64);
@@ -137,16 +145,20 @@ pub fn main(init: std.process.Init) !void
             }
             ms[which] = @as(f64, @floatFromInt(best)) / 1e6;
         }
-        var worst: f32 = 0;
-        for (out[0], out[1]) |a, b|
-        {
-            worst = @max(worst, @abs(a - b));
-        }
         const avg_seen = @as(f64, @floatFromInt(pos0)) + @as(f64, @floatFromInt(n + 1)) / 2;
         const flops = 4 * @as(f64, @floatFromInt(n * heads * hd)) * avg_seen;
-        std.debug.print("  {d} cached positions: tf_attention {d:.1} ms ({d:.2} TFLOPS), tf_attention_wide {d:.1} ms ({d:.2} TFLOPS), {d:.2}x; outputs differ by up to {e:.2}\n", .{
-            pos0, ms[0], flops / ms[0] / 1e9, ms[1], flops / ms[1] / 1e9, ms[0] / ms[1], worst,
-        });
+        const bytes = @as(f64, @floatFromInt((pos0 + n) * kvd * 4 * 2));
+        std.debug.print("  {d} cached:", .{pos0});
+        for (names[0..used], ms[0..used], out[0..used]) |name, t, o|
+        {
+            var worst: f32 = 0;
+            for (o, out[1]) |a, b|
+            {
+                worst = @max(worst, @abs(a - b));
+            }
+            std.debug.print(" {s} {d:.2} ms ({d:.2} TFLOPS, {d:.0} GB/s, {e:.1} off wide);", .{ name, t, flops / t / 1e9, bytes / t / 1e6, worst });
+        }
+        std.debug.print("\n", .{});
     }
 }
 

@@ -1,0 +1,15 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.89 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.84 s)
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache all in memory: 3.23 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: prefill 2048 of 16384 positions, 2.9 s
+local: prefill 4096 of 16384 positions, 7.6 s
+local: prefill 6144 of 16384 positions, 14.2 s
+local: prefill 8192 of 16384 positions, 22.7 s
+local: prefill 10240 of 16384 positions, 33.1 s
+local: prefill 12288 of 16384 positions, 45.5 s
+local: prefill 14336 of 16384 positions, 59.8 s
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 62.0 s, output 2.1 s, router 0.6 s, experts 7.9 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.4 s, output 0.0 s, router 0.1 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 76.4 s (214 tokens/s prefill); decode 0.086 s per token (11.61 tokens/s) over 7 steps from position 16384; resident memory 35873 MB
+local: FAIL: generated tokens match, logits differ (by up to 2.02e-1) compared with /tmp/lh_w16.bin
+error: CompareFailed

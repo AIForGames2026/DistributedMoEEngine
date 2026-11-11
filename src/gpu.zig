@@ -17,11 +17,12 @@ const Info = extern struct {
 extern fn tf_gpu_open(out: *?*Handle, fatbin: *const anyopaque, err: [*]u8, err_len: usize) c_int;
 extern fn tf_gpu_get_info(g: *const Handle, info: *Info) void;
 extern fn tf_gpu_map(g: *Handle, host: *anyopaque, len: usize, dev: *u64) c_int;
-extern fn tf_gpu_q8_0_matmul(g: *Handle, w: u64, x: [*]const f32, n: c_int, rows: c_int, cols: c_int, y: [*]f32) c_int;
+extern fn tf_gpu_matmul(g: *Handle, w: u64, format: c_int, x: [*]const f32, n: c_int, rows: c_int, cols: c_int, y: [*]f32) c_int;
+extern fn tf_gpu_matmuls(g: *Handle, count: c_int, w: [*]const u64, format: c_int, rows: [*]const c_int, x: [*]const f32, n: c_int, cols: c_int, y: [*]const [*]f32) c_int;
 extern fn tf_gpu_register(g: *Handle, host: *anyopaque, len: usize, dev: *u64) c_int;
 extern fn tf_gpu_unregister(g: *Handle, host: *anyopaque) void;
 extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32) c_int;
-extern fn tf_gpu_experts(g: *Handle, experts: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, x: [*]const f32, d: c_int, f: c_int, y: [*]f32) c_int;
+extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
 
 const fatbin align(64) = @embedFile("kernels.fatbin").*;
@@ -104,6 +105,7 @@ pub fn map(region: []u8) !void {
     host_base = @intFromPtr(region.ptr);
     host_len = region.len;
     olmoe.gpu_matmul = matmul;
+    olmoe.gpu_matmuls = matmuls;
     olmoe.gpu_experts = experts;
     std.debug.print("gpu: {s} (compute {d}.{d}), weights {s} ({d:.2} GB in {d:.2} s)\n", .{
         std.mem.sliceTo(&info.name, 0),
@@ -136,12 +138,14 @@ pub fn mapLive(region: []u8) !bool
     // A process holding only cached experts never calls `map`.
     if (std.c.getenv("TF_GPU_CHECK")) |v| check = v[0] == '1';
     olmoe.gpu_matmul = matmul;
+    olmoe.gpu_matmuls = matmuls;
     olmoe.gpu_experts = experts;
     return true;
 }
 
 pub fn stop() void {
     olmoe.gpu_matmul = null;
+    olmoe.gpu_matmuls = null;
     olmoe.gpu_experts = null;
     olmoe.gpu_attention = null;
     olmoe.gpu_register = null;
@@ -150,10 +154,24 @@ pub fn stop() void {
     handle = null;
 }
 
-/// Where kernels read `m`, if it is a Q8_0 weight in a mapped region.
+const format_q8_0: c_int = 0;
+const format_f32: c_int = 1;
+
+/// The kernel format code for `m`, if a kernel reads it.
+fn formatOf(m: olmoe.Mat) ?c_int
+{
+    return switch (m.format)
+    {
+        .q8_0 => format_q8_0,
+        .f32 => if (@intFromPtr(m.bytes.ptr) % 16 == 0) format_f32 else null,
+        else => null,
+    };
+}
+
+/// Where kernels read `m`, if it is a Q8_0 or f32 weight in a mapped region.
 fn devAddr(m: olmoe.Mat) ?u64
 {
-    if (m.format != .q8_0)
+    if (formatOf(m) == null)
     {
         return null;
     }
@@ -169,8 +187,8 @@ fn devAddr(m: olmoe.Mat) ?u64
     return null;
 }
 
-/// A group of experts in one call (TASK-12): one copy in, every matmul and
-/// SiLU queued on the GPU, one copy out. TF_GPU_CHECK compares with the CPU.
+/// A layer of experts in one call (TASK-12): inputs gathered, every matmul
+/// and SiLU queued, outputs combined on the GPU. TF_GPU_CHECK uses the CPU.
 fn experts(job: olmoe.ExpertJob) bool
 {
     if (failed or check or job.experts.len > max_group)
@@ -183,6 +201,10 @@ fn experts(job: olmoe.ExpertJob) bool
     var first: [max_group + 1]c_int = undefined;
     for (job.experts, 0..) |e, i|
     {
+        if (e.gate.format != .q8_0 or e.up.format != .q8_0 or e.down.format != .q8_0)
+        {
+            return false;
+        }
         gate[i] = devAddr(e.gate) orelse return false;
         up[i] = devAddr(e.up) orelse return false;
         down[i] = devAddr(e.down) orelse return false;
@@ -190,7 +212,7 @@ fn experts(job: olmoe.ExpertJob) bool
     }
     first[job.experts.len] = @intCast(job.first[job.experts.len]);
     const e0 = job.experts[0];
-    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, job.x.ptr, @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr);
+    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, @ptrCast(job.src.ptr), @ptrCast(job.inv.ptr), job.w.ptr, job.x.ptr, @intCast(job.n), @intCast(job.k), @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr);
     if (rc != 0)
     {
         std.log.err("gpu: expert batch failed ({d}); using the CPU from here on", .{-rc});
@@ -202,17 +224,58 @@ fn experts(job: olmoe.ExpertJob) bool
 
 const max_group = 1024;
 
-fn matmul(m: olmoe.Mat, x: []const f32, n: usize, y: []f32) bool {
-    if (failed) return false;
+fn matmul(m: olmoe.Mat, x: []const f32, n: usize, y: []f32) bool
+{
+    // A small f32 matmul for a few tokens (the router in decode) is quicker on the CPU.
+    if (failed or (m.format == .f32 and n <= 8 and m.rows * m.cols <= 1 << 20))
+    {
+        return false;
+    }
     const dev = devAddr(m) orelse return false;
-    const rc = tf_gpu_q8_0_matmul(handle.?, dev, x.ptr, @intCast(n), @intCast(m.rows), @intCast(m.cols), y.ptr);
-    if (rc != 0) {
+    const rc = tf_gpu_matmul(handle.?, dev, formatOf(m).?, x.ptr, @intCast(n), @intCast(m.rows), @intCast(m.cols), y.ptr);
+    if (rc != 0)
+    {
         // Fall back to the CPU for the rest of the run rather than abort.
         std.log.err("gpu: matmul failed ({d}); using the CPU from here on", .{-rc});
         failed = true;
         return false;
     }
-    if (check) verify(m, x, n, y);
+    if (check)
+    {
+        verify(m, x, n, y);
+    }
+    return true;
+}
+
+/// Matmuls of one format on the same inputs with one copy in (q, k, and v).
+fn matmuls(mats: []const olmoe.Mat, x: []const f32, n: usize, ys: []const []f32) bool
+{
+    const most = 8;
+    if (failed or check or mats.len > most)
+    {
+        return false;
+    }
+    var dev: [most]u64 = undefined;
+    var rows: [most]c_int = undefined;
+    var outs: [most][*]f32 = undefined;
+    const format = formatOf(mats[0]) orelse return false;
+    for (mats, 0..) |m, i|
+    {
+        if (formatOf(m) != format or m.cols != mats[0].cols)
+        {
+            return false;
+        }
+        dev[i] = devAddr(m) orelse return false;
+        rows[i] = @intCast(m.rows);
+        outs[i] = ys[i].ptr;
+    }
+    const rc = tf_gpu_matmuls(handle.?, @intCast(mats.len), &dev, format, &rows, x.ptr, @intCast(n), @intCast(mats[0].cols), &outs);
+    if (rc != 0)
+    {
+        std.log.err("gpu: matmuls failed ({d}); using the CPU from here on", .{-rc});
+        failed = true;
+        return false;
+    }
     return true;
 }
 

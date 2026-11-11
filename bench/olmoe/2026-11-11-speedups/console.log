@@ -1,0 +1,61 @@
+== attention kernels
+attbench: 32 query heads, 4 KV heads, 2048 new tokens, 2 reps
+  0 cached: first 21.5 ms (1.60 TFLOPS), wide 5.1 ms (6.77 TFLOPS), tensor cores 3.1 ms (11.20 TFLOPS); wide differs from first by 1.79e-7, tensor cores from wide by 6.71e-7
+  16384 cached: first 346.6 ms (1.69 TFLOPS), wide 74.2 ms (7.87 TFLOPS), tensor cores 42.3 ms (13.82 TFLOPS); wide differs from first by 6.61e-8, tensor cores from wide by 1.64e-6
+  65536 cached: first 1373.2 ms (1.63 TFLOPS), wide 286.4 ms (7.80 TFLOPS), tensor cores 164.2 ms (13.61 TFLOPS); wide differs from first by 5.03e-8, tensor cores from wide by 2.49e-6
+  129024 cached: first 2804.9 ms (1.56 TFLOPS), wide 633.2 ms (6.89 TFLOPS), tensor cores 357.7 ms (12.20 TFLOPS); wide differs from first by 4.05e-8, tensor cores from wide by 3.56e-6
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  16384 cached: first 1.0 ms (0.27 TFLOPS), wide 0.5 ms (0.49 TFLOPS), tensor cores 0.5 ms (0.57 TFLOPS); wide differs from first by 1.07e-8, tensor cores from wide by 3.59e-8
+  131071 cached: first 8.0 ms (0.27 TFLOPS), wide 3.6 ms (0.60 TFLOPS), tensor cores 3.4 ms (0.63 TFLOPS); wide differs from first by 4.42e-9, tensor cores from wide by 8.06e-8
+== golden checks, plain rope and YaRN 4
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical
+local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical
+local: PASS: every generated token matches transformers' generate(), logits within 1e-2
+== 16k, first matmul kernels and wide attention
+== 16k, new kernels
+== 16k, new kernels, offloaded
+== 16k, new matmul kernels with wide attention, against tensor cores
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 7.5 s, output 2.2 s, router 0.6 s, experts 7.9 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.1 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 21.9 s (749 tokens/s prefill); decode 0.061 s per token (16.49 tokens/s) over 7 steps from position 16384; resident memory 35872 MB
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache offloaded to NVMe: 2.13 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 7.6 s, output 3.2 s, router 0.7 s, experts 7.9 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.8 s, output 0.0 s, router 0.1 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 23.7 s (692 tokens/s prefill); decode 0.292 s per token (3.43 tokens/s) over 7 steps from position 16384; resident memory 34775 MB
+local: kv offload during decode: read 11.10 GB from NVMe at 5.49 GB/s (0.289 s per token), attention waited 0.232 s per token; over the whole run, read 13.4 GB and wrote 1.6 GB (2.62 GB/s)
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_s16.bin bit for bit
+local: prefill time: projections 9.9 s, QK norm and rope 0.8 s, attention 13.2 s, output 7.7 s, router 0.6 s, experts 40.2 s, LM head 0.0 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.1 s, experts 0.2 s, LM head 0.0 s
+local: time to first token 72.9 s (225 tokens/s prefill); decode 0.086 s per token (11.68 tokens/s) over 7 steps from position 16384; resident memory 35872 MB
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 13.2 s, output 2.2 s, router 0.6 s, experts 7.9 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.1 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 27.6 s (594 tokens/s prefill); decode 0.060 s per token (16.59 tokens/s) over 7 steps from position 16384; resident memory 35872 MB
+local: FAIL: generated tokens match, logits differ (by up to 8.52e-1) compared with /tmp/lh_s16.bin
+SHORT_DONE
+== 128k, all in RAM
+== 128k, middle offloaded to NVMe
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache offloaded to NVMe: 3.07 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill time: projections 19.8 s, QK norm and rope 6.6 s, attention 538.4 s, output 25.3 s, router 5.0 s, experts 63.1 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 113.1 s, output 0.1 s, router 0.3 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 670.0 s (196 tokens/s prefill); decode 3.682 s per token (0.27 tokens/s) over 31 steps from position 131040; resident memory 35717 MB
+local: kv offload during decode: read 747.96 GB from NVMe at 6.56 GB/s (3.676 s per token), attention waited 3.478 s per token; over the whole run, read 1459.2 GB and wrote 24.1 GB (2.83 GB/s)
+local: PASS: all 32 generated tokens and their logits match /tmp/lh_long_ram.bin bit for bit
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --kv-offload kvtmp --compare /tmp/lh_long_ram.bin"
+	User time (seconds): 959.41
+	System time (seconds): 516.99
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:14.02
+	Maximum resident set size (kbytes): 35001516
+	Voluntary context switches: 2098732
+	Involuntary context switches: 14844
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill time: projections 20.7 s, QK norm and rope 6.1 s, attention 519.4 s, output 17.5 s, router 5.3 s, experts 63.5 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 5.2 s, output 0.1 s, router 0.3 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 636.1 s (206 tokens/s prefill); decode 0.203 s per token (4.94 tokens/s) over 31 steps from position 131040; resident memory 58417 MB
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --save /tmp/lh_long_ram.bin"
+	User time (seconds): 745.91
+	System time (seconds): 17.61
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 10:56.13
+	Maximum resident set size (kbytes): 57169324
+	Voluntary context switches: 420129
+	Involuntary context switches: 9980
+LONG_DONE

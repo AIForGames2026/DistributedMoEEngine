@@ -1,0 +1,25 @@
+== attention kernels
+attbench: 32 query heads, 4 KV heads, 2048 new tokens, 2 reps
+  16384 cached: first 349.37 ms (1.67 TFLOPS, 0 GB/s, 6.6e-8 off wide); wide 75.81 ms (7.71 TFLOPS, 1 GB/s, 0.0e0 off wide); tensor cores 64 43.37 ms (13.47 TFLOPS, 2 GB/s, 1.6e-6 off wide); tensor cores 128 35.38 ms (16.51 TFLOPS, 2 GB/s, 1.6e-6 off wide);
+  129024 cached: first 2816.15 ms (1.55 TFLOPS, 0 GB/s, 4.1e-8 off wide); wide 637.95 ms (6.84 TFLOPS, 1 GB/s, 0.0e0 off wide); tensor cores 64 365.62 ms (11.94 TFLOPS, 1 GB/s, 3.6e-6 off wide); tensor cores 128 300.19 ms (14.54 TFLOPS, 2 GB/s, 3.6e-6 off wide);
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  16384 cached: first 1.00 ms (0.27 TFLOPS, 67 GB/s, 1.1e-8 off wide); wide 0.53 ms (0.50 TFLOPS, 126 GB/s, 0.0e0 off wide); tensor cores 64 0.47 ms (0.57 TFLOPS, 143 GB/s, 3.6e-8 off wide); tensor cores 128 0.46 ms (0.58 TFLOPS, 146 GB/s, 3.6e-8 off wide); decode 0.43 ms (0.63 TFLOPS, 157 GB/s, 8.8e-9 off wide);
+  131071 cached: first 8.00 ms (0.27 TFLOPS, 67 GB/s, 4.4e-9 off wide); wide 3.54 ms (0.61 TFLOPS, 152 GB/s, 0.0e0 off wide); tensor cores 64 3.43 ms (0.63 TFLOPS, 157 GB/s, 8.1e-8 off wide); tensor cores 128 3.38 ms (0.64 TFLOPS, 159 GB/s, 8.1e-8 off wide); decode 3.22 ms (0.67 TFLOPS, 167 GB/s, 9.1e-9 off wide);
+== golden checks
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical
+local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical
+local: PASS: every generated token matches transformers' generate(), logits within 1e-2
+== 16k
+== 16k drift: wide f32 kernel throughout, then the first f32 kernel and the default kernels against it
+local: time to first token 22.1 s (742 tokens/s prefill); decode 0.056 s per token (17.73 tokens/s) over 7 steps from position 16384; resident memory 35873 MB
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache offloaded to NVMe: 2.13 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: time to first token 23.8 s (687 tokens/s prefill); decode 0.278 s per token (3.59 tokens/s) over 7 steps from position 16384; resident memory 34775 MB
+local: kv offload during decode: read 11.10 GB from NVMe at 5.76 GB/s (0.275 s per token), attention waited 0.224 s per token; over the whole run, read 13.4 GB and wrote 1.6 GB (2.63 GB/s)
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_s16.bin bit for bit
+local: time to first token 22.2 s (737 tokens/s prefill); decode 0.057 s per token (17.69 tokens/s) over 7 steps from position 16384; resident memory 35873 MB
+local: FAIL: generated tokens match, logits differ (by up to 8.52e-1) compared with /tmp/lh_w16.bin
+local: time to first token 76.4 s (214 tokens/s prefill); decode 0.086 s per token (11.61 tokens/s) over 7 steps from position 16384; resident memory 35873 MB
+local: FAIL: generated tokens match, logits differ (by up to 2.02e-1) compared with /tmp/lh_w16.bin
+local: time to first token 27.8 s (589 tokens/s prefill); decode 0.061 s per token (16.36 tokens/s) over 7 steps from position 16384; resident memory 35873 MB
+SHORT_DONE
+== 128k, all in RAM

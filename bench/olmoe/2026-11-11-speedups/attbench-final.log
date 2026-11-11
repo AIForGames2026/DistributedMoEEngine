@@ -1,0 +1,6 @@
+attbench: 32 query heads, 4 KV heads, 2048 new tokens, 2 reps
+  16384 cached: first 349.37 ms (1.67 TFLOPS, 0 GB/s, 6.6e-8 off wide); wide 75.81 ms (7.71 TFLOPS, 1 GB/s, 0.0e0 off wide); tensor cores 64 43.37 ms (13.47 TFLOPS, 2 GB/s, 1.6e-6 off wide); tensor cores 128 35.38 ms (16.51 TFLOPS, 2 GB/s, 1.6e-6 off wide);
+  129024 cached: first 2816.15 ms (1.55 TFLOPS, 0 GB/s, 4.1e-8 off wide); wide 637.95 ms (6.84 TFLOPS, 1 GB/s, 0.0e0 off wide); tensor cores 64 365.62 ms (11.94 TFLOPS, 1 GB/s, 3.6e-6 off wide); tensor cores 128 300.19 ms (14.54 TFLOPS, 2 GB/s, 3.6e-6 off wide);
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  16384 cached: first 1.00 ms (0.27 TFLOPS, 67 GB/s, 1.1e-8 off wide); wide 0.53 ms (0.50 TFLOPS, 126 GB/s, 0.0e0 off wide); tensor cores 64 0.47 ms (0.57 TFLOPS, 143 GB/s, 3.6e-8 off wide); tensor cores 128 0.46 ms (0.58 TFLOPS, 146 GB/s, 3.6e-8 off wide); decode 0.43 ms (0.63 TFLOPS, 157 GB/s, 8.8e-9 off wide);
+  131071 cached: first 8.00 ms (0.27 TFLOPS, 67 GB/s, 4.4e-9 off wide); wide 3.54 ms (0.61 TFLOPS, 152 GB/s, 0.0e0 off wide); tensor cores 64 3.43 ms (0.63 TFLOPS, 157 GB/s, 8.1e-8 off wide); tensor cores 128 3.38 ms (0.64 TFLOPS, 159 GB/s, 8.1e-8 off wide); decode 3.22 ms (0.67 TFLOPS, 167 GB/s, 9.1e-9 off wide);

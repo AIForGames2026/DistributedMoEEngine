@@ -1,0 +1,8 @@
+attbench: 32 query heads, 4 KV heads, 2048 new tokens, 2 reps
+  0 cached: first 21.5 ms (1.60 TFLOPS), wide 5.1 ms (6.77 TFLOPS), tensor cores 3.1 ms (11.20 TFLOPS); wide differs from first by 1.79e-7, tensor cores from wide by 6.71e-7
+  16384 cached: first 346.6 ms (1.69 TFLOPS), wide 74.2 ms (7.87 TFLOPS), tensor cores 42.3 ms (13.82 TFLOPS); wide differs from first by 6.61e-8, tensor cores from wide by 1.64e-6
+  65536 cached: first 1373.2 ms (1.63 TFLOPS), wide 286.4 ms (7.80 TFLOPS), tensor cores 164.2 ms (13.61 TFLOPS); wide differs from first by 5.03e-8, tensor cores from wide by 2.49e-6
+  129024 cached: first 2804.9 ms (1.56 TFLOPS), wide 633.2 ms (6.89 TFLOPS), tensor cores 357.7 ms (12.20 TFLOPS); wide differs from first by 4.05e-8, tensor cores from wide by 3.56e-6
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  16384 cached: first 1.0 ms (0.27 TFLOPS), wide 0.5 ms (0.49 TFLOPS), tensor cores 0.5 ms (0.57 TFLOPS); wide differs from first by 1.07e-8, tensor cores from wide by 3.59e-8
+  131071 cached: first 8.0 ms (0.27 TFLOPS), wide 3.6 ms (0.60 TFLOPS), tensor cores 3.4 ms (0.63 TFLOPS); wide differs from first by 4.42e-9, tensor cores from wide by 8.06e-8

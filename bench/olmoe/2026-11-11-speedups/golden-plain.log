@@ -1,0 +1,6 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.85 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: prompt 0 (5 tokens, 72 ms): logits max err 2.80e-4, top-1 5/5, hidden max err 1.95e-3, experts chosen 1920/1920 same ok
+local: prompt 1 (17 tokens, 176 ms): logits max err 1.41e-4, top-1 17/17, hidden max err 1.83e-3, experts chosen 6528/6528 same ok
+local: prompt 2 (15 tokens, 214 ms): logits max err 9.44e-5, top-1 15/15, hidden max err 2.08e-3, experts chosen 5760/5760 same ok
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical

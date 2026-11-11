@@ -19,6 +19,7 @@ const std = @import("std");
 const quant = @import("quant.zig");
 const gguf = @import("gguf.zig");
 const loader = @import("loader.zig");
+const pool = @import("pool.zig");
 
 /// The two model families the engine runs.
 pub const Arch = enum {
@@ -131,6 +132,10 @@ pub const Config = struct {
 /// true, or returns false (unsupported format, say) to use the CPU path.
 pub var gpu_matmul: ?*const fn (m: Mat, x: []const f32, n: usize, y: []f32) bool = null;
 
+/// Set with a GPU: several matmuls on the same inputs in one call, ys[i] =
+/// mats[i] x, or false to run them one at a time.
+pub var gpu_matmuls: ?*const fn (mats: []const Mat, x: []const f32, n: usize, ys: []const []f32) bool = null;
+
 /// Set with a GPU (TASK-12): pins `buf` for kernels to read in place and
 /// returns its device address, or null to leave attention on the CPU.
 pub var gpu_register: ?*const fn (buf: []u8) ?u64 = null;
@@ -140,12 +145,17 @@ pub var gpu_unregister: ?*const fn (buf: []u8) void = null;
 /// on its own rows of `x`, and returns true, or false to use the CPU path.
 pub var gpu_experts: ?*const fn (job: ExpertJob) bool = null;
 
-/// Expert `experts[e]` takes rows `first[e]` to `first[e + 1] - 1` of `x`
-/// (rows x d_model) and writes the same rows of `y`.
+/// One layer's experts for `n` tokens with `k` calls each: batch row i is token src[i],
+/// and y[t] adds call j's batch row inv[t k + j] times w[t k + j], in order.
 pub const ExpertJob = struct {
     experts: []const Expert,
     first: []const u32,
+    src: []const u32,
+    inv: []const u32,
+    w: []const f32,
     x: []const f32,
+    n: usize,
+    k: usize,
     y: []f32,
 };
 
@@ -243,38 +253,18 @@ pub const Mat = struct {
     /// thread, so the result does not change.
     fn matmulParallel(self: Mat, x: []const f32, n: usize, y: []f32, threads: usize) void
     {
-        const Worker = struct {
-            fn run(m: Mat, xx: []const f32, nn: usize, yy: []f32, first: usize, end: usize) void
+        const Work = struct {
+            m: Mat,
+            x: []const f32,
+            n: usize,
+            y: []f32,
+            fn run(w: @This(), first: usize, end: usize) void
             {
                 var buf: [max_parallel_cols]f32 = undefined;
-                m.matmulRows(xx, nn, yy, &buf, first, end);
+                w.m.matmulRows(w.x, w.n, w.y, &buf, first, end);
             }
         };
-        var pool: [max_threads]?std.Thread = @splat(null);
-        const per = (self.rows + threads - 1) / threads;
-        var first: usize = per;
-        for (pool[1..threads]) |*t|
-        {
-            if (first >= self.rows)
-            {
-                break;
-            }
-            const end = @min(first + per, self.rows);
-            t.* = std.Thread.spawn(.{}, Worker.run, .{ self, x, n, y, first, end }) catch null;
-            if (t.* == null)
-            {
-                Worker.run(self, x, n, y, first, end);
-            }
-            first = end;
-        }
-        Worker.run(self, x, n, y, 0, @min(per, self.rows));
-        for (pool[1..threads]) |t|
-        {
-            if (t) |th|
-            {
-                th.join();
-            }
-        }
+        pool.parallelFor(threads, self.rows, Work{ .m = self, .x = x, .n = n, .y = y }, Work.run);
     }
 
     /// Rows `first` to `end` - 1 of y = W x.
@@ -311,7 +301,7 @@ pub const Mat = struct {
     }
 };
 
-const max_threads = 32;
+const max_threads = pool.max_threads;
 var thread_count = std.atomic.Value(usize).init(0);
 
 /// Threads for CPU matmuls: TF_THREADS, else the CPU count, at most 32.
@@ -357,19 +347,18 @@ pub fn rmsnorm(x: []const f32, w: []const f32, eps: f32, out: []f32) void {
 }
 
 /// QK norm in place on one token's projection `v`: over all of it (OLMoE)
-/// or over each head (Qwen3). `tmp` holds at least `v.len` values.
-fn qkNorm(cfg: Config, v: []f32, w: []const f32, tmp: []f32) void
+/// or over each head (Qwen3).
+fn qkNorm(cfg: Config, v: []f32, w: []const f32) void
 {
-    @memcpy(tmp[0..v.len], v);
     if (cfg.arch == .olmoe)
     {
-        rmsnorm(tmp[0..v.len], w, cfg.eps, v);
+        rmsnorm(v, w, cfg.eps, v);
         return;
     }
     var off: usize = 0;
     while (off < v.len) : (off += cfg.head_dim)
     {
-        rmsnorm(tmp[off..][0..cfg.head_dim], w, cfg.eps, v[off..][0..cfg.head_dim]);
+        rmsnorm(v[off..][0..cfg.head_dim], w, cfg.eps, v[off..][0..cfg.head_dim]);
     }
 }
 
@@ -431,11 +420,30 @@ pub const Rope = struct {
     /// pairs are (i, i + head_dim / 2), as in rotate_half.
     pub fn apply(self: *const Rope, x: []f32, heads: usize, head_dim: usize, pos: usize) void
     {
+        var cs: [max_half]f32 = undefined;
+        var sn: [max_half]f32 = undefined;
+        self.angles(pos, &cs, &sn);
+        self.applyAt(x, heads, head_dim, &cs, &sn);
+    }
+
+    /// The scaled cos and sin for position `pos`, `half` of each.
+    pub fn angles(self: *const Rope, pos: usize, cs: []f32, sn: []f32) void
+    {
         for (0..self.half) |i|
         {
             const angle = @as(f32, @floatFromInt(pos)) * self.inv_freq[i];
-            const cs = @cos(angle) * self.scale;
-            const sn = @sin(angle) * self.scale;
+            cs[i] = @cos(angle) * self.scale;
+            sn[i] = @sin(angle) * self.scale;
+        }
+    }
+
+    /// `apply` with the cos and sin from `angles`.
+    pub fn applyAt(self: *const Rope, x: []f32, heads: usize, head_dim: usize, cs_all: []const f32, sn_all: []const f32) void
+    {
+        for (0..self.half) |i|
+        {
+            const cs = cs_all[i];
+            const sn = sn_all[i];
             for (0..heads) |h|
             {
                 const v = x[h * head_dim ..];
@@ -459,7 +467,9 @@ pub const Expert = struct {
         if (gpu_experts) |run|
         {
             const first = [_]u32{ 0, 1 };
-            if (run(.{ .experts = &.{self}, .first = &first, .x = x[0..self.gate.cols], .y = out[0..self.down.rows] }))
+            const zero = [_]u32{0};
+            const one = [_]f32{1};
+            if (run(.{ .experts = &.{self}, .first = &first, .src = &zero, .inv = &zero, .w = &one, .x = x[0..self.gate.cols], .n = 1, .k = 1, .y = out[0..self.down.rows] }))
             {
                 return;
             }
@@ -862,6 +872,9 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const q = try a.alloc(f32, n * qd);
     const att = try a.alloc(f32, n * qd);
     const tmp = try a.alloc(f32, n * @max(d, qd));
+    // Cos and sin for each new position, shared by every layer.
+    const rope_cs = try a.alloc(f32, n * rope.half);
+    const rope_sn = try a.alloc(f32, n * rope.half);
     const scores = try a.alloc(f32, pos0 + n);
     const kn = try a.alloc(f32, n * kvd);
     const vn = try a.alloc(f32, n * kvd);
@@ -905,27 +918,23 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         p.predict_ns += nowNs() - t0;
     }
     const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.head_dim)));
+    // Loops over tokens split across threads in long passes; each token comes out the same.
+    const threads = if (n >= parallel_tokens) cpuThreads() else 1;
+    pool.parallelFor(threads, n, TokenLoops.Angles{ .rope = &rope, .pos0 = pos0, .cs = rope_cs, .sn = rope_sn }, TokenLoops.Angles.run);
     for (w.layers, 0..) |*l, li|
     {
         const layer_t0 = if (la != null) nowNs() else 0;
         var pt = nowNs();
-        for (0..n) |t|
+        pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.attn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
+        const fused = if (gpu_matmuls) |f| f(&.{ l.q, l.k, l.v }, x[0 .. n * d], n, &.{ q[0 .. n * qd], kn[0 .. n * kvd], vn[0 .. n * kvd] }) else false;
+        if (!fused)
         {
-            rmsnorm(h[t * d ..][0..d], l.attn_norm, cfg.eps, x[t * d ..][0..d]);
+            l.q.matmul(x, n, q, scratch);
+            l.k.matmul(x, n, kn, scratch);
+            l.v.matmul(x, n, vn, scratch);
         }
-        l.q.matmul(x, n, q, scratch);
-        l.k.matmul(x, n, kn, scratch);
-        l.v.matmul(x, n, vn, scratch);
         Profile.lap(&profile.projections, &pt);
-        for (0..n) |t|
-        {
-            const qt = q[t * qd ..][0..qd];
-            const kt = kn[t * kvd ..][0..kvd];
-            qkNorm(cfg, qt, l.q_norm, tmp);
-            qkNorm(cfg, kt, l.k_norm, tmp);
-            rope.apply(qt, cfg.heads, cfg.head_dim, pos0 + t);
-            rope.apply(kt, cfg.kv_heads, cfg.head_dim, pos0 + t);
-        }
+        pool.parallelFor(threads, n, TokenLoops.QkRope{ .cfg = cfg, .rope = &rope, .q = q, .k = kn, .q_norm = l.q_norm, .k_norm = l.k_norm, .cs = rope_cs, .sn = rope_sn }, TokenLoops.QkRope.run);
         cache.store(li, pos0, n, kn, vn);
         Profile.lap(&profile.qk_rope, &pt);
         const kc = cache.k;
@@ -1000,10 +1009,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         }
         Profile.lap(&profile.attention, &pt);
         l.o.matmul(att, n, tmp, scratch);
-        for (h, tmp[0 .. n * d]) |*hh, o|
-        {
-            hh.* += o;
-        }
+        pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
 
         if (la) |p|
         {
@@ -1015,46 +1021,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             p.predict_ns += nowNs() - t0;
         }
 
-        for (0..n) |t|
-        {
-            rmsnorm(h[t * d ..][0..d], l.ffn_norm, cfg.eps, x[t * d ..][0..d]);
-        }
+        pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.ffn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
         Profile.lap(&profile.output, &pt);
         l.router.matmul(x, n, probs, scratch);
-        for (0..n) |t|
-        {
-            const p = probs[t * cfg.experts ..][0..cfg.experts];
-            var mx: f32 = -std.math.inf(f32);
-            for (p) |pv|
-            {
-                mx = @max(mx, pv);
-            }
-            var sum: f32 = 0;
-            for (p) |*pv|
-            {
-                pv.* = @exp(pv.* - mx);
-                sum += pv.*;
-            }
-            for (p) |*pv|
-            {
-                pv.* /= sum;
-            }
-            topK(p, k, idx[t * k ..][0..k], wts[t * k ..][0..k]);
-            if (cfg.arch == .qwen3moe)
-            {
-                // Qwen3 renormalizes the chosen probabilities to sum to 1.
-                const wt = wts[t * k ..][0..k];
-                var s: f32 = 0;
-                for (wt) |v|
-                {
-                    s += v;
-                }
-                for (wt) |*v|
-                {
-                    v.* /= s;
-                }
-            }
-        }
+        pool.parallelFor(threads, n, TokenLoops.Route{ .cfg = cfg, .probs = probs, .idx = idx, .wts = wts }, TokenLoops.Route.run);
         if (la) |p|
         {
             scoreGuesses(p, guess, idx, li, n, k, kx, horizon, cfg.layers);
@@ -1063,10 +1033,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         @memset(tmp, 0);
         try moe.run(moe.ctx, li, x, n, idx, wts, tmp[0 .. n * d]);
         Profile.lap(&profile.experts, &pt);
-        for (h, tmp[0 .. n * d]) |*hh, o|
-        {
-            hh.* += o;
-        }
+        pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
         if (la) |p|
         {
             p.layer_ns += nowNs() - layer_t0;
@@ -1087,10 +1054,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     defer Profile.lap(&profile.head, &head_t);
     if (all_logits)
     {
-        for (0..n) |t|
-        {
-            rmsnorm(h[t * d ..][0..d], w.out_norm, cfg.eps, x[t * d ..][0..d]);
-        }
+        pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = w.out_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
         w.head.matmul(x, n, logits, scratch);
     }
     else
@@ -1099,6 +1063,130 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         w.head.matmul(x, 1, logits, scratch);
     }
 }
+
+/// From this many tokens on, `step` splits its loops over tokens across threads.
+pub var parallel_tokens: usize = 64;
+
+/// The per-token loops of `step`, as pieces for `pool.parallelFor`.
+const TokenLoops = struct {
+    const Angles = struct {
+        rope: *const Rope,
+        pos0: usize,
+        cs: []f32,
+        sn: []f32,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const half = self.rope.half;
+            for (first..end) |t|
+            {
+                self.rope.angles(self.pos0 + t, self.cs[t * half ..][0..half], self.sn[t * half ..][0..half]);
+            }
+        }
+    };
+
+    const Norm = struct {
+        h: []const f32,
+        x: []f32,
+        w: []const f32,
+        eps: f32,
+        d: usize,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            for (first..end) |t|
+            {
+                rmsnorm(self.h[t * self.d ..][0..self.d], self.w, self.eps, self.x[t * self.d ..][0..self.d]);
+            }
+        }
+    };
+
+    const QkRope = struct {
+        cfg: Config,
+        rope: *const Rope,
+        q: []f32,
+        k: []f32,
+        q_norm: []const f32,
+        k_norm: []const f32,
+        cs: []const f32,
+        sn: []const f32,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const cfg = self.cfg;
+            const qd = cfg.qDim();
+            const kvd = cfg.kvDim();
+            const half = self.rope.half;
+            for (first..end) |t|
+            {
+                const qt = self.q[t * qd ..][0..qd];
+                const kt = self.k[t * kvd ..][0..kvd];
+                const cs = self.cs[t * half ..][0..half];
+                const sn = self.sn[t * half ..][0..half];
+                qkNorm(cfg, qt, self.q_norm);
+                qkNorm(cfg, kt, self.k_norm);
+                self.rope.applyAt(qt, cfg.heads, cfg.head_dim, cs, sn);
+                self.rope.applyAt(kt, cfg.kv_heads, cfg.head_dim, cs, sn);
+            }
+        }
+    };
+
+    const Add = struct {
+        h: []f32,
+        y: []const f32,
+        d: usize,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            for (self.h[first * self.d .. end * self.d], self.y[first * self.d .. end * self.d]) |*hh, o|
+            {
+                hh.* += o;
+            }
+        }
+    };
+
+    const Route = struct {
+        cfg: Config,
+        probs: []f32,
+        idx: []u32,
+        wts: []f32,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const cfg = self.cfg;
+            const k = cfg.top_k;
+            for (first..end) |t|
+            {
+                const p = self.probs[t * cfg.experts ..][0..cfg.experts];
+                var mx: f32 = -std.math.inf(f32);
+                for (p) |pv|
+                {
+                    mx = @max(mx, pv);
+                }
+                var sum: f32 = 0;
+                for (p) |*pv|
+                {
+                    pv.* = @exp(pv.* - mx);
+                    sum += pv.*;
+                }
+                for (p) |*pv|
+                {
+                    pv.* /= sum;
+                }
+                topK(p, k, self.idx[t * k ..][0..k], self.wts[t * k ..][0..k]);
+                if (cfg.arch == .qwen3moe)
+                {
+                    // Qwen3 renormalizes the chosen probabilities to sum to 1.
+                    const wt = self.wts[t * k ..][0..k];
+                    var s: f32 = 0;
+                    for (wt) |v|
+                    {
+                        s += v;
+                    }
+                    for (wt) |*v|
+                    {
+                        v.* /= s;
+                    }
+                }
+            }
+        }
+    };
+};
 
 /// One forward pass's lookahead guesses (n x kx experts per horizon and target).
 const Guesser = struct {
@@ -1339,7 +1427,7 @@ pub const LocalExperts = struct {
         const self: *LocalExperts = @ptrCast(@alignCast(ctx));
         const d = self.cfg.d_model;
         const k = self.cfg.top_k;
-        if (n >= self.batch_min)
+        if (n >= self.batch_min or gpu_experts != null)
         {
             return self.runBatched(layer, x, n, idx, w, out);
         }
@@ -1360,66 +1448,116 @@ pub const LocalExperts = struct {
         const d = self.cfg.d_model;
         const f = self.cfg.d_ff;
         const k = self.cfg.top_k;
+        const ne = self.cfg.experts;
         const calls = n * k;
-        // Per call: its output; per expert's batch: inputs, gate, up, and outputs.
-        const need = 3 * calls * d + 2 * calls * f + calls;
+        if (ne > max_group)
+        {
+            return error.TooManyExperts;
+        }
+        // Call order, batch row of each call, then the CPU path's inputs, gate, up, and outputs.
+        const small = 2 * calls + n * d;
+        const need = small + if (gpu_experts != null) 0 else 3 * calls * d + 2 * calls * f;
         if (self.batch.len < need)
         {
             if (self.batch.len > 0)
             {
                 std.heap.page_allocator.free(self.batch);
             }
+            self.batch = &.{};
             self.batch = try std.heap.page_allocator.alloc(f32, need);
         }
-        const contrib = self.batch[0 .. calls * d];
-        const xb = self.batch[calls * d ..][0 .. calls * d];
-        const gb = self.batch[2 * calls * d ..][0 .. calls * f];
-        const ub = self.batch[2 * calls * d + calls * f ..][0 .. calls * f];
-        const yb = self.batch[2 * calls * d + 2 * calls * f ..][0 .. calls * d];
-        const order: []u32 = @ptrCast(self.batch[3 * calls * d + 2 * calls * f ..][0..calls]);
-        // Calls grouped by expert, each group in call order, inputs gathered to match.
+        const order: []u32 = @ptrCast(self.batch[0..calls]);
+        const inv: []u32 = @ptrCast(self.batch[calls..][0..calls]);
+        const sum = self.batch[2 * calls ..][0 .. n * d];
+        // Calls grouped by expert, each group in call order.
+        var count: [max_group + 1]u32 = @splat(0);
+        for (idx[0..calls]) |e|
+        {
+            if (e >= ne)
+            {
+                return error.BadExpert;
+            }
+            count[e + 1] += 1;
+        }
+        for (1..ne + 1) |e|
+        {
+            count[e] += count[e - 1];
+        }
+        var fill: [max_group]u32 = undefined;
+        @memcpy(fill[0..ne], count[0..ne]);
+        for (idx[0..calls], 0..) |e, c|
+        {
+            order[fill[e]] = @intCast(c);
+            inv[c] = fill[e];
+            fill[e] += 1;
+        }
         var used: [max_group]Expert = undefined;
         var starts: [max_group + 1]u32 = undefined;
         var groups: usize = 0;
-        var filled: usize = 0;
-        for (0..self.cfg.experts) |e|
+        for (0..ne) |e|
         {
-            const first = filled;
-            for (idx[0..calls], 0..) |ce, c|
-            {
-                if (ce == e)
-                {
-                    order[filled] = @intCast(c);
-                    @memcpy(xb[filled * d ..][0..d], x[(c / k) * d ..][0..d]);
-                    filled += 1;
-                }
-            }
-            if (filled == first)
+            if (count[e + 1] == count[e])
             {
                 continue;
             }
             used[groups] = self.get(layer, e) orelse return error.ExpertNotLocal;
-            starts[groups] = @intCast(first);
+            starts[groups] = count[e];
             groups += 1;
         }
-        starts[groups] = @intCast(filled);
-        const on_gpu = if (gpu_experts) |run| run(.{ .experts = used[0..groups], .first = starts[0 .. groups + 1], .x = xb[0 .. filled * d], .y = yb[0 .. filled * d] }) else false;
-        if (!on_gpu)
+        starts[groups] = @intCast(calls);
+        if (gpu_experts) |run|
         {
-            for (used[0..groups], 0..) |ex, gi|
+            // Batch row i is token order[i] / k: reuse `order` once it holds tokens.
+            for (order) |*c|
             {
-                const first = starts[gi];
-                const count = starts[gi + 1] - first;
-                ex.gate.matmul(xb[first * d ..], count, gb, self.scratch);
-                ex.up.matmul(xb[first * d ..], count, ub, self.scratch);
-                for (gb[0 .. count * f], ub[0 .. count * f]) |*a, b|
+                c.* /= @intCast(k);
+            }
+            if (run(.{ .experts = used[0..groups], .first = starts[0 .. groups + 1], .src = order, .inv = inv, .w = w[0..calls], .x = x[0 .. n * d], .n = n, .k = k, .y = sum }))
+            {
+                for (out[0 .. n * d], sum) |*o, v|
                 {
-                    a.* = silu(a.*) * b;
+                    o.* += v;
                 }
-                ex.down.matmul(gb, count, yb[first * d ..], self.scratch);
+                return;
+            }
+            for (inv, 0..) |r, c|
+            {
+                order[r] = @intCast(c);
             }
         }
-        for (order[0..filled], 0..) |c, i|
+        // Without a GPU the batch has room for the CPU path; after a GPU failure it is borrowed.
+        const cpu_need = 3 * calls * d + 2 * calls * f;
+        const borrowed = if (self.batch.len < small + cpu_need) try std.heap.page_allocator.alloc(f32, cpu_need) else @as([]f32, &.{});
+        defer
+        {
+            if (borrowed.len > 0)
+            {
+                std.heap.page_allocator.free(borrowed);
+            }
+        }
+        const rest = if (borrowed.len > 0) borrowed else self.batch[small..];
+        const xb = rest[0 .. calls * d];
+        const gb = rest[calls * d ..][0 .. calls * f];
+        const ub = rest[calls * d + calls * f ..][0 .. calls * f];
+        const yb = rest[calls * d + 2 * calls * f ..][0 .. calls * d];
+        const contrib = rest[2 * calls * d + 2 * calls * f ..][0 .. calls * d];
+        for (order, 0..) |c, i|
+        {
+            @memcpy(xb[i * d ..][0..d], x[(c / k) * d ..][0..d]);
+        }
+        for (used[0..groups], 0..) |ex, gi|
+        {
+            const first = starts[gi];
+            const cnt = starts[gi + 1] - first;
+            ex.gate.matmul(xb[first * d ..], cnt, gb, self.scratch);
+            ex.up.matmul(xb[first * d ..], cnt, ub, self.scratch);
+            for (gb[0 .. cnt * f], ub[0 .. cnt * f]) |*a, b|
+            {
+                a.* = silu(a.*) * b;
+            }
+            ex.down.matmul(gb, cnt, yb[first * d ..], self.scratch);
+        }
+        for (order, 0..) |c, i|
         {
             @memcpy(contrib[c * d ..][0..d], yb[i * d ..][0..d]);
         }
@@ -1436,6 +1574,10 @@ pub const LocalExperts = struct {
         }
     }
 };
+
+test {
+    _ = pool;
+}
 
 test "tiny OLMoE matches transformers (tools/ref/ref_olmoe.py --tiny)" {
     const tfref = @import("tfref.zig");

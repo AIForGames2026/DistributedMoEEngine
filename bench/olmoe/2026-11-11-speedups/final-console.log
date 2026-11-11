@@ -1,0 +1,42 @@
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical
+local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical
+local: PASS: every generated token matches transformers' generate(), logits within 1e-2
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 13.5 s, output 2.2 s, router 0.6 s, experts 8.0 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.1 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 28.0 s (585 tokens/s prefill); decode 0.062 s per token (16.18 tokens/s) over 7 steps from position 16384; resident memory 35873 MB
+local: FAIL: generated tokens match, logits differ (by up to 8.52e-1) compared with /tmp/lh_s16.bin
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 6.6 s, output 2.2 s, router 0.6 s, experts 8.0 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.1 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 21.0 s (781 tokens/s prefill); decode 0.057 s per token (17.70 tokens/s) over 7 steps from position 16384; resident memory 35873 MB
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache offloaded to NVMe: 2.13 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 6.6 s, output 3.2 s, router 0.6 s, experts 7.9 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.8 s, output 0.0 s, router 0.1 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 22.7 s (722 tokens/s prefill); decode 0.291 s per token (3.43 tokens/s) over 7 steps from position 16384; resident memory 34775 MB
+local: kv offload during decode: read 11.10 GB from NVMe at 5.50 GB/s (0.288 s per token), attention waited 0.237 s per token; over the whole run, read 13.4 GB and wrote 1.6 GB (2.59 GB/s)
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_s16.bin bit for bit
+SHORT_DONE
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache offloaded to NVMe: 3.07 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill time: projections 19.8 s, QK norm and rope 6.6 s, attention 441.8 s, output 25.4 s, router 4.9 s, experts 63.4 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 115.4 s, output 0.1 s, router 0.4 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 574.0 s (228 tokens/s prefill); decode 3.756 s per token (0.27 tokens/s) over 31 steps from position 131040; resident memory 35717 MB
+local: kv offload during decode: read 747.96 GB from NVMe at 6.43 GB/s (3.750 s per token), attention waited 3.574 s per token; over the whole run, read 1459.2 GB and wrote 24.1 GB (2.72 GB/s)
+local: PASS: all 32 generated tokens and their logits match /tmp/lh_long_ram.bin bit for bit
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --kv-offload kvtmp --compare /tmp/lh_long_ram.bin"
+	User time (seconds): 849.30
+	System time (seconds): 431.76
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:40.43
+	Maximum resident set size (kbytes): 35001984
+	Voluntary context switches: 2099688
+	Involuntary context switches: 13195
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill time: projections 20.7 s, QK norm and rope 6.0 s, attention 423.4 s, output 17.5 s, router 5.1 s, experts 63.9 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 4.8 s, output 0.1 s, router 0.4 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 540.1 s (243 tokens/s prefill); decode 0.191 s per token (5.23 tokens/s) over 31 steps from position 131040; resident memory 58418 MB
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --save /tmp/lh_long_ram.bin"
+	User time (seconds): 650.87
+	System time (seconds): 16.39
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 9:20.15
+	Maximum resident set size (kbytes): 57169644
+	Voluntary context switches: 422945
+	Involuntary context switches: 8119
+FINAL_DONE

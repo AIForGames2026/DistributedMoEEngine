@@ -1,0 +1,39 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.84 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.84 s)
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill 14336 of 131040 positions, 18.3 s
+local: prefill 26624 of 131040 positions, 44.4 s
+local: prefill 40960 of 131040 positions, 86.5 s
+local: prefill 53248 of 131040 positions, 132.4 s
+local: prefill 65536 of 131040 positions, 187.4 s
+local: prefill 79872 of 131040 positions, 263.1 s
+local: prefill 92160 of 131040 positions, 337.9 s
+local: prefill 106496 of 131040 positions, 436.7 s
+local: prefill 118784 of 131040 positions, 531.6 s
+local: prefill time: projections 20.7 s, QK norm and rope 6.1 s, attention 519.4 s, output 17.5 s, router 5.3 s, experts 63.5 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 5.2 s, output 0.1 s, router 0.3 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 636.1 s (206 tokens/s prefill); decode 0.203 s per token (4.94 tokens/s) over 31 steps from position 131040; resident memory 58417 MB
+local: saved 32 tokens and their logits to /tmp/lh_long_ram.bin
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --save /tmp/lh_long_ram.bin"
+	User time (seconds): 745.91
+	System time (seconds): 17.61
+	Percent of CPU this job got: 116%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 10:56.13
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 57169324
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 71520100
+	Voluntary context switches: 420129
+	Involuntary context switches: 9980
+	Swaps: 0
+	File system inputs: 63433520
+	File system outputs: 38072
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

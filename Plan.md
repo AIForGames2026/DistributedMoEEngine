@@ -232,10 +232,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-13] Compressed Expert Streaming (nvCOMP, Hardware DE Only If Present)
 - **Milestone**: Beta (Nov 22)
-- **Status**: Backlog
+- **Status**: Backlog (`cut`, Nov 11)
 - **Priority**: `could` | **Area**: `code` | **Tag**: `cut-1`
 - **Description**: Store experts losslessly compressed on NVMe and decompress them into CUDA-accessible memory before the FP4 kernel consumes them. Use the hardware Decompression Engine only if TASK-05 finds it on GB10 (NVIDIA documents it for B200/B300/GB200/GB300, not GB10), selecting `NVCOMP_DECOMPRESS_BACKEND_HARDWARE` so incompatible buffers fail instead of silently falling back. Otherwise use SM-based nvCOMP. The pipeline ends in device memory buffers; there is no documented NVMe to DE to TMEM path.
 - **Acceptance Criteria**: Done when the four-way benchmark (NVMe only, GEMM only, NVMe + GEMM, NVMe + decompress + GEMM) is recorded on real NVFP4 expert weights with compression ratio, compressed-input and output GB/s, GEMM slowdown, and end-to-end expert-ready latency, and compression is enabled by default only if it improves expert-ready latency by at least 10% over raw reads.
+- **Cut (Nov 11)**: measured first, and it cannot pass its own 10% bar. On OLMoE's real Q8_0 experts (53.5 MB sampled from all 48 expert tensors), the 8-bit values carry 7.68 of 8 bits, so the best any per-byte coder (nvCOMP's ANS included) can reach is 1.066x; lzma gets 1.056x. NVFP4 made from the same weights reaches at best 1.090x (lzma 1.072x). Even with free, fully overlapped decompression that saves at most 6.2% (Q8_0) or 8.3% (NVFP4) of expert read time, and only when experts stream from the drive (`--cache N`); GB10 has no hardware Decompression Engine. Listed as future work in TASK-19. See `bench/storage/2026-11-11-compression.md`.
 
 #### [TASK-22] CPU-Only Expert Nodes
 - **Milestone**: Beta (Nov 22)
@@ -374,7 +375,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 | Cut | Tag | Name | Tasks dropped | Trigger |
 |---|---|---|---|---|
-| **First cut** | `cut-1` | **Stretch** | 12, 13, 15b, 16b, 22 | Alpha (`v0.2.0-alpha`) not tagged by Tue Nov 10 (not triggered: tagged Nov 10). TASK-15b alone drops if neither `gx10-01` nor `gx10-02` is free by Sun Nov 22. |
+| **First cut** | `cut-1` | **Stretch** | 12, 13, 15b, 16b, 22 | Alpha (`v0.2.0-alpha`) not tagged by Tue Nov 10 (not triggered: tagged Nov 10). TASK-13 alone was cut Nov 11, because measured compression ratios cannot meet its 10% bar. TASK-15b alone drops if neither `gx10-01` nor `gx10-02` is free by Sun Nov 22. |
 | **Second cut** | `cut-2` | **Speculation & Swarm** | 09, 11, 14, 17 (engine runs with resident experts and a static manifest) | TASK-11 not in `Review` by Wed Nov 18 |
 | **Emergency** | (none) | **TCP Floor** | Replace TASK-07 RDMA with the TASK-02 shared-memory and TCP backends for all later tasks; report those numbers as such | RDMA loopback on `gx10-03` not passing by Wed Nov 4 |
 
@@ -390,7 +391,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13, TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-28, TASK-29 |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-28, TASK-29 |
 | **To Do** | (none) |
 | **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
 | **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`) |

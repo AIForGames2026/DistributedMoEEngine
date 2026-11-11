@@ -1,0 +1,12 @@
+Python 3.12.3
+48 Q8_0 expert tensors, for example blk.0.ffn_down_exps.weight (1024, 2048, 64)
+Q8_0 sample: 53.5 MB
+  8-bit values: 7.683 bits of 8; f16 scales: low byte 6.87, high byte 2.36 bits of 8
+  best order-0 ratio 1.066; zlib -9 1.036; lzma 1.029; lzma on split values and scales 1.056
+NVFP4 from the same weights: 786432 values
+  4-bit codes: 3.899 bits of 4; E4M3 scales: 3.698 bits of 8
+  best order-0 ratio 1.090; lzma on split codes and scales 1.072
+
+real	0m43.543s
+user	0m42.977s
+sys	0m0.521s

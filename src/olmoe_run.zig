@@ -61,6 +61,7 @@ const Want = @import("expert_cache.zig").Want;
 const CacheSource = @import("expert_cache.zig").Source;
 const tracker = @import("tracker.zig");
 const kv_tier = @import("kv_tier.zig");
+const prefix_cache = @import("prefix_cache.zig");
 const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
@@ -110,6 +111,7 @@ const Options = struct {
     tokens: ?[]const u8 = null,
     kv_offload: ?[]const u8 = null,
     kv_window: usize = 8192,
+    prefix_cache: ?[]const u8 = null,
     save: ?[]const u8 = null,
     compare: ?[]const u8 = null,
     swarm: ?*const Swarm = null,
@@ -255,6 +257,8 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.kv_offload = value;
         } else if (std.mem.eql(u8, arg, "--kv-window")) {
             opts.kv_window = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--prefix-cache")) {
+            opts.prefix_cache = value;
         } else if (std.mem.eql(u8, arg, "--save")) {
             opts.save = value;
         } else if (std.mem.eql(u8, arg, "--compare")) {
@@ -1373,6 +1377,8 @@ fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.
 /// decode speed, and the memory the KV cache holds; `--kv-offload DIR` keeps
 /// the cold middle on NVMe. `--save F` writes the generated tokens and their
 /// logits, and `--compare F` checks a run against them bit for bit.
+/// `--prefix-cache DIR` (TASK-28) restores the longest saved prefix of the
+/// prompt from DIR and saves the prompt's cache there after prefill.
 fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts: Options, name: []const u8) !void
 {
     const cfg = w.cfg;
@@ -1416,10 +1422,47 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
         name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
     });
 
+    var key: ?prefix_cache.Key = null;
+    var fp_buf: [1024]u8 = undefined;
+    if (opts.prefix_cache) |dir|
+    {
+        if (tier != null)
+        {
+            std.debug.print("{s}: --prefix-cache needs the in-memory KV cache, not --kv-offload\n", .{name});
+            return error.Usage;
+        }
+        key = .{ .dir = dir, .fingerprint = try fingerprint(&fp_buf, opts), .cfg = cfg, .chunk = opts.chunk };
+    }
+
     const logits = try gpa.alloc(f32, cfg.vocab);
     defer gpa.free(logits);
     const t0 = mf.nowNs();
     var pos: usize = 0;
+    var full = false;
+    if (key) |k|
+    {
+        if (try prefix_cache.find(gpa, k, tokens)) |m|
+        {
+            const tr = try prefix_cache.restore(k, m, &cache, logits);
+            pos = m.positions;
+            full = m.full;
+            std.debug.print("{s}: prefix cache: restored {d} of {d} positions{s} from {s} ({d} saved): {d:.2} GB in {d:.2} s ({d:.2} GB/s)\n", .{
+                name,
+                m.positions,
+                n,
+                if (m.full) " and the last logits" else "",
+                m.fileName(),
+                m.saved,
+                @as(f64, @floatFromInt(tr.bytes)) / 1e9,
+                @as(f64, @floatFromInt(tr.ns)) / 1e9,
+                @as(f64, @floatFromInt(tr.bytes)) / @max(@as(f64, @floatFromInt(tr.ns)), 1),
+            });
+        }
+        else
+        {
+            std.debug.print("{s}: prefix cache: no saved prefix shares a whole chunk with this prompt\n", .{name});
+        }
+    }
     var next_report: usize = n / 10;
     while (pos < n)
     {
@@ -1435,6 +1478,21 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     const ttft = mf.nowNs() - t0;
     reportProfile(name, "prefill");
     olmoe.profile = .{};
+    if (key) |k|
+    {
+        if (!full)
+        {
+            const s = try prefix_cache.save(k, tokens, &cache, logits);
+            std.debug.print("{s}: prefix cache: saved {d} positions to {s}: {d:.2} GB in {d:.2} s ({d:.2} GB/s)\n", .{
+                name,
+                n,
+                s.fileName(),
+                @as(f64, @floatFromInt(s.transfer.bytes)) / 1e9,
+                @as(f64, @floatFromInt(s.transfer.ns)) / 1e9,
+                @as(f64, @floatFromInt(s.transfer.bytes)) / @max(@as(f64, @floatFromInt(s.transfer.ns)), 1),
+            });
+        }
+    }
     const out_tokens = try gpa.alloc(u32, opts.generate);
     defer gpa.free(out_tokens);
     const out_logits = try gpa.alloc(f32, opts.generate * cfg.vocab);
@@ -1519,6 +1577,26 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
         }
         std.debug.print("{s}: PASS: all {d} generated tokens and their logits match {s} bit for bit\n", .{ name, opts.generate, path });
     }
+}
+
+/// Everything besides the tokens that decides a saved prefix's bits (TASK-28).
+fn fingerprint(buf: []u8, opts: Options) ![]const u8
+{
+    var path_buf: [512]u8 = undefined;
+    const path = try zPrint(&path_buf, "{s}", .{opts.model});
+    const fd = c.open(path, .{ .ACCMODE = .RDONLY }, @as(c.mode_t, 0));
+    if (fd < 0)
+    {
+        return error.ModelNotFound;
+    }
+    const size = c.lseek(fd, 0, c.SEEK.END);
+    _ = c.close(fd);
+    const att = if (c.getenv("TF_ATT_KERNEL")) |v| std.mem.sliceTo(v, 0) else "0";
+    const mm = if (c.getenv("TF_MM_KERNEL")) |v| std.mem.sliceTo(v, 0) else "0";
+    const base = if (std.mem.lastIndexOfScalar(u8, opts.model, '/')) |i| opts.model[i + 1 ..] else opts.model;
+    return std.fmt.bufPrint(buf, "engine {s}; model {s} ({d} bytes); yarn {d}; gpu {}; TF_ATT_KERNEL {s}; TF_MM_KERNEL {s}", .{
+        build_options.engine_build, base, size, yarn_factor, opts.gpu, att, mm,
+    });
 }
 
 /// Where `olmoe.step`'s time went, in seconds.

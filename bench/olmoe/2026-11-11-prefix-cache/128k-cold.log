@@ -1,0 +1,41 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.87 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.84 s)
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefix cache: no saved prefix shares a whole chunk with this prompt
+local: prefill 14336 of 131040 positions, 14.4 s
+local: prefill 26624 of 131040 positions, 34.8 s
+local: prefill 40960 of 131040 positions, 67.8 s
+local: prefill 53248 of 131040 positions, 104.0 s
+local: prefill 65536 of 131040 positions, 147.6 s
+local: prefill 79872 of 131040 positions, 207.9 s
+local: prefill 92160 of 131040 positions, 267.6 s
+local: prefill 106496 of 131040 positions, 347.2 s
+local: prefill 118784 of 131040 positions, 423.9 s
+local: prefill time: projections 15.3 s, QK norm and rope 6.0 s, attention 421.2 s, output 13.7 s, router 5.1 s, experts 44.6 s, LM head 0.1 s
+local: prefix cache: saved 131040 positions to 3cf072c4e246acab.tfpx: 25.76 GB in 4.40 s (5.85 GB/s)
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 4.8 s, output 0.1 s, router 0.1 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 509.7 s (257 tokens/s prefill); decode 0.181 s per token (5.54 tokens/s) over 31 steps from position 131040; resident memory 58420 MB
+local: saved 32 tokens and their logits to /tmp/lh_p128.bin
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --prefix-cache /home/admin/lukehinojosa/prefixes --save /tmp/lh_p128.bin"
+	User time (seconds): 616.74
+	System time (seconds): 19.62
+	Percent of CPU this job got: 119%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 8:53.57
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 57171980
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 69618371
+	Voluntary context switches: 428993
+	Involuntary context switches: 7947
+	Swaps: 0
+	File system inputs: 63433912
+	File system outputs: 50359656
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

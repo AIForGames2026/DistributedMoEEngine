@@ -165,6 +165,11 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
     const olmoe_options = b.addOptions();
     olmoe_options.addOption(bool, "rdma", rdma);
     olmoe_options.addOption(bool, "gpu", gpu);
+    // The engine build, part of a saved prefix's fingerprint (TASK-28); git's, unless given.
+    var git_code: u8 = 0;
+    const engine_build = b.option([]const u8, "engine-build", "Engine build name for saved prefixes (default: git describe)") orelse
+        std.mem.trim(u8, b.runAllowFail(&.{ "git", "describe", "--always", "--dirty" }, &git_code, .ignore) catch "unknown", " \r\n");
+    olmoe_options.addOption([]const u8, "engine_build", engine_build);
     olmoe_mod.addOptions("build_options", olmoe_options);
     if (rdma) {
         olmoe_mod.addCSourceFile(.{ .file = b.path("csrc/tf_rdma.c"), .flags = &c_flags });

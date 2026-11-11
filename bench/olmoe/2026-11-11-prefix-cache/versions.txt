@@ -1,0 +1,3 @@
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, 0.17.0
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p2  916G  567G  302G  66% /

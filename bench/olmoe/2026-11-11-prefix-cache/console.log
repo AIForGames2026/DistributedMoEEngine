@@ -1,0 +1,35 @@
+== 16k-cold
+local: time to first token 17.1 s (955 tokens/s prefill); decode 0.046 s per token (21.80 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+== 12k-save
+local: prefix cache: no saved prefix shares a whole chunk with this prompt
+local: prefix cache: saved 12000 positions to 6ffa88aed6119c60.tfpx: 2.36 GB in 0.44 s (5.32 GB/s)
+local: time to first token 11.6 s (1032 tokens/s prefill); decode 0.040 s per token (24.79 tokens/s) over 7 steps from position 12000; resident memory 35013 MB
+== 16k-partial
+local: prefix cache: restored 10240 of 16384 positions from 6ffa88aed6119c60.tfpx (12000 saved): 2.01 GB in 0.35 s (5.75 GB/s)
+local: prefix cache: saved 16384 positions to 7e5f6bf7b898c65f.tfpx: 3.22 GB in 0.54 s (5.93 GB/s)
+local: time to first token 8.4 s (1944 tokens/s prefill); decode 0.046 s per token (21.96 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_p16.bin bit for bit
+== 16k-full
+local: prefix cache: restored 16384 of 16384 positions and the last logits from 7e5f6bf7b898c65f.tfpx (16384 saved): 3.22 GB in 0.53 s (6.03 GB/s)
+local: time to first token 0.6 s (29434 tokens/s prefill); decode 0.046 s per token (21.80 tokens/s) over 7 steps from position 16384; resident memory 35841 MB
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_p16.bin bit for bit
+== 12k-full
+local: prefix cache: restored 12000 of 12000 positions and the last logits from 6ffa88aed6119c60.tfpx (12000 saved): 2.36 GB in 0.40 s (5.90 GB/s)
+local: time to first token 0.4 s (29974 tokens/s prefill); decode 0.041 s per token (24.51 tokens/s) over 7 steps from position 12000; resident memory 34979 MB
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_p12.bin bit for bit
+== 16k-other-kernel
+local: prefix cache: no saved prefix shares a whole chunk with this prompt
+local: prefix cache: saved 16384 positions to 84b4925e58bcd257.tfpx: 3.22 GB in 0.54 s (6.00 GB/s)
+local: time to first token 20.9 s (782 tokens/s prefill); decode 0.046 s per token (21.78 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+SHORT_DONE
+== 128k-cold
+local: prefix cache: no saved prefix shares a whole chunk with this prompt
+local: prefix cache: saved 131040 positions to 3cf072c4e246acab.tfpx: 25.76 GB in 4.40 s (5.85 GB/s)
+local: time to first token 509.7 s (257 tokens/s prefill); decode 0.181 s per token (5.54 tokens/s) over 31 steps from position 131040; resident memory 58420 MB
+	Maximum resident set size (kbytes): 57171980
+== 128k-full
+local: prefix cache: restored 131040 of 131040 positions and the last logits from 3cf072c4e246acab.tfpx (131040 saved): 25.76 GB in 4.22 s (6.10 GB/s)
+local: time to first token 4.2 s (30999 tokens/s prefill); decode 0.181 s per token (5.53 tokens/s) over 31 steps from position 131040; resident memory 58398 MB
+local: PASS: all 32 generated tokens and their logits match /tmp/lh_p128.bin bit for bit
+	Maximum resident set size (kbytes): 57066512
+LONG_DONE

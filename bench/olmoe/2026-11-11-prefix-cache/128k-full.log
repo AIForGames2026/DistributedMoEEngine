@@ -1,0 +1,31 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.89 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefix cache: restored 131040 of 131040 positions and the last logits from 3cf072c4e246acab.tfpx (131040 saved): 25.76 GB in 4.22 s (6.10 GB/s)
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 4.8 s, output 0.1 s, router 0.1 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 4.2 s (30999 tokens/s prefill); decode 0.181 s per token (5.53 tokens/s) over 31 steps from position 131040; resident memory 58398 MB
+local: PASS: all 32 generated tokens and their logits match /tmp/lh_p128.bin bit for bit
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --prefix-cache /home/admin/lukehinojosa/prefixes --compare /tmp/lh_p128.bin"
+	User time (seconds): 7.22
+	System time (seconds): 7.54
+	Percent of CPU this job got: 62%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:23.78
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 57066512
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 28496434
+	Voluntary context switches: 54674
+	Involuntary context switches: 159
+	Swaps: 0
+	File system inputs: 113755440
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

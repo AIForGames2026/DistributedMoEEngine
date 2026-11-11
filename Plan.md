@@ -347,10 +347,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-28] Persistent Prefix KV Cache
 - **Milestone**: None (after v1)
-- **Status**: Backlog
+- **Status**: Review (built Nov 11, ahead of v1)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 10, from the same paper, which keeps every prompt's global KV on SSD for at least 72 hours so a repeated prefix skips prefill. Save the K and V of a prompt prefix to NVMe, keyed by a hash of its tokens, and read them back through the TASK-03 `io_uring` reader when a later prompt starts with the same tokens. OLMoE has no sliding-window cache, so unlike DeepSeek's bounded replay the restored cache is exact. Shares the NVMe paging code with TASK-12 if that task is built.
-- **Acceptance Criteria**: To be written when it is scheduled. Minimum: a prompt that reuses a cached prefix produces exactly the same tokens and logits as a cold run, with time to first token for both recorded in `bench/`.
+- **Acceptance Criteria**: Written when scheduled (Nov 11): a prompt that reuses a saved prefix, wholly and in part, produces exactly the same tokens and logits as a cold run, at 16k and at 128k on Qwen3-30B-A3B, with time to first token for both recorded in `bench/`.
+- **Results (Nov 11)**: acceptance met on `gx10-02` (Qwen3-30B-A3B, `--gpu --yarn 4`). `olmoe --context N --prefix-cache DIR` saves the prompt's KV cache, tokens, and last logits to a file after prefill (O_DIRECT, 5.9 GB/s) and restores the longest matching saved prefix through the io_uring reader (6.1 GB/s). Time to first token: 509.7 s cold against 4.2 s restored at 128k (25.8 GB read), and 17.1 s against 0.6 s at 16k. A 16k prompt sharing 12,000 tokens with a saved one took 8.4 s. Every restored run matched its cold run bit for bit (tokens and logits), because a partial match takes only whole chunks and keeps a cold run's chunk boundaries, and a file is used only when its fingerprint (engine build, model, settings that change rounding) matches. In-memory KV cache only for now. See `bench/olmoe/2026-11-11-prefix-cache.md`.
 
 #### [TASK-29] Qwen3.6-35B-A3B (Hybrid Linear Attention)
 - **Milestone**: None (after v1)
@@ -391,10 +392,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-28, TASK-29 |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-29 |
 | **To Do** | (none) |
 | **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |

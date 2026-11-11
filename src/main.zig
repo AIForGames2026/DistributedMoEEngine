@@ -79,6 +79,7 @@ test {
     if (@import("builtin").os.tag == .linux)
     {
         _ = @import("tracker.zig");
+        _ = @import("prefix_cache.zig");
     }
 }
 

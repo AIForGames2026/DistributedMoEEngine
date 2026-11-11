@@ -57,6 +57,10 @@ const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
         return error.NoGpuSupport;
     }
     fn map(_: []u8) !void {}
+    fn mapLive(_: []u8) !bool
+    {
+        return false;
+    }
     fn stop() void {}
 };
 

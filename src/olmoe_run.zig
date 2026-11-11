@@ -14,7 +14,10 @@
 //!          --minutes M (repeat generation for M minutes, checking memory),
 //!          --lookahead H (TASK-11: guess experts H layers ahead, 1 or 2, and
 //!          send rank 1 a prefetch hint for its share), --extra E (guesses
-//!          beyond top_k, default 2)
+//!          beyond top_k, default 2), --cache N (hold this process's
+//!          experts in N slots loaded from the file on hints and on demand,
+//!          instead of all at startup), --pin L (keep layers below L loaded;
+//!          default 1)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -43,6 +46,7 @@ const wire = @import("wire.zig");
 const transport = @import("transport.zig");
 const mf = @import("model_file.zig");
 const Arena = @import("arena.zig").Arena;
+const ExpertCache = @import("expert_cache.zig").ExpertCache;
 const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
@@ -73,6 +77,8 @@ const Options = struct {
     minutes: f64 = 0,
     lookahead: usize = 0,
     extra: usize = 2,
+    cache: usize = 0,
+    pin: usize = 1,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -84,7 +90,7 @@ pub fn main(init: std.process.Init) !void {
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
             \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
-            \\         --lookahead H  --extra E
+            \\         --lookahead H  --extra E  --cache N  --pin L
             \\
         , .{});
         std.process.exit(2);
@@ -94,16 +100,29 @@ pub fn main(init: std.process.Init) !void {
         var all: [max_experts]bool = @splat(true);
         if (opts.gpu) try gpu.open();
         defer if (opts.gpu) gpu.stop();
-        var l = try Loaded.init(gpa, opts.model, &all, true);
+        var l = try Loaded.init(gpa, opts.model, &all, true, opts.cache == 0);
         defer l.deinit(gpa);
         if (opts.gpu) try gpu.map(l.weightRegion());
+        var experts: Experts = .{ .local = &l.local };
+        const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &all, "local") else null;
+        defer if (box) |b| b.close(gpa);
+        if (box) |b|
+        {
+            experts.cache = b.cache;
+            phase_cache = b.cache;
+        }
         var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra };
-        var moe = l.local.moe();
+        var moe = if (box != null) experts.moe() else l.local.moe();
         if (opts.lookahead > 0)
         {
             moe.ahead = &la;
         }
-        return runGolden(gpa, &l.weights.?, moe, opts, "local");
+        const result = runGolden(gpa, &l.weights.?, moe, opts, "local");
+        if (box) |b|
+        {
+            reportCache("local", b.cache);
+        }
+        return result;
     }
     const is_rdma = std.mem.startsWith(u8, mode, "rdma");
     if (is_rdma and !build_options.rdma) {
@@ -167,6 +186,10 @@ fn parseArgs(init: std.process.Init) !Options {
             if (opts.lookahead > olmoe.Lookahead.max_horizon) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--extra")) {
             opts.extra = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--cache")) {
+            opts.cache = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--pin")) {
+            opts.pin = try std.fmt.parseInt(usize, value, 10);
         } else return error.Usage;
     }
     return opts;
@@ -209,7 +232,8 @@ const Loaded = struct {
     local: olmoe.LocalExperts,
     heap: std.heap.ArenaAllocator,
 
-    fn init(gpa: std.mem.Allocator, path: [:0]const u8, owned: []const bool, base: bool) !Loaded {
+    /// With `resident` false, the owned experts are left to an expert cache.
+    fn init(gpa: std.mem.Allocator, path: [:0]const u8, owned: []const bool, base: bool, resident: bool) !Loaded {
         const file = try mf.File.open(path);
         errdefer file.close();
         var state = try mf.openModel(gpa, file, null);
@@ -221,7 +245,7 @@ const Loaded = struct {
 
         var selected: std.ArrayList(loader.ExpertWeight) = .empty;
         defer selected.deinit(gpa);
-        for (m.weights) |w| if (owned[w.expert]) try selected.append(gpa, w);
+        for (m.weights) |w| if (resident and owned[w.expert]) try selected.append(gpa, w);
         var ranges: std.ArrayList(loader.Range) = .empty;
         defer ranges.deinit(gpa);
         if (base) {
@@ -252,15 +276,16 @@ const Loaded = struct {
 
         var owned_n: usize = 0;
         for (owned[0..cfg.experts]) |o| owned_n += @intFromBool(o);
-        std.debug.print("load: {s}{d} of {d} experts, {d:.2} GB in {d:.2} s, expert CRC32C OK\n", .{
-            if (base) "non-expert weights and " else "", owned_n, cfg.experts, @as(f64, @floatFromInt(plan.region_bytes)) / 1e9, @as(f64, @floatFromInt(t1 - t0)) / 1e9,
+        std.debug.print("load: {s}{d} of {d} experts{s}, {d:.2} GB in {d:.2} s, expert CRC32C OK\n", .{
+            if (base) "non-expert weights and " else "", owned_n, cfg.experts, if (resident) "" else " (through the expert cache)", @as(f64, @floatFromInt(plan.region_bytes)) / 1e9, @as(f64, @floatFromInt(t1 - t0)) / 1e9,
         });
 
         var heap: std.heap.ArenaAllocator = .init(gpa);
         errdefer heap.deinit();
         var weights: ?olmoe.Weights = if (base) try olmoe.Weights.init(gpa, h, cfg, plan, region) else null;
         errdefer if (weights) |*w| w.deinit();
-        const local = try olmoe.LocalExperts.init(heap.allocator(), cfg, m, owned, plan, region);
+        const none_owned: [max_experts]bool = @splat(false);
+        const local = try olmoe.LocalExperts.init(heap.allocator(), cfg, m, if (resident) owned else &none_owned, plan, region);
         return .{ .file = file, .state = state, .cfg = cfg, .plan = plan, .arena = arena, .weights = weights, .local = local, .heap = heap };
     }
 
@@ -290,10 +315,166 @@ fn ownedMask(gpa: std.mem.Allocator, opts: Options, rank: u8, owner: *[max_exper
     for (owned, 0..) |*o, e| o.* = e < experts and owner[e] == rank;
 }
 
+/// This process's experts: all loaded at startup, or held in an expert cache.
+const Experts = struct {
+    local: *olmoe.LocalExperts,
+    cache: ?*ExpertCache = null,
+
+    fn get(self: *Experts, layer: usize, expert: usize) !ExpertCache.Held
+    {
+        if (self.cache) |cache|
+        {
+            return cache.acquire(layer, expert);
+        }
+        return .{ .expert = self.local.get(layer, expert) orelse return error.ExpertNotLocal, .slot = 0 };
+    }
+
+    fn put(self: *Experts, h: ExpertCache.Held) void
+    {
+        if (self.cache) |cache|
+        {
+            cache.release(h);
+        }
+    }
+
+    fn hint(self: *Experts, layer: usize, expert: usize) void
+    {
+        if (self.cache) |cache|
+        {
+            cache.hint(layer, expert);
+        }
+    }
+
+    /// One process with every expert, through the cache.
+    fn moe(self: *Experts) olmoe.Moe
+    {
+        return .{ .ctx = self, .run = run, .prefetch = prefetch };
+    }
+
+    fn run(ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, w: []const f32, out: []f32) anyerror!void
+    {
+        const self: *Experts = @ptrCast(@alignCast(ctx));
+        const d = self.local.cfg.d_model;
+        const k = self.local.cfg.top_k;
+        for (0..n) |t|
+        {
+            for (0..k) |j|
+            {
+                const h = try self.get(layer, idx[t * k + j]);
+                h.expert.forward(x[t * d ..][0..d], self.local.out, self.local.scratch);
+                self.put(h);
+                for (out[t * d ..][0..d], self.local.out) |*o, y|
+                {
+                    o.* += w[t * k + j] * y;
+                }
+            }
+        }
+    }
+
+    fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
+    {
+        const self: *Experts = @ptrCast(@alignCast(ctx));
+        for (experts) |e|
+        {
+            self.hint(layer, e);
+        }
+    }
+};
+
+/// The expert cache's memory, file reader, and checksums (TASK-11).
+const CacheBox = struct {
+    arena: Arena,
+    source: mf.DirectSource,
+    index: loader.Index,
+    heap: std.heap.ArenaAllocator,
+    cache: *ExpertCache,
+
+    fn open(gpa: std.mem.Allocator, opts: Options, l: *Loaded, owned: []const bool, name: []const u8) !*CacheBox
+    {
+        const self = try gpa.create(CacheBox);
+        errdefer gpa.destroy(self);
+        const m = l.state.model;
+        const slot_bytes = try ExpertCache.slotBytes(m, mf.DirectSource.pad, mf.alignment);
+        self.arena = try Arena.init(slot_bytes * opts.cache);
+        errdefer self.arena.deinit();
+        const region = self.arena.buf[0 .. slot_bytes * opts.cache];
+        self.source = try mf.DirectSource.open(opts.model, l.file, region);
+        errdefer self.source.close();
+        const sum_path = try std.fmt.allocPrint(gpa, "{s}.tfsum", .{opts.model});
+        defer gpa.free(sum_path);
+        const sum_text = try mf.readWhole(gpa, sum_path);
+        defer gpa.free(sum_text);
+        self.index = try loader.Index.parse(gpa, sum_text);
+        errdefer self.index.deinit(gpa);
+        self.heap = .init(gpa);
+        errdefer self.heap.deinit();
+        const t0 = mf.nowNs();
+        self.cache = try ExpertCache.init(self.heap.allocator(), l.cfg, m, owned[0..l.cfg.experts], .{
+            .ctx = &self.source,
+            .read = mf.DirectSource.read,
+            .pad = mf.DirectSource.pad,
+            .alignment = mf.alignment,
+        }, &self.index, region, opts.pin);
+        const pinned = self.cache.stats.loads;
+        const on_gpu = opts.gpu and try gpu.mapLive(region);
+        try self.cache.start();
+        std.debug.print("{s}: expert cache: {d} slots ({d:.2} GB), {d} experts of layers below {d} loaded and kept in {d:.2} s; cached experts run on the {s}\n", .{
+            name, opts.cache, @as(f64, @floatFromInt(region.len)) / 1e9, pinned, opts.pin, @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9, if (on_gpu) "GPU" else "CPU",
+        });
+        return self;
+    }
+
+    fn close(self: *CacheBox, gpa: std.mem.Allocator) void
+    {
+        self.cache.deinit();
+        self.heap.deinit();
+        self.index.deinit(gpa);
+        self.source.close();
+        self.arena.deinit();
+        gpa.destroy(self);
+    }
+};
+
+/// Rank 0's expert cache, if any, so each phase can report and reset it.
+var phase_cache: ?*ExpertCache = null;
+
+fn reportCache(name: []const u8, cache: *ExpertCache) void
+{
+    const st = cache.stats;
+    if (st.calls() == 0)
+    {
+        // Already reported phase by phase.
+        return;
+    }
+    const calls = st.calls();
+    const p = struct {
+        fn f(a: u64, b: u64) f64
+        {
+            return @as(f64, @floatFromInt(a)) * 100 / @as(f64, @floatFromInt(b));
+        }
+    }.f;
+    std.debug.print("{s}: expert cache: {d} expert calls: {d:.1}% already loaded, {d:.1}% loaded by a hint in time, {d:.1}% hinted but still loading, {d:.1}% missed; {d:.1} ms waiting in all; {d} loads ({d} for hints, {d:.2} GB, {d:.2} ms each); {d} hinted experts evicted unused, {d} hints dropped\n", .{
+        name,
+        st.calls(),
+        p(st.resident, calls),
+        p(st.hinted, calls),
+        p(st.late, calls),
+        p(st.missed, calls),
+        @as(f64, @floatFromInt(st.wait_ns)) / 1e6,
+        st.loads,
+        st.hint_loads,
+        @as(f64, @floatFromInt(st.bytes)) / 1e9,
+        @as(f64, @floatFromInt(st.load_ns)) / @as(f64, @floatFromInt(@max(st.loads, 1))) / 1e6,
+        st.wasted,
+        st.dropped,
+    });
+}
+
 /// Rank 0's `Moe`: local experts in this process, the rest over `ep`.
 const SplitMoe = struct {
     ep: *transport.Endpoint,
     local: *olmoe.LocalExperts,
+    experts: *Experts,
     owner: []const u8,
     enc: wire.Encoding,
     /// One expert output per (token, choice), n x top_k x d_model.
@@ -325,6 +506,10 @@ const SplitMoe = struct {
             if (self.owner[e] != 0)
             {
                 try wire.addPrefetch(self.pkt, @intCast(e));
+            }
+            else
+            {
+                self.experts.hint(layer, e);
             }
         }
         try self.ep.send(self.pkt, .dispatch);
@@ -379,8 +564,9 @@ const SplitMoe = struct {
         // Local experts run while the peer works on the remote ones.
         for (0..n * k) |s| {
             if (self.owner[idx[s]] != 0) continue;
-            const ex = self.local.get(layer, idx[s]) orelse return error.ExpertNotLocal;
-            ex.forward(x[(s / k) * d ..][0..d], self.contrib[s * d ..][0..d], self.local.scratch);
+            const h = try self.experts.get(layer, idx[s]);
+            h.expert.forward(x[(s / k) * d ..][0..d], self.contrib[s * d ..][0..d], self.local.scratch);
+            self.experts.put(h);
             self.local_calls += 1;
         }
         while (got < sent) {
@@ -470,7 +656,8 @@ const HintLog = struct {
 };
 
 /// Rank 1: answers dispatches with its experts until rank 0 says goodbye.
-fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []const bool) !void {
+fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool) !void {
+    const local = experts.local;
     const cfg = local.cfg;
     const d = cfg.d_model;
     var hint_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
@@ -497,6 +684,10 @@ fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []co
         if (r.kind == .dispatch and wire.isPrefetch(hdr) and have == 0)
         {
             try hints.hint(r.packet, mf.nowNs());
+            for (0..try wire.prefetchCount(r.packet)) |i|
+            {
+                experts.hint(hdr.layer, wire.prefetchExpert(r.packet, i));
+            }
             try ep.release();
             continue;
         }
@@ -514,8 +705,9 @@ fn serveExperts(ep: *transport.Endpoint, local: *olmoe.LocalExperts, owned: []co
         have += 1;
         if (have < chunks) continue;
         have = 0;
-        const ex = local.get(hdr.layer, hdr.expert) orelse return error.ExpertNotLocal;
-        ex.forward(x[0..d], y, local.scratch);
+        const held = try experts.get(hdr.layer, hdr.expert);
+        held.expert.forward(x[0..d], y, local.scratch);
+        experts.put(held);
         for (0..chunks) |ch| {
             out.header = .{ .token_id = hdr.token_id, .generation = 0, .src_rank = 1, .layer = hdr.layer, .expert = hdr.expert, .flags = 0, .gate_weight = hdr.gate_weight, .payload_len = 0 };
             try wire.encodeChunk(out, enc, y, ch);
@@ -545,18 +737,40 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     // After any fork (CUDA state does not survive one), before the weights.
     if (opts.gpu) try gpu.open();
     defer if (opts.gpu) gpu.stop();
-    var l = try Loaded.init(gpa, opts.model, &owned, rank == 0);
+    var l = try Loaded.init(gpa, opts.model, &owned, rank == 0, opts.cache == 0);
     defer l.deinit(gpa);
-    if (opts.gpu) try gpu.map(l.weightRegion());
-    if (rank == 1) return serveExperts(ep, &l.local, &owned);
+    // With an expert cache, rank 1 loads nothing at startup.
+    if (opts.gpu and l.weightRegion().len > 0)
+    {
+        try gpu.map(l.weightRegion());
+    }
+    var experts: Experts = .{ .local = &l.local };
+    const label = if (rank == 1) "expert" else name;
+    const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &owned, label) else null;
+    defer if (box) |b| b.close(gpa);
+    if (box) |b|
+    {
+        experts.cache = b.cache;
+    }
+    if (rank == 1)
+    {
+        const served = serveExperts(ep, &experts, &owned);
+        if (box) |b|
+        {
+            reportCache(label, b.cache);
+        }
+        return served;
+    }
 
     const cfg = l.cfg;
+    phase_cache = experts.cache;
     const pkt = try gpa.create(wire.Packet);
     defer gpa.destroy(pkt);
     pkt.* = std.mem.zeroes(wire.Packet);
     var split: SplitMoe = .{
         .ep = ep,
         .local = &l.local,
+        .experts = &experts,
         .owner = owner[0..cfg.experts],
         .enc = opts.payload,
         .contrib = try gpa.alloc(f32, 64 * cfg.top_k * cfg.d_model),
@@ -576,6 +790,10 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     if (opts.lookahead > 0)
     {
         std.debug.print("{s}: lookahead: {d} prefetch hints sent to rank 1\n", .{ name, split.hints });
+    }
+    if (box) |b|
+    {
+        reportCache(name, b.cache);
     }
     return result;
 }
@@ -751,10 +969,22 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
     }
     if (opts.minutes > 0)
     {
+        if (moe.ahead == null)
+        {
+            if (phase_cache) |cache|
+            {
+                cache.stats = .{};
+            }
+        }
         try runSoak(gpa, w, moe, golden, opts, name);
         if (moe.ahead) |la|
         {
             try reportLookahead(la, name, "soak", true, 0);
+        }
+        else if (phase_cache) |cache|
+        {
+            std.debug.print("{s}: (soak) ", .{name});
+            reportCache(name, cache);
         }
     }
 }
@@ -787,6 +1017,12 @@ fn reportLookahead(la: *olmoe.Lookahead, name: []const u8, phase: []const u8, sa
     }
     std.debug.print("\n", .{});
     la.* = .{ .horizon = la.horizon, .extra = la.extra };
+    if (phase_cache) |cache|
+    {
+        std.debug.print("{s}: ({s}{s}) ", .{ name, phase, if (compared > 0) ", including the predictor-off passes" else "" });
+        reportCache(name, cache);
+        cache.stats = .{};
+    }
     if (!same_bits)
     {
         return error.LookaheadChangedOutput;

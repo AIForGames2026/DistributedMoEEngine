@@ -86,6 +86,8 @@ Token generation (TASK-24): add `--generate 64` to the reference command to also
 
 Lookahead predictor (TASK-11): add `--lookahead 2` to any `olmoe` command. After each layer's attention, rank 0 guesses the experts two layers ahead (the first layers from the token embeddings) by applying that later layer's own norm and router, keeps the top 8 + `--extra` (default 2), and sends rank 1 a prefetch hint for its share. It reports recall (the share of chosen experts that were guessed), the time spent guessing as a share of layer time, and runs every prompt and generation a second time with the predictor off to check the output is bit-identical. Rank 1 reports how long before each layer's first expert call its hint arrived. `--lookahead 1` guesses one layer ahead. `tools/ref/lookahead_study.py` measures the same recall in transformers over text files, for example WikiText-2 and HumanEval.
 
+Expert cache (TASK-11): add `--cache N` to hold each process's experts in N slots (about 6.7 MB each for OLMoE) instead of loading them all at startup. A worker thread reads experts from the model file through the io_uring reader when a prefetch hint names them, and on demand when a call needs one that is not loaded; each expert's CRC32C is checked the first time it is read. `--pin L` keeps layers below L loaded (default 1, since layer 0 is guessed worst). Each run reports how expert calls found their expert: already loaded, loaded by a hint in time, hinted but still loading, or missed. On a GPU that reads host memory in place (GB10) the cached experts run on the GPU; on a discrete GPU they run on the CPU.
+
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 
 ```bash

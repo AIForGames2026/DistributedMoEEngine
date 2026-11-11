@@ -26,6 +26,9 @@ var handle: ?*Handle = null;
 var host_base: usize = 0;
 var host_len: usize = 0;
 var dev_base: u64 = 0;
+var live_base: usize = 0;
+var live_len: usize = 0;
+var live_dev: u64 = 0;
 var failed = false;
 
 /// Opens the GPU and loads the kernels. Call before loading weights: on a
@@ -64,6 +67,27 @@ pub fn map(region: []u8) !void {
     });
 }
 
+/// Also makes `region` readable by kernels if the GPU reads host memory in
+/// place (GB10), so later writes to it stay visible (the expert cache).
+/// Returns false on a discrete GPU, where matmuls on it stay on the CPU.
+pub fn mapLive(region: []u8) !bool
+{
+    const h = handle orelse return error.GpuNotOpen;
+    var info: Info = undefined;
+    tf_gpu_get_info(h, &info);
+    if (info.integrated == 0)
+    {
+        return false;
+    }
+    if (tf_gpu_map(h, region.ptr, region.len, &live_dev) != 0)
+    {
+        return error.GpuMapFailed;
+    }
+    live_base = @intFromPtr(region.ptr);
+    live_len = region.len;
+    return true;
+}
+
 pub fn stop() void {
     olmoe.gpu_matmul = null;
     if (handle) |h| tf_gpu_close(h);
@@ -73,8 +97,20 @@ pub fn stop() void {
 fn matmul(m: olmoe.Mat, x: []const f32, n: usize, y: []f32) bool {
     if (m.format != .q8_0 or failed) return false;
     const p = @intFromPtr(m.bytes.ptr);
-    if (p < host_base or p + m.bytes.len > host_base + host_len) return false;
-    const rc = tf_gpu_q8_0_matmul(handle.?, dev_base + (p - host_base), x.ptr, @intCast(n), @intCast(m.rows), @intCast(m.cols), y.ptr);
+    var dev: u64 = 0;
+    if (p >= host_base and p + m.bytes.len <= host_base + host_len)
+    {
+        dev = dev_base + (p - host_base);
+    }
+    else if (p >= live_base and p + m.bytes.len <= live_base + live_len)
+    {
+        dev = live_dev + (p - live_base);
+    }
+    else
+    {
+        return false;
+    }
+    const rc = tf_gpu_q8_0_matmul(handle.?, dev, x.ptr, @intCast(n), @intCast(m.rows), @intCast(m.cols), y.ptr);
     if (rc != 0) {
         // Fall back to the CPU for the rest of the run rather than abort.
         std.log.err("gpu: matmul failed ({d}); using the CPU from here on", .{-rc});

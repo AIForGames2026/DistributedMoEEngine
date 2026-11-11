@@ -75,6 +75,7 @@ test {
     _ = @import("safetensors.zig");
     _ = @import("loader.zig");
     _ = @import("olmoe.zig");
+    _ = @import("expert_cache.zig");
 }
 
 test "C ABI reports version 0.1.0" {

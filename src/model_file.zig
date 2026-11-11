@@ -167,6 +167,63 @@ pub fn readPlan(path: [:0]const u8, file: File, plan: loader.Plan, region: []ali
     return info;
 }
 
+/// Reads single byte ranges into a fixed memory region through the io_uring
+/// O_DIRECT reader (TASK-11's expert cache), widening each to whole blocks.
+pub const DirectSource = struct {
+    reader: *Reader,
+    file: File,
+    direct_end: u64,
+
+    pub fn open(path: [:0]const u8, file: File, region: []u8) !DirectSource
+    {
+        var r: ?*Reader = null;
+        const ropts: ReaderOpts = .{ .queue_depth = 16, .block_bytes = 1 << 20, .sqpoll = 0 };
+        const rc = tf_reader_open(&r, path, &ropts, region.ptr, region.len);
+        if (rc != 0)
+        {
+            std.debug.print("tf_reader_open: error {d}\n", .{-rc});
+            return error.ReaderOpenFailed;
+        }
+        var info: ReaderInfo = undefined;
+        tf_reader_get_info(r.?, &info);
+        if (alignment % info.dio_offset_align != 0 or alignment % info.dio_mem_align != 0)
+        {
+            tf_reader_close(r.?);
+            return error.UnsupportedAlignment;
+        }
+        return .{ .reader = r.?, .file = file, .direct_end = std.mem.alignBackward(u64, file.bytes, alignment) };
+    }
+
+    pub fn close(self: *DirectSource) void
+    {
+        tf_reader_close(self.reader);
+    }
+
+    /// A range needs this many bytes beyond its length in `dst`.
+    pub const pad = 2 * alignment;
+
+    pub fn read(ctx: *anyopaque, r: loader.Range, dst: []u8) anyerror!usize
+    {
+        const self: *DirectSource = @ptrCast(@alignCast(ctx));
+        const start = std.mem.alignBackward(u64, r.offset, alignment);
+        const end = std.mem.alignForward(u64, r.offset + r.len, alignment);
+        const at: usize = @intCast(r.offset - start);
+        if (end > self.direct_end)
+        {
+            // The file's last partial block cannot be read directly.
+            try self.file.readAt(r.offset, dst[at..][0..@intCast(r.len)]);
+            return at;
+        }
+        const rc = tf_reader_read(self.reader, start, @intCast(end - start), dst.ptr, null, null, 0);
+        if (rc != 0)
+        {
+            std.debug.print("tf_reader_read at {d}: error {d}\n", .{ start, -rc });
+            return error.ReadFailed;
+        }
+        return at;
+    }
+};
+
 pub fn nowNs() u64 {
     var ts: c.timespec = undefined;
     _ = c.clock_gettime(c.CLOCK.MONOTONIC, &ts);

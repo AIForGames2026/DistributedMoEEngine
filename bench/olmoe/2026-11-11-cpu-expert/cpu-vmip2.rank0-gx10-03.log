@@ -1,0 +1,18 @@
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 0.76 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+tcp: prompt 0 (5 tokens, 1440 ms): logits max err 2.48e-5, top-1 5/5, hidden max err 2.59e-4, experts chosen 640/640 same ok
+tcp: prompt 1 (21 tokens, 2669 ms): logits max err 3.67e-5, top-1 21/21, hidden max err 2.98e-4, experts chosen 2688/2688 same ok
+tcp: prompt 2 (17 tokens, 2106 ms): logits max err 3.72e-5, top-1 17/17, hidden max err 3.20e-4, experts chosen 2176/2176 same ok
+tcp: PASS: OLMoE-1B-7B logits within 1e-2 of the PyTorch reference (worst 3.72e-5), every top-1 token identical
+tcp: generate prompt 0: 64 tokens in 12.91 s (5.0 tokens/s, prompt included)
+tcp:   tokens: 7785 15 187 187 510 14731 273 6181 310 253 14029 15 187 187 510 3072 273 6181 310 1475 9963 3041 952 15 187 187 510 3565 3448 273 6181 310 5112 15 187 187 510 6253 2846 275 6181 310 7785 15 187 187 510 4585 11129 275 6181 310 7812 2071 1377 13 534 9572 387 577 13 23576 17249 313
+tcp:   same as transformers' generate(): 64/64 tokens, logits max err 4.10e-5 ok
+tcp: generate prompt 1: 64 tokens in 13.97 s (4.6 tokens/s, prompt included)
+tcp:   tokens: 5713 251 42401 9 79 14 18 10 559 5713 251 42401 9 79 14 19 10 187 187 3845 9 36240 251 42401 9 740 1228 187 187 1552 2086 13067 247 1159 1925 5713 251 42401 326 45319 253 295 394 1180 275 253 34125 251 42401 3425 15 380 34125 251 42401 3425 310 247 2962 273 3904 275 534 1016
+tcp:   same as transformers' generate(): 64/64 tokens, logits max err 4.17e-5 ok
+tcp: generate prompt 2: 64 tokens in 13.43 s (4.8 tokens/s, prompt included)
+tcp:   tokens: 326 1016 6485 310 5506 323 247 2173 873 273 21761 15 380 10071 840 897 616 1211 3210 281 3283 253 1735 10669 15 831 476 320 625 5919 685 247 2014 1566 13 347 253 10071 476 3894 1491 285 3037 432 1016 643 15 187 187 510 4477 273 436 2929 897 247 5019 273 418 27127 285 4480 19946 3210
+tcp:   same as transformers' generate(): 64/64 tokens, logits max err 4.20e-5 ok
+tcp: PASS: every generated token matches transformers' generate(), logits within 1e-2
+tcp: 17169 expert calls sent to rank 1, 18031 run locally; payload f32
+rc=0

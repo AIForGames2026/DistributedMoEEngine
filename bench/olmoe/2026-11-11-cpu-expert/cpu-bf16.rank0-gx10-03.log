@@ -1,0 +1,9 @@
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 0.75 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+tcp: prompt 0 (5 tokens, 1939 ms): logits max err 1.78e-2, top-1 5/5, hidden max err 1.14e-2, experts chosen 640/640 same FAIL
+tcp: prompt 1 (21 tokens, 3762 ms): logits max err 2.78e-2, top-1 21/21, hidden max err 1.31e-2, experts chosen 2688/2688 same FAIL
+tcp: prompt 2 (17 tokens, 3006 ms): logits max err 3.07e-2, top-1 17/17, hidden max err 2.24e-2, experts chosen 2176/2176 same FAIL
+tcp: FAIL: logits differ by up to 3.07e-2 (target 1e-2) or a top-1 token differs
+tcp: 2627 expert calls sent to rank 1, 2877 run locally; payload bf16
+error: ForwardMismatch
+rc=1

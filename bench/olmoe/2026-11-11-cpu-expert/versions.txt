@@ -1,0 +1,2 @@
+GX10-03: 7.0.0-1019-nvidia, driver 580.178.04, 0.17.0
+desktop WSL2: 6.6.87.2-microsoft-standard-WSL2, Model name: 12th Gen Intel(R) Core(TM) i7-12700K, 20 threads, 0.17.0

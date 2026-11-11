@@ -1,0 +1,4 @@
+expert: listening on port 7530
+load: 32 of 64 experts, 3.42 GB in 0.50 s, expert CRC32C OK
+expert: serving, resident memory 3432 MB
+expert: ran 2627 expert FFNs for rank 0, 1783 us each on average (max 3635 us), 4.68 s in all; resident memory 3434 MB

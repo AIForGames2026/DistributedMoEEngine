@@ -1,0 +1,4 @@
+== WSL2 through fwd.py
+tcp: one-way latency over 4096 round trips of 7552-byte packets: min 550.71 us, p50 793.74 us, p99 23531.83 us, p99.9 23981.13 us
+== native Windows dispatch.exe
+tcp: one-way latency over 4096 round trips of 7552-byte packets: min 559.06 us, p50 787.71 us, p99 1200.17 us, p99.9 3159.33 us

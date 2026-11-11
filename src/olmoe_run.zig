@@ -994,10 +994,18 @@ const Parked = struct {
     want: Want,
 };
 
+/// Time rank 1 spent inside expert FFNs (TASK-22), and the slowest one.
+var ffn_ns: u64 = 0;
+var ffn_max_ns: u64 = 0;
+
 /// Runs one call and sends its result back in as many chunks as it came in.
 fn answer(ep: *transport.Endpoint, experts: *Experts, held: ExpertCache.Held, hdr: wire.Header, x: []const f32, y: []f32, out: *wire.Packet) !void
 {
+    const t0 = mf.nowNs();
     held.expert.forward(x, y, experts.local.scratch);
+    const took = mf.nowNs() - t0;
+    ffn_ns += took;
+    ffn_max_ns = @max(ffn_max_ns, took);
     experts.put(held);
     const enc = wire.encodingOf(hdr);
     for (0..wire.chunkCount(enc, experts.local.cfg.d_model)) |ch|
@@ -1111,7 +1119,13 @@ fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool)
     {
         cache.stats.deferred += set_aside;
     }
-    std.debug.print("expert: ran {d} expert FFNs for rank 0; resident memory {d:.0} MB\n", .{ served, mb(rssBytes()) });
+    std.debug.print("expert: ran {d} expert FFNs for rank 0, {d:.0} us each on average (max {d:.0} us), {d:.2} s in all; resident memory {d:.0} MB\n", .{
+        served,
+        @as(f64, @floatFromInt(ffn_ns)) / @as(f64, @floatFromInt(@max(served, 1))) / 1e3,
+        @as(f64, @floatFromInt(ffn_max_ns)) / 1e3,
+        @as(f64, @floatFromInt(ffn_ns)) / 1e9,
+        mb(rssBytes()),
+    });
     if (hints.hints > 0)
     {
         std.debug.print("expert: lookahead: {d} prefetch hints; {d} layer starts here, each after its hint, by {d:.0} us on average (min {d:.0} us)\n", .{

@@ -85,6 +85,9 @@ pub fn mapLive(region: []u8) !bool
     }
     live_base = @intFromPtr(region.ptr);
     live_len = region.len;
+    // A process holding only cached experts never calls `map`.
+    if (std.c.getenv("TF_GPU_CHECK")) |v| check = v[0] == '1';
+    olmoe.gpu_matmul = matmul;
     return true;
 }
 

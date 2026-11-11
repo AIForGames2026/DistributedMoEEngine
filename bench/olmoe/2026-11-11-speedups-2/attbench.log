@@ -1,0 +1,18 @@
+attbench --mm: weights in mapped memory
+  65536 x 2048 Q8_0, 1 inputs: 0.89 ms, 160 GB/s
+  65536 x 2048 Q8_0, 8 inputs: 1.36 ms, 105 GB/s
+  2048 x 2048 Q8_0, 2048 inputs, tiled f32: 2.09 ms (8.21 TFLOPS)
+  2048 x 2048 Q8_0, 2048 inputs, tensor cores: 1.36 ms (12.67 TFLOPS)
+  outputs differ by up to 1.91e-4 (largest output 96.1)
+  against a double-precision sum (32 inputs): tiled f32 off by up to 1.35e-4, tensor cores by 3.00e-5
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  131071 cached: first 8.04 ms (0.27 TFLOPS, 67 GB/s, 4.4e-9 off wide); wide 3.80 ms (0.56 TFLOPS, 141 GB/s, 0.0e0 off wide); tensor cores 64 3.47 ms (0.62 TFLOPS, 155 GB/s, 8.1e-8 off wide); tensor cores 128 3.48 ms (0.62 TFLOPS, 154 GB/s, 8.1e-8 off wide); decode 3.19 ms (0.67 TFLOPS, 168 GB/s, 9.1e-9 off wide);
+attbench --mm: weights in pinned memory
+  65536 x 2048 Q8_0, 1 inputs: 0.64 ms, 222 GB/s
+  65536 x 2048 Q8_0, 8 inputs: 1.35 ms, 105 GB/s
+  2048 x 2048 Q8_0, 2048 inputs, tiled f32: 4.21 ms (4.08 TFLOPS)
+  2048 x 2048 Q8_0, 2048 inputs, tensor cores: 2.13 ms (8.07 TFLOPS)
+  outputs differ by up to 1.91e-4 (largest output 96.1)
+  against a double-precision sum (32 inputs): tiled f32 off by up to 1.35e-4, tensor cores by 3.00e-5
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  131071 cached: first 8.07 ms (0.27 TFLOPS, 67 GB/s, 4.4e-9 off wide); wide 3.10 ms (0.69 TFLOPS, 173 GB/s, 0.0e0 off wide); tensor cores 64 2.76 ms (0.78 TFLOPS, 194 GB/s, 8.1e-8 off wide); tensor cores 128 2.91 ms (0.74 TFLOPS, 184 GB/s, 8.1e-8 off wide); decode 3.72 ms (0.58 TFLOPS, 144 GB/s, 9.1e-9 off wide);

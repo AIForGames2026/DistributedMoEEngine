@@ -49,6 +49,10 @@ int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const in
 int tf_gpu_register(tf_gpu *g, void *host, size_t len, uint64_t *dev);
 void tf_gpu_unregister(tf_gpu *g, void *host);
 
+/* Pinned host memory that kernels read in place; free with tf_gpu_free_host. */
+int tf_gpu_alloc_host(tf_gpu *g, size_t len, void **host, uint64_t *dev);
+void tf_gpu_free_host(tf_gpu *g, void *host);
+
 /* Causal attention for n new tokens at positions pos0 to pos0 + n - 1, head
  * dim 128 (TASK-12). q and out are n x heads x 128 floats in host memory. The
  * cache is read in place through `tiles` tiles of 32 positions: tile i's keys
@@ -68,8 +72,8 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
  * 0 chosen by shape (default; TF_ATT_KERNEL sets it). Returns the previous choice. */
 int tf_gpu_set_attention_kernel(tf_gpu *g, int which);
 
-/* 1: the first Q8_0 kernel for every matmul; 0: tiled and decode kernels (default;
- * TF_MM_KERNEL sets it). Returns the previous choice. */
+/* Matmul kernels: 1 the first Q8_0 kernel, 2 tiled f32, 0 tensor cores for Q8_0 prefill
+ * (default; TF_MM_KERNEL sets it). Returns the previous choice. */
 int tf_gpu_set_matmul_kernel(tf_gpu *g, int which);
 
 void tf_gpu_close(tf_gpu *g);

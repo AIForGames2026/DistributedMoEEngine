@@ -57,6 +57,54 @@ extern "C" __global__ void tf_silu_mul(float *__restrict__ g, const float *__res
     }
 }
 
+// The power of 2 that brings a row whose largest magnitude is `mx` near the top of f16's range.
+__device__ __forceinline__ float row_up(float mx)
+{
+    const int k = max(-100, min(100, 140 - ((__float_as_int(mx) >> 23) & 0xff)));
+    return __int_as_float((127 + k) << 23);
+}
+
+// The largest of every thread's `mx` in a block of up to 1024 threads.
+__device__ __forceinline__ float block_max(float mx)
+{
+    __shared__ float part[32];
+    for (int off = 16; off > 0; off >>= 1)
+    {
+        mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, off));
+    }
+    if ((threadIdx.x & 31) == 0)
+    {
+        part[threadIdx.x >> 5] = mx;
+    }
+    __syncthreads();
+    mx = 0.0f;
+    for (int w = 0; w < (int)(blockDim.x + 31) / 32; w++)
+    {
+        mx = fmaxf(mx, part[w]);
+    }
+    return mx;
+}
+
+// tf_silu_mul by rows of f values, one block per row, also writing each row's tf_rowscale.
+extern "C" __global__ void tf_silu_rows(float *__restrict__ g, const float *__restrict__ u, int f, float *__restrict__ up)
+{
+    float *gr = g + (size_t)blockIdx.x * f;
+    const float *ur = u + (size_t)blockIdx.x * f;
+    float mx = 0.0f;
+    for (int c = threadIdx.x; c < f; c += blockDim.x)
+    {
+        const float a = gr[c];
+        const float v = a / (1.0f + expf(-a)) * ur[c];
+        gr[c] = v;
+        mx = fmaxf(mx, fabsf(v));
+    }
+    mx = block_max(mx);
+    if (threadIdx.x == 0)
+    {
+        up[blockIdx.x] = row_up(mx);
+    }
+}
+
 // Many inputs at once: a block covers 128 weight rows by 64 inputs, so each
 // weight is read once per 64 inputs. Sums still run in column order.
 #define MM_BM 128
@@ -379,16 +427,24 @@ extern "C" __global__ void __launch_bounds__(256) tf_mv_q8_gateup(const unsigned
                  y + (size_t)f0 * rows, rows, cols, n, row);
 }
 
-// out[i] = x[src[i]], rows of d floats: an expert batch's inputs.
+// out[i] = x[src[i]], rows of d floats: an expert batch's inputs, with each row's tf_rowscale.
 extern "C" __global__ void tf_gather(const float *__restrict__ x, const int *__restrict__ src, float *__restrict__ out,
-                                     int d)
+                                     int d, float *__restrict__ up)
 {
     const int i = blockIdx.x;
     const float4 *from = (const float4 *)(x + (size_t)src[i] * d);
     float4 *to = (float4 *)(out + (size_t)i * d);
+    float mx = 0.0f;
     for (int c = threadIdx.x; c < d / 4; c += blockDim.x)
     {
-        to[c] = from[c];
+        const float4 v = from[c];
+        to[c] = v;
+        mx = fmaxf(mx, fmaxf(fmaxf(fabsf(v.x), fabsf(v.y)), fmaxf(fabsf(v.z), fabsf(v.w))));
+    }
+    mx = block_max(mx);
+    if (threadIdx.x == 0)
+    {
+        up[i] = row_up(mx);
     }
 }
 
@@ -1156,4 +1212,224 @@ extern "C" __global__ void __launch_bounds__(128) tf_attention_decode16(
     float *__restrict__ part_acc, int n, int pos0, int heads, int kv_heads, int kvd, int tiles_per_split, float scale)
 {
     dec_attention<16>(q, tiles_k, tiles_v, part_m, part_l, part_acc, n, pos0, heads, kv_heads, kvd, tiles_per_split, scale);
+}
+
+// Q8_0 matmul on tensor cores for many inputs. Weights go in as exact f16 integers and
+// inputs, scaled by a power of 2 per row (tf_rowscale), as high and low f16 parts.
+#define TM_BM 64
+#define TM_BN 64
+#define TM_BLOCKS 2
+#define TM_KS (32 * TM_BLOCKS)
+#define TM_LD (TM_KS + 8)
+
+__device__ __forceinline__ void tm_block(const unsigned char *__restrict__ w, const float *__restrict__ x,
+                                         const float *__restrict__ up, float *__restrict__ y, int rows, int cols,
+                                         int n, int r0, int t0)
+{
+    __shared__ __align__(16) __half ws[TM_BM][TM_LD];
+    __shared__ __align__(16) __half xh[TM_BN][TM_LD];
+    __shared__ __align__(16) __half xl[TM_BN][TM_LD];
+    __shared__ float sc[TM_BLOCKS][TM_BM];
+    const int tid = threadIdx.x;
+    const int warp = tid >> 5, lane = tid & 31;
+    const int g = lane >> 2, c = lane & 3;
+    const int wm = warp >> 1, wn = warp & 1;
+    const int nb = cols >> 5;
+    float acc[2][4][4];
+#pragma unroll
+    for (int mi = 0; mi < 2; mi++)
+    {
+#pragma unroll
+        for (int ni = 0; ni < 4; ni++)
+        {
+#pragma unroll
+            for (int e = 0; e < 4; e++)
+            {
+                acc[mi][ni][e] = 0.0f;
+            }
+        }
+    }
+    for (int b0 = 0; b0 < nb; b0 += TM_BLOCKS)
+    {
+        for (int i = tid; i < TM_BM * TM_BLOCKS * 2; i += 128)
+        {
+            const int r = i / (TM_BLOCKS * 2), rem = i % (TM_BLOCKS * 2);
+            const int bb = rem >> 1, half = rem & 1;
+            const int gr = r0 + r, b = b0 + bb;
+            unsigned packed[8];
+            float d = 0.0f;
+            if (gr < rows && b < nb)
+            {
+                const unsigned char *blk = w + ((size_t)gr * nb + b) * 34;
+                d = __half2float(__ushort_as_half(*(const unsigned short *)blk));
+                const unsigned short *qp = (const unsigned short *)(blk + 2 + half * 16);
+#pragma unroll
+                for (int j = 0; j < 8; j++)
+                {
+                    const unsigned short u = qp[j];
+                    __half2 h = __floats2half2_rn((float)(signed char)(u & 0xff), (float)(signed char)(u >> 8));
+                    packed[j] = *(unsigned *)&h;
+                }
+            }
+            else
+            {
+#pragma unroll
+                for (int j = 0; j < 8; j++)
+                {
+                    packed[j] = 0;
+                }
+            }
+            if (half == 0)
+            {
+                sc[bb][r] = d;
+            }
+            uint4 *dst = (uint4 *)&ws[r][bb * 32 + half * 16];
+            dst[0] = make_uint4(packed[0], packed[1], packed[2], packed[3]);
+            dst[1] = make_uint4(packed[4], packed[5], packed[6], packed[7]);
+        }
+        for (int i = tid; i < TM_BN * (TM_KS / 4); i += 128)
+        {
+            const int t = i / (TM_KS / 4), c4 = i % (TM_KS / 4);
+            const int gt = t0 + t, col = b0 * 32 + c4 * 4;
+            float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            if (gt < n && col < cols)
+            {
+                v = *(const float4 *)(x + (size_t)gt * cols + col);
+            }
+            if (gt < n)
+            {
+                const float u = up[gt];
+                v.x *= u;
+                v.y *= u;
+                v.z *= u;
+                v.w *= u;
+            }
+            unsigned h0, l0, h1, l1;
+            tc_split(v.x, v.y, h0, l0);
+            tc_split(v.z, v.w, h1, l1);
+            *(uint2 *)&xh[t][c4 * 4] = make_uint2(h0, h1);
+            *(uint2 *)&xl[t][c4 * 4] = make_uint2(l0, l1);
+        }
+        __syncthreads();
+#pragma unroll
+        for (int bb = 0; bb < TM_BLOCKS; bb++)
+        {
+            float p[2][4][4];
+#pragma unroll
+            for (int mi = 0; mi < 2; mi++)
+            {
+#pragma unroll
+                for (int ni = 0; ni < 4; ni++)
+                {
+#pragma unroll
+                    for (int e = 0; e < 4; e++)
+                    {
+                        p[mi][ni][e] = 0.0f;
+                    }
+                }
+            }
+#pragma unroll
+            for (int kk = 0; kk < 2; kk++)
+            {
+                const int k0 = bb * 32 + kk * 16 + c * 2;
+                unsigned a[2][4];
+#pragma unroll
+                for (int mi = 0; mi < 2; mi++)
+                {
+                    const int row = wm * 32 + mi * 16 + g;
+                    a[mi][0] = *(const unsigned *)&ws[row][k0];
+                    a[mi][1] = *(const unsigned *)&ws[row + 8][k0];
+                    a[mi][2] = *(const unsigned *)&ws[row][k0 + 8];
+                    a[mi][3] = *(const unsigned *)&ws[row + 8][k0 + 8];
+                }
+#pragma unroll
+                for (int ni = 0; ni < 4; ni++)
+                {
+                    const int tok = wn * 32 + ni * 8 + g;
+                    const unsigned bh[2] = {*(const unsigned *)&xh[tok][k0], *(const unsigned *)&xh[tok][k0 + 8]};
+                    const unsigned bl[2] = {*(const unsigned *)&xl[tok][k0], *(const unsigned *)&xl[tok][k0 + 8]};
+#pragma unroll
+                    for (int mi = 0; mi < 2; mi++)
+                    {
+                        tc_mma(p[mi][ni], a[mi], bl);
+                        tc_mma(p[mi][ni], a[mi], bh);
+                    }
+                }
+            }
+#pragma unroll
+            for (int mi = 0; mi < 2; mi++)
+            {
+                const float s_lo = sc[bb][wm * 32 + mi * 16 + g];
+                const float s_hi = sc[bb][wm * 32 + mi * 16 + g + 8];
+#pragma unroll
+                for (int ni = 0; ni < 4; ni++)
+                {
+                    acc[mi][ni][0] += s_lo * p[mi][ni][0];
+                    acc[mi][ni][1] += s_lo * p[mi][ni][1];
+                    acc[mi][ni][2] += s_hi * p[mi][ni][2];
+                    acc[mi][ni][3] += s_hi * p[mi][ni][3];
+                }
+            }
+        }
+        __syncthreads();
+    }
+#pragma unroll
+    for (int mi = 0; mi < 2; mi++)
+    {
+#pragma unroll
+        for (int ni = 0; ni < 4; ni++)
+        {
+            const int row = r0 + wm * 32 + mi * 16 + g;
+            const int tok = t0 + wn * 32 + ni * 8 + c * 2;
+#pragma unroll
+            for (int e = 0; e < 4; e++)
+            {
+                const int rr = row + (e >> 1) * 8, tt = tok + (e & 1);
+                if (rr < rows && tt < n)
+                {
+                    y[(size_t)tt * rows + rr] = acc[mi][ni][e] / up[tt];
+                }
+            }
+        }
+    }
+}
+
+// y = W x for many inputs, W in Q8_0, on tensor cores. Grid: rows / 64,
+// inputs / 64, and one z per matrix of a group.
+extern "C" __global__ void __launch_bounds__(128) tf_tm_q8(unsigned long long w0, const unsigned long long *wt,
+                                                           const int *first, const float *x, float *y, int rows,
+                                                           int cols, int n0, const float *up)
+{
+    const mm_pick p = mm_select(w0, wt, first, n0);
+    if (blockIdx.y * TM_BN >= p.n)
+    {
+        return;
+    }
+    tm_block(p.w, x + (size_t)p.f0 * cols, up + p.f0, y + (size_t)p.f0 * rows, rows, cols, p.n, blockIdx.x * TM_BM,
+             blockIdx.y * TM_BN);
+}
+
+// up[i] = row_up of row i's largest magnitude, one warp per row.
+extern "C" __global__ void tf_rowscale(const float *__restrict__ x, float *__restrict__ up, int n, int cols)
+{
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    if (row >= n)
+    {
+        return;
+    }
+    const float *xr = x + (size_t)row * cols;
+    float mx = 0.0f;
+    for (int c = lane; c < cols; c += 32)
+    {
+        mx = fmaxf(mx, fabsf(xr[c]));
+    }
+    for (int off = 16; off > 0; off >>= 1)
+    {
+        mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, off));
+    }
+    if (lane == 0)
+    {
+        up[row] = row_up(mx);
+    }
 }

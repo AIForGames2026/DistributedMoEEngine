@@ -1,0 +1,33 @@
+attbench --mm: weights in mapped memory
+  65536 x 2048 Q8_0, 1 inputs: 0.89 ms, 160 GB/s
+  65536 x 2048 Q8_0, 8 inputs: 1.34 ms, 106 GB/s
+  2048 x 2048 Q8_0, 2048 inputs, tiled f32: 2.06 ms (8.36 TFLOPS)
+  2048 x 2048 Q8_0, 2048 inputs, tensor cores: 1.28 ms (13.44 TFLOPS)
+  outputs differ by up to 1.91e-4 (largest output 96.1)
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  131071 cached: first 7.86 ms (0.27 TFLOPS, 68 GB/s, 4.4e-9 off wide); wide 3.71 ms (0.58 TFLOPS, 145 GB/s, 0.0e0 off wide); tensor cores 64 3.44 ms (0.62 TFLOPS, 156 GB/s, 8.1e-8 off wide); tensor cores 128 3.45 ms (0.62 TFLOPS, 156 GB/s, 8.1e-8 off wide); decode 3.22 ms (0.67 TFLOPS, 167 GB/s, 9.1e-9 off wide);
+attbench --mm: weights in pinned memory
+  65536 x 2048 Q8_0, 1 inputs: 0.64 ms, 223 GB/s
+  65536 x 2048 Q8_0, 8 inputs: 1.34 ms, 107 GB/s
+  2048 x 2048 Q8_0, 2048 inputs, tiled f32: 4.03 ms (4.26 TFLOPS)
+  2048 x 2048 Q8_0, 2048 inputs, tensor cores: 2.13 ms (8.06 TFLOPS)
+  outputs differ by up to 1.91e-4 (largest output 96.1)
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  131071 cached: first 7.96 ms (0.27 TFLOPS, 67 GB/s, 4.4e-9 off wide); wide 3.03 ms (0.71 TFLOPS, 177 GB/s, 0.0e0 off wide); tensor cores 64 2.75 ms (0.78 TFLOPS, 195 GB/s, 8.1e-8 off wide); tensor cores 128 2.87 ms (0.75 TFLOPS, 187 GB/s, 8.1e-8 off wide); decode 3.65 ms (0.59 TFLOPS, 147 GB/s, 9.1e-9 off wide);
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.71e-4), every top-1 token identical
+local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.71e-4), every top-1 token identical
+local: PASS: every generated token matches transformers' generate(), logits within 1e-2
+local: prefill time: projections 1.7 s, QK norm and rope 0.8 s, attention 6.5 s, output 1.6 s, router 0.6 s, experts 5.4 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.1 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 17.1 s (957 tokens/s prefill); decode 0.046 s per token (21.92 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache offloaded to NVMe: 2.13 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: prefill time: projections 1.7 s, QK norm and rope 0.8 s, attention 6.5 s, output 2.6 s, router 0.6 s, experts 5.4 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.9 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 18.8 s (873 tokens/s prefill); decode 0.296 s per token (3.38 tokens/s) over 7 steps from position 16384; resident memory 34777 MB
+local: kv offload during decode: read 11.10 GB from NVMe at 5.41 GB/s (0.293 s per token), attention waited 0.252 s per token; over the whole run, read 13.4 GB and wrote 1.6 GB (2.64 GB/s)
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_s16.bin bit for bit
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 6.5 s, output 2.2 s, router 0.6 s, experts 7.9 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.1 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 21.0 s (782 tokens/s prefill); decode 0.046 s per token (21.84 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+local: FAIL: generated tokens differ, logits differ (by up to 2.06e1) compared with /tmp/lh_s16.bin
+SHORT_DONE

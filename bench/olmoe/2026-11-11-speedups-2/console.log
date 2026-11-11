@@ -1,0 +1,60 @@
+attbench --mm: weights in mapped memory
+  65536 x 2048 Q8_0, 1 inputs: 0.89 ms, 160 GB/s
+  65536 x 2048 Q8_0, 8 inputs: 1.36 ms, 105 GB/s
+  2048 x 2048 Q8_0, 2048 inputs, tiled f32: 2.09 ms (8.21 TFLOPS)
+  2048 x 2048 Q8_0, 2048 inputs, tensor cores: 1.36 ms (12.67 TFLOPS)
+  outputs differ by up to 1.91e-4 (largest output 96.1)
+  against a double-precision sum (32 inputs): tiled f32 off by up to 1.35e-4, tensor cores by 3.00e-5
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  131071 cached: first 8.04 ms (0.27 TFLOPS, 67 GB/s, 4.4e-9 off wide); wide 3.80 ms (0.56 TFLOPS, 141 GB/s, 0.0e0 off wide); tensor cores 64 3.47 ms (0.62 TFLOPS, 155 GB/s, 8.1e-8 off wide); tensor cores 128 3.48 ms (0.62 TFLOPS, 154 GB/s, 8.1e-8 off wide); decode 3.19 ms (0.67 TFLOPS, 168 GB/s, 9.1e-9 off wide);
+attbench --mm: weights in pinned memory
+  65536 x 2048 Q8_0, 1 inputs: 0.64 ms, 222 GB/s
+  65536 x 2048 Q8_0, 8 inputs: 1.35 ms, 105 GB/s
+  2048 x 2048 Q8_0, 2048 inputs, tiled f32: 4.21 ms (4.08 TFLOPS)
+  2048 x 2048 Q8_0, 2048 inputs, tensor cores: 2.13 ms (8.07 TFLOPS)
+  outputs differ by up to 1.91e-4 (largest output 96.1)
+  against a double-precision sum (32 inputs): tiled f32 off by up to 1.35e-4, tensor cores by 3.00e-5
+attbench: 32 query heads, 4 KV heads, 1 new tokens, 5 reps
+  131071 cached: first 8.07 ms (0.27 TFLOPS, 67 GB/s, 4.4e-9 off wide); wide 3.10 ms (0.69 TFLOPS, 173 GB/s, 0.0e0 off wide); tensor cores 64 2.76 ms (0.78 TFLOPS, 194 GB/s, 8.1e-8 off wide); tensor cores 128 2.91 ms (0.74 TFLOPS, 184 GB/s, 8.1e-8 off wide); decode 3.72 ms (0.58 TFLOPS, 144 GB/s, 9.1e-9 off wide);
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.51e-4), every top-1 token identical
+local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.51e-4), every top-1 token identical
+local: PASS: every generated token matches transformers' generate(), logits within 1e-2
+local: prefill time: projections 1.8 s, QK norm and rope 0.7 s, attention 6.5 s, output 1.7 s, router 0.6 s, experts 5.6 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.1 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 17.5 s (937 tokens/s prefill); decode 0.046 s per token (21.60 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache offloaded to NVMe: 2.13 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: prefill time: projections 1.8 s, QK norm and rope 0.8 s, attention 6.6 s, output 2.6 s, router 0.6 s, experts 5.6 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.8 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 19.0 s (863 tokens/s prefill); decode 0.283 s per token (3.53 tokens/s) over 7 steps from position 16384; resident memory 34777 MB
+local: kv offload during decode: read 11.10 GB from NVMe at 5.66 GB/s (0.280 s per token), attention waited 0.239 s per token; over the whole run, read 13.4 GB and wrote 1.6 GB (2.54 GB/s)
+local: PASS: all 8 generated tokens and their logits match /tmp/lh_s16.bin bit for bit
+local: prefill time: projections 2.5 s, QK norm and rope 0.8 s, attention 6.6 s, output 2.2 s, router 0.6 s, experts 8.0 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.1 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 21.1 s (776 tokens/s prefill); decode 0.046 s per token (21.63 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+local: FAIL: generated tokens differ, logits differ (by up to 2.06e1) compared with /tmp/lh_s16.bin
+SHORT_DONE
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache offloaded to NVMe: 3.07 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill time: projections 14.2 s, QK norm and rope 6.5 s, attention 443.4 s, output 21.5 s, router 4.9 s, experts 44.3 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 116.7 s, output 0.1 s, router 0.1 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 546.9 s (240 tokens/s prefill); decode 3.788 s per token (0.26 tokens/s) over 31 steps from position 131040; resident memory 35719 MB
+local: kv offload during decode: read 747.96 GB from NVMe at 6.38 GB/s (3.782 s per token), attention waited 3.615 s per token; over the whole run, read 1459.2 GB and wrote 24.1 GB (2.72 GB/s)
+local: PASS: all 32 generated tokens and their logits match /tmp/lh_long_ram.bin bit for bit
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --kv-offload kvtmp --compare /tmp/lh_long_ram.bin"
+	User time (seconds): 818.46
+	System time (seconds): 410.56
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:14.30
+	Maximum resident set size (kbytes): 35004048
+	Voluntary context switches: 2098690
+	Involuntary context switches: 12505
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill time: projections 15.2 s, QK norm and rope 6.0 s, attention 421.3 s, output 13.7 s, router 5.2 s, experts 44.7 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 4.8 s, output 0.1 s, router 0.1 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 509.8 s (257 tokens/s prefill); decode 0.181 s per token (5.53 tokens/s) over 31 steps from position 131040; resident memory 58420 MB
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --context 131040 --chunk 2048 --generate 32 --gpu --yarn 4 --save /tmp/lh_long_ram.bin"
+	User time (seconds): 618.32
+	System time (seconds): 18.18
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 8:49.50
+	Maximum resident set size (kbytes): 57171552
+	Voluntary context switches: 419957
+	Involuntary context switches: 7863
+LONG_DONE

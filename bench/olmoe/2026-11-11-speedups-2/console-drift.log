@@ -1,0 +1,5 @@
+grep: /home/admin/lukehinojosa/bench-speed2/drift-console.log: input file is also the output
+local: time to first token 66.7 s (246 tokens/s prefill); decode 0.071 s per token (14.12 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+local: FAIL: generated tokens differ, logits differ (by up to 2.06e1) compared with /tmp/lh_t16.bin
+local: time to first token 20.9 s (783 tokens/s prefill); decode 0.046 s per token (21.63 tokens/s) over 7 steps from position 16384; resident memory 35875 MB
+DRIFT_DONE

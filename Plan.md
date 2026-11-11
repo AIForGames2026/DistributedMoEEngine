@@ -228,6 +228,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - Offloaded and all-RAM runs still match bit for bit, and the goldens pass (logits within 1.87e-4).
   - At 16k the tensor cores move generated tokens' logits by up to 0.85 against the f32 kernel, with identical tokens; a different order of f32 sums alone moves them by 0.20.
   - See `bench/olmoe/2026-11-11-speedups.md`.
+  - Second batch: Q8_0 matmuls on tensor cores (8-bit weights exact in f16, inputs scaled per row by a power of 2 and split in two), and one wait per small GPU call. Time to first token 17.5 s at 16k, 510 s at 128k in RAM, and 547 s offloaded; decode 0.046 s per token at 16k and 0.181 s at 128k. Offloaded runs still match bit for bit. At 16k the generated tokens differ from the tiled f32 matmul's, as they also do between two f32 kernels that only add in a different order. See `bench/olmoe/2026-11-11-speedups-2.md`.
 
 #### [TASK-13] Compressed Expert Streaming (nvCOMP, Hardware DE Only If Present)
 - **Milestone**: Beta (Nov 22)

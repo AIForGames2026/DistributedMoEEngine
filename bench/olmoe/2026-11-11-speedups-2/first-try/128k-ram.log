@@ -1,0 +1,7 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.88 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.84 s)
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory: 25.77 GB in memory (all of it would be 25.77 GB), GPU attention on
+local: prefill 14336 of 131040 positions, 14.1 s
+local: prefill 26624 of 131040 positions, 34.3 s
+local: prefill 40960 of 131040 positions, 67.0 s
+local: prefill 53248 of 131040 positions, 103.0 s

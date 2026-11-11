@@ -17,6 +17,11 @@
 #define MM_BM 128 /* tf_mm_q8 and tf_mm_f32 */
 #define MM_BN 64
 #define MV_TOK 8 /* tf_mv_q8 */
+#define TM_BM 64 /* tf_tm_q8 */
+#define TM_BN 64
+/* Calls that move at most this much go through pinned memory and wait once. */
+#define XFER_SMALL (1 << 20)
+#define XFER_OUTS 8
 
 struct tf_gpu {
     CUdevice dev;
@@ -28,7 +33,8 @@ struct tf_gpu {
     CUfunction attention_wide;
     CUfunction silu_mul;
     CUfunction mm_q8, mm_f32, mv_q8, mv_gateup, gather, combine, attention_tc, attention_tc128, attention_dec8, attention_dec16;
-    /* 1: the first Q8_0 kernel for every matmul (TF_MM_KERNEL); 0: tiled and decode kernels. */
+    CUfunction tm_q8, rowscale, silu_rows;
+    /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
     int tc_ok;
     /* 1: tf_attention, 0 or 2: tf_attention_wide when the device allows it (TF_ATT_KERNEL). */
@@ -46,9 +52,18 @@ struct tf_gpu {
     /* Experts: inputs, gate and up outputs, and results for a whole layer. */
     CUdeviceptr ex, eg, eu, ey, exg, eo, meta;
     size_t ex_bytes, eg_bytes, eu_bytes, ey_bytes, exg_bytes, eo_bytes, meta_bytes;
+    /* Per-row input scales for the tensor-core matmul: inputs, and expert gate outputs. */
+    CUdeviceptr up, up2;
+    size_t up_bytes, up2_bytes;
     /* Host side of `meta`: weight tables and row maps, copied in one go. */
     unsigned char *host_meta;
     size_t host_meta_bytes;
+    /* Pinned staging for small calls, and the outputs to hand back after the wait. */
+    unsigned char *pin;
+    int xfer_on, xfer_outs;
+    size_t xfer_used;
+    void *xfer_dst[XFER_OUTS];
+    size_t xfer_off[XFER_OUTS], xfer_len[XFER_OUTS];
     /* Regions registered in place (integrated) or copied (discrete). */
     void *registered[MAX_MAPS];
     CUdeviceptr copied[MAX_MAPS];
@@ -98,7 +113,10 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
         (r = cuModuleGetFunction(&g->attention_tc, g->mod, "tf_attention_tc")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->attention_tc128, g->mod, "tf_attention_tc128")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->attention_dec8, g->mod, "tf_attention_decode8")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->attention_dec16, g->mod, "tf_attention_decode16")) != CUDA_SUCCESS) {
+        (r = cuModuleGetFunction(&g->attention_dec16, g->mod, "tf_attention_decode16")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->tm_q8, g->mod, "tf_tm_q8")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->rowscale, g->mod, "tf_rowscale")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->silu_rows, g->mod, "tf_silu_rows")) != CUDA_SUCCESS) {
         tf_gpu_close(g);
         return fail(r, "loading kernels", err, err_len);
     }
@@ -165,6 +183,76 @@ static CUresult grow(CUdeviceptr *p, size_t *have, size_t want)
     return r;
 }
 
+static size_t align16(size_t n)
+{
+    return (n + 15) & ~(size_t)15;
+}
+
+/* Starts a call that moves `bytes` in all: small calls stage through pinned
+ * memory with asynchronous copies, so the call waits only in xfer_end. */
+static void xfer_begin(tf_gpu *g, size_t bytes)
+{
+    g->xfer_used = 0;
+    g->xfer_outs = 0;
+    g->xfer_on = 0;
+    if (bytes > XFER_SMALL)
+    {
+        return;
+    }
+    if (!g->pin && cuMemAllocHost((void **)&g->pin, XFER_SMALL) != CUDA_SUCCESS)
+    {
+        g->pin = NULL;
+        return;
+    }
+    g->xfer_on = 1;
+}
+
+static CUresult xfer_in(tf_gpu *g, CUdeviceptr dev, const void *src, size_t len)
+{
+    if (!g->xfer_on)
+    {
+        return cuMemcpyHtoD(dev, src, len);
+    }
+    unsigned char *at = g->pin + g->xfer_used;
+    memcpy(at, src, len);
+    g->xfer_used += align16(len);
+    return cuMemcpyHtoDAsync(dev, at, len, 0);
+}
+
+static CUresult xfer_out(tf_gpu *g, void *dst, CUdeviceptr dev, size_t len)
+{
+    if (!g->xfer_on || g->xfer_outs == XFER_OUTS)
+    {
+        return cuMemcpyDtoH(dst, dev, len);
+    }
+    const int i = g->xfer_outs++;
+    g->xfer_dst[i] = dst;
+    g->xfer_off[i] = g->xfer_used;
+    g->xfer_len[i] = len;
+    g->xfer_used += align16(len);
+    return cuMemcpyDtoHAsync(g->pin + g->xfer_off[i], dev, len, 0);
+}
+
+/* Waits for the call's copies and kernels, then hands back its outputs. */
+static CUresult xfer_end(tf_gpu *g)
+{
+    if (!g->xfer_on)
+    {
+        return CUDA_SUCCESS;
+    }
+    CUresult r = cuStreamSynchronize(0);
+    if (r != CUDA_SUCCESS)
+    {
+        return r;
+    }
+    for (int i = 0; i < g->xfer_outs; i++)
+    {
+        memcpy(g->xfer_dst[i], g->pin + g->xfer_off[i], g->xfer_len[i]);
+    }
+    g->xfer_on = 0;
+    return CUDA_SUCCESS;
+}
+
 static CUresult launch_q8(tf_gpu *g, CUdeviceptr w, CUdeviceptr x, CUdeviceptr y, int rows, int cols, int n)
 {
     void *args[] = {&w, &x, &y, &rows, &cols, &n};
@@ -174,10 +262,16 @@ static CUresult launch_q8(tf_gpu *g, CUdeviceptr w, CUdeviceptr x, CUdeviceptr y
     return cuLaunchKernel(g->q8_0_matmul, grid_x, grid_y, 1, threads, 1, 1, 0, 0, args, NULL);
 }
 
-/* y = W x for one matrix, or for a group where matrix z takes rows first[z] to
- * first[z + 1] - 1 of x. The kernel depends only on the format and the shape. */
+/* Whether launch_mm uses the tensor-core kernel, which needs each input row's scale. */
+static int use_tm(const tf_gpu *g, int format, int most)
+{
+    return format == TF_GPU_Q8_0 && most > MV_TOK && g->mm_kernel == 0 && g->tc_ok;
+}
+
+/* y = W x for one matrix, or for a group where matrix z takes rows first[z] to first[z + 1] - 1
+ * of x, with row scales `up` when use_tm. The kernel depends only on the format and the shape. */
 static CUresult launch_mm(tf_gpu *g, int format, CUdeviceptr w0, CUdeviceptr wt, CUdeviceptr first, int groups,
-                          int most, CUdeviceptr x, CUdeviceptr y, int rows, int cols)
+                          int most, CUdeviceptr up, CUdeviceptr x, CUdeviceptr y, int rows, int cols)
 {
     if (most <= 0)
     {
@@ -191,6 +285,12 @@ static CUresult launch_mm(tf_gpu *g, int format, CUdeviceptr w0, CUdeviceptr wt,
     if (format == TF_GPU_Q8_0 && most <= MV_TOK)
     {
         return cuLaunchKernel(g->mv_q8, (unsigned)((rows + 7) / 8), 1, (unsigned)groups, 256, 1, 1, 0, 0, args, NULL);
+    }
+    if (use_tm(g, format, most))
+    {
+        void *targs[] = {&w0, &wt, &first, &x, &y, &rows, &cols, &most, &up};
+        return cuLaunchKernel(g->tm_q8, (unsigned)((rows + TM_BM - 1) / TM_BM), (unsigned)((most + TM_BN - 1) / TM_BN),
+                              (unsigned)groups, 128, 1, 1, 0, 0, targs, NULL);
     }
     return cuLaunchKernel(format == TF_GPU_Q8_0 ? g->mm_q8 : g->mm_f32, (unsigned)((rows + MM_BM - 1) / MM_BM),
                           (unsigned)((most + MM_BN - 1) / MM_BN), (unsigned)groups, 256, 1, 1, 0, 0, args, NULL);
@@ -231,15 +331,28 @@ int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const in
     const size_t xb = (size_t)n * cols * sizeof(float);
     CUresult r;
     if ((r = grow(&g->x, &g->x_bytes, xb)) != CUDA_SUCCESS ||
-        (r = grow(&g->y, &g->y_bytes, (size_t)n * total * sizeof(float))) != CUDA_SUCCESS ||
-        (r = cuMemcpyHtoD(g->x, x, xb)) != CUDA_SUCCESS)
+        (r = grow(&g->y, &g->y_bytes, (size_t)n * total * sizeof(float))) != CUDA_SUCCESS)
     {
         return -(int)r;
+    }
+    xfer_begin(g, align16(xb) + count * 16 + (size_t)n * total * sizeof(float));
+    if ((r = xfer_in(g, g->x, x, xb)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    if (use_tm(g, format, n))
+    {
+        void *sargs[] = {&g->x, &g->up, &n, &cols};
+        if ((r = grow(&g->up, &g->up_bytes, (size_t)n * sizeof(float))) != CUDA_SUCCESS ||
+            (r = cuLaunchKernel(g->rowscale, (unsigned)((n + 7) / 8), 1, 1, 256, 1, 1, 0, 0, sargs, NULL)) != CUDA_SUCCESS)
+        {
+            return -(int)r;
+        }
     }
     CUdeviceptr out = g->y;
     for (int i = 0; i < count; i++)
     {
-        if ((r = launch_mm(g, format, (CUdeviceptr)w[i], 0, 0, 1, n, g->x, out, rows[i], cols)) != CUDA_SUCCESS)
+        if ((r = launch_mm(g, format, (CUdeviceptr)w[i], 0, 0, 1, n, g->up, g->x, out, rows[i], cols)) != CUDA_SUCCESS)
         {
             return -(int)r;
         }
@@ -249,11 +362,15 @@ int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const in
     for (int i = 0; i < count; i++)
     {
         const size_t yb = (size_t)n * rows[i] * sizeof(float);
-        if ((r = cuMemcpyDtoH(y[i], out, yb)) != CUDA_SUCCESS)
+        if ((r = xfer_out(g, y[i], out, yb)) != CUDA_SUCCESS)
         {
             return -(int)r;
         }
         out += yb;
+    }
+    if ((r = xfer_end(g)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
     }
     return 0;
 }
@@ -314,14 +431,20 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
     if ((r = grow(&g->ex, &g->ex_bytes, xb)) != CUDA_SUCCESS || (r = grow(&g->exg, &g->exg_bytes, rb)) != CUDA_SUCCESS ||
         (r = grow(&g->eg, &g->eg_bytes, fb)) != CUDA_SUCCESS || (r = grow(&g->eu, &g->eu_bytes, fb)) != CUDA_SUCCESS ||
         (r = grow(&g->ey, &g->ey_bytes, rb)) != CUDA_SUCCESS || (r = grow(&g->eo, &g->eo_bytes, xb)) != CUDA_SUCCESS ||
-        (r = grow(&g->meta, &g->meta_bytes, meta)) != CUDA_SUCCESS || (r = cuMemcpyHtoD(g->ex, x, xb)) != CUDA_SUCCESS ||
-        (r = cuMemcpyHtoD(g->meta, hm, meta)) != CUDA_SUCCESS)
+        (r = grow(&g->meta, &g->meta_bytes, meta)) != CUDA_SUCCESS ||
+        (r = grow(&g->up, &g->up_bytes, (size_t)rows * sizeof(float))) != CUDA_SUCCESS ||
+        (r = grow(&g->up2, &g->up2_bytes, (size_t)rows * sizeof(float))) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    xfer_begin(g, 2 * align16(xb) + align16(meta));
+    if ((r = xfer_in(g, g->ex, x, xb)) != CUDA_SUCCESS || (r = xfer_in(g, g->meta, hm, meta)) != CUDA_SUCCESS)
     {
         return -(int)r;
     }
     CUdeviceptr gt = g->meta, ut = g->meta + groups * sizeof(uint64_t), dt = g->meta + 2 * groups * sizeof(uint64_t);
     CUdeviceptr dfirst = g->meta + first_at, dsrc = g->meta + src_at, dinv = g->meta + inv_at, dw = g->meta + w_at;
-    void *gargs[] = {&g->ex, &dsrc, &g->exg, &d};
+    void *gargs[] = {&g->ex, &dsrc, &g->exg, &d, &g->up};
     if ((r = cuLaunchKernel(g->gather, (unsigned)rows, 1, 1, 128, 1, 1, 0, 0, gargs, NULL)) != CUDA_SUCCESS)
     {
         return -(int)r;
@@ -356,31 +479,53 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
         void *args[] = {&gt, &ut, &dfirst, &g->exg, &g->eg, &f, &d};
         if ((r = cuLaunchKernel(g->mv_gateup, (unsigned)((f + 7) / 8), 1, (unsigned)groups, 256, 1, 1, 0, 0, args,
                                 NULL)) != CUDA_SUCCESS ||
-            (r = launch_mm(g, TF_GPU_Q8_0, 0, dt, dfirst, groups, most, g->eg, g->ey, d, f)) != CUDA_SUCCESS)
+            (r = launch_mm(g, TF_GPU_Q8_0, 0, dt, dfirst, groups, most, 0, g->eg, g->ey, d, f)) != CUDA_SUCCESS)
         {
             return -(int)r;
         }
     }
     else
     {
-        int count = rows * f;
-        void *sargs[] = {&g->eg, &g->eu, &count};
-        if ((r = launch_mm(g, TF_GPU_Q8_0, 0, gt, dfirst, groups, most, g->exg, g->eg, f, d)) != CUDA_SUCCESS ||
-            (r = launch_mm(g, TF_GPU_Q8_0, 0, ut, dfirst, groups, most, g->exg, g->eu, f, d)) != CUDA_SUCCESS ||
-            (r = cuLaunchKernel(g->silu_mul, (unsigned)((count + 255) / 256), 1, 1, 256, 1, 1, 0, 0, sargs, NULL)) !=
-                CUDA_SUCCESS ||
-            (r = launch_mm(g, TF_GPU_Q8_0, 0, dt, dfirst, groups, most, g->eg, g->ey, d, f)) != CUDA_SUCCESS)
+        void *sargs[] = {&g->eg, &g->eu, &f, &g->up2};
+        if ((r = launch_mm(g, TF_GPU_Q8_0, 0, gt, dfirst, groups, most, g->up, g->exg, g->eg, f, d)) != CUDA_SUCCESS ||
+            (r = launch_mm(g, TF_GPU_Q8_0, 0, ut, dfirst, groups, most, g->up, g->exg, g->eu, f, d)) != CUDA_SUCCESS ||
+            (r = cuLaunchKernel(g->silu_rows, (unsigned)rows, 1, 1, 256, 1, 1, 0, 0, sargs, NULL)) != CUDA_SUCCESS ||
+            (r = launch_mm(g, TF_GPU_Q8_0, 0, dt, dfirst, groups, most, g->up2, g->eg, g->ey, d, f)) != CUDA_SUCCESS)
         {
             return -(int)r;
         }
     }
     void *cargs[] = {&g->ey, &dinv, &dw, &g->eo, &k, &d};
     if ((r = cuLaunchKernel(g->combine, (unsigned)n, 1, 1, 256, 1, 1, 0, 0, cargs, NULL)) != CUDA_SUCCESS ||
-        (r = cuMemcpyDtoH(y, g->eo, xb)) != CUDA_SUCCESS)
+        (r = xfer_out(g, y, g->eo, xb)) != CUDA_SUCCESS || (r = xfer_end(g)) != CUDA_SUCCESS)
     {
         return -(int)r;
     }
     return 0;
+}
+
+int tf_gpu_alloc_host(tf_gpu *g, size_t len, void **host, uint64_t *dev)
+{
+    (void)g;
+    CUresult r;
+    if ((r = cuMemAllocHost(host, len)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    CUdeviceptr p;
+    if ((r = cuMemHostGetDevicePointer(&p, *host, 0)) != CUDA_SUCCESS)
+    {
+        cuMemFreeHost(*host);
+        return -(int)r;
+    }
+    *dev = (uint64_t)p;
+    return 0;
+}
+
+void tf_gpu_free_host(tf_gpu *g, void *host)
+{
+    (void)g;
+    cuMemFreeHost(host);
 }
 
 int tf_gpu_register(tf_gpu *g, void *host, size_t len, uint64_t *dev)
@@ -418,10 +563,16 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
         (r = grow(&g->tiles, &g->tiles_bytes, 2 * tb)) != CUDA_SUCCESS ||
         (r = grow(&g->pm, &g->pm_bytes, parts * sizeof(float))) != CUDA_SUCCESS ||
         (r = grow(&g->pl, &g->pl_bytes, parts * sizeof(float))) != CUDA_SUCCESS ||
-        (r = grow(&g->pacc, &g->pacc_bytes, parts * ATT_HD * sizeof(float))) != CUDA_SUCCESS ||
-        (r = cuMemcpyHtoD(g->aq, q, qb)) != CUDA_SUCCESS || (r = cuMemcpyHtoD(g->tiles, tiles_k, tb)) != CUDA_SUCCESS ||
-        (r = cuMemcpyHtoD(g->tiles + tb, tiles_v, tb)) != CUDA_SUCCESS)
+        (r = grow(&g->pacc, &g->pacc_bytes, parts * ATT_HD * sizeof(float))) != CUDA_SUCCESS)
+    {
         return -(int)r;
+    }
+    xfer_begin(g, 2 * align16(qb) + 2 * align16(tb));
+    if ((r = xfer_in(g, g->aq, q, qb)) != CUDA_SUCCESS || (r = xfer_in(g, g->tiles, tiles_k, tb)) != CUDA_SUCCESS ||
+        (r = xfer_in(g, g->tiles + tb, tiles_v, tb)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
     CUdeviceptr tk = g->tiles, tv = g->tiles + tb;
     int per_split = (tiles + splits - 1) / splits;
     /* Tensor cores for prefill, the decode kernel for a few rows, else the wide
@@ -463,8 +614,10 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
     void *margs[] = {&g->pm, &g->pl, &g->pacc, &g->aout, &n, &heads, &kv_heads, &splits};
     if ((r = cuLaunchKernel(g->attention_merge, (unsigned)rows, (unsigned)kv_heads, 1, ATT_HD, 1, 1, 0, 0, margs, NULL)) !=
             CUDA_SUCCESS ||
-        (r = cuMemcpyDtoH(out, g->aout, qb)) != CUDA_SUCCESS)
+        (r = xfer_out(g, out, g->aout, qb)) != CUDA_SUCCESS || (r = xfer_end(g)) != CUDA_SUCCESS)
+    {
         return -(int)r;
+    }
     return 0;
 }
 
@@ -495,11 +648,15 @@ void tf_gpu_close(tf_gpu *g)
         cuMemFree(g->x);
     if (g->y)
         cuMemFree(g->y);
-    CUdeviceptr att[] = {g->aq, g->aout, g->tiles, g->pm, g->pl, g->pacc, g->ex, g->eg, g->eu, g->ey, g->exg, g->eo, g->meta};
+    CUdeviceptr att[] = {g->aq, g->aout, g->tiles, g->pm, g->pl, g->pacc, g->ex, g->eg, g->eu, g->ey, g->exg, g->eo, g->meta, g->up, g->up2};
     for (size_t i = 0; i < sizeof att / sizeof att[0]; i++)
         if (att[i])
             cuMemFree(att[i]);
     free(g->host_meta);
+    if (g->pin)
+    {
+        cuMemFreeHost(g->pin);
+    }
     if (g->mod)
         cuModuleUnload(g->mod);
     cuDevicePrimaryCtxRelease(g->dev);

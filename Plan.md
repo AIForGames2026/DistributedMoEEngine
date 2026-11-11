@@ -207,10 +207,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-14] Misprediction & Miss Handling (Exact Mode)
 - **Milestone**: Beta (Nov 22)
-- **Status**: Backlog
+- **Status**: Review
 - **Priority**: `should` | **Area**: `code` | **Tag**: `cut-2`
 - **Description**: Handle experts the lookahead missed, without changing model output: cancel obsolete speculative requests, promote true misses to a high-priority queue, run resident experts while missing ones arrive, and fetch from a peer process's memory over RDMA READ when that beats local NVMe. An approximate skip-low-weight mode is out of scope (Section 4).
 - **Acceptance Criteria**: Done when, under forced 10% mispredictions for 30 minutes, the engine produces tokens continuously without crash, deadlock, or memory growth, and output is bit-identical to a no-speculation run.
+- **Results (Nov 11)**: acceptance met over RDMA on `gx10-03`: 30.1 minutes with 10% of guesses forced wrong, 128 rounds at 13.6 tokens/s, tokens and logits identical to a predictor-off round in every round, resident memory +0.00%, exit 0. Hints carry the position they are for and loaders drop the ones whose layer has started (31,025 in the soak); misses go on a queue the loaders empty before hints; `--loaders N` (default 2) reads several experts at once; both ranks run the calls whose experts are ready and the rest as they arrive, adding results in a fixed order so output does not change. Every cache setup in the sweep beat TASK-11 by 9 to 28% (128 slots: 9.0 to 10.2 tokens/s; 256: 13.1 to 14.6), but the shared drive is still the limit, so more loaders or hints stop helping past two. Fetching from a peer over RDMA READ is left out: the ranks own disjoint experts, so a peer never holds a missing one; it needs replicated experts (TASK-15/16). See `bench/olmoe/2026-11-10-miss-handling.md`.
 
 #### [TASK-12] Tiered NVMe KV Cache Offloader
 - **Milestone**: Beta (Nov 22)
@@ -370,10 +371,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-09, TASK-12 to TASK-20 (including 15b, 16b), TASK-22, TASK-25, TASK-27, TASK-28 |
+| **Backlog** | TASK-09, TASK-12, TASK-13, TASK-15 to TASK-20 (including 15b, 16b), TASK-22, TASK-25, TASK-27, TASK-28 |
 | **To Do** | (none) |
 | **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |

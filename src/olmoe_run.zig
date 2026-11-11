@@ -17,7 +17,9 @@
 //!          beyond top_k, default 2), --cache N (hold this process's
 //!          experts in N slots loaded from the file on hints and on demand,
 //!          instead of all at startup), --pin L (keep layers below L loaded;
-//!          default 1)
+//!          default 1), --loaders N (TASK-14: cache loader threads, each
+//!          with its own reader; default 2), --mispredict P (replace a share
+//!          P of the guesses with wrong experts, to test miss handling)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -47,6 +49,8 @@ const transport = @import("transport.zig");
 const mf = @import("model_file.zig");
 const Arena = @import("arena.zig").Arena;
 const ExpertCache = @import("expert_cache.zig").ExpertCache;
+const Want = @import("expert_cache.zig").Want;
+const CacheSource = @import("expert_cache.zig").Source;
 const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
@@ -79,6 +83,8 @@ const Options = struct {
     extra: usize = 2,
     cache: usize = 0,
     pin: usize = 1,
+    loaders: usize = 2,
+    mispredict: f32 = 0,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -90,7 +96,7 @@ pub fn main(init: std.process.Init) !void {
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
             \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
-            \\         --lookahead H  --extra E  --cache N  --pin L
+            \\         --lookahead H  --extra E  --cache N  --pin L  --loaders N  --mispredict P
             \\
         , .{});
         std.process.exit(2);
@@ -104,6 +110,8 @@ pub fn main(init: std.process.Init) !void {
         defer l.deinit(gpa);
         if (opts.gpu) try gpu.map(l.weightRegion());
         var experts: Experts = .{ .local = &l.local };
+        try experts.alloc(gpa);
+        defer experts.free(gpa);
         const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &all, "local") else null;
         defer if (box) |b| b.close(gpa);
         if (box) |b|
@@ -111,7 +119,7 @@ pub fn main(init: std.process.Init) !void {
             experts.cache = b.cache;
             phase_cache = b.cache;
         }
-        var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra };
+        var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra, .mispredict = opts.mispredict };
         var moe = if (box != null) experts.moe() else l.local.moe();
         if (opts.lookahead > 0)
         {
@@ -190,6 +198,12 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.cache = try std.fmt.parseInt(usize, value, 10);
         } else if (std.mem.eql(u8, arg, "--pin")) {
             opts.pin = try std.fmt.parseInt(usize, value, 10);
+        } else if (std.mem.eql(u8, arg, "--loaders")) {
+            opts.loaders = try std.fmt.parseInt(usize, value, 10);
+            if (opts.loaders == 0 or opts.loaders > 16) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--mispredict")) {
+            opts.mispredict = try std.fmt.parseFloat(f32, value);
+            if (opts.mispredict < 0 or opts.mispredict > 1) return error.Usage;
         } else return error.Usage;
     }
     return opts;
@@ -319,14 +333,62 @@ fn ownedMask(gpa: std.mem.Allocator, opts: Options, rank: u8, owner: *[max_exper
 const Experts = struct {
     local: *olmoe.LocalExperts,
     cache: ?*ExpertCache = null,
+    /// Forward passes so far; hints and layers are placed by step and layer.
+    step: u64 = 0,
+    /// One expert output per (token, choice), n x top_k x d_model.
+    contrib: []f32 = &.{},
+    /// Calls whose expert is still loading, by (token, choice) index.
+    pending: []u32 = &.{},
+    pending_want: []Want = &.{},
 
-    fn get(self: *Experts, layer: usize, expert: usize) !ExpertCache.Held
+    const max_tokens = 64;
+
+    fn alloc(self: *Experts, gpa: std.mem.Allocator) !void
+    {
+        const cfg = self.local.cfg;
+        self.contrib = try gpa.alloc(f32, max_tokens * cfg.top_k * cfg.d_model);
+        self.pending = try gpa.alloc(u32, max_tokens * cfg.top_k);
+        self.pending_want = try gpa.alloc(Want, max_tokens * cfg.top_k);
+    }
+
+    fn free(self: *Experts, gpa: std.mem.Allocator) void
+    {
+        gpa.free(self.contrib);
+        gpa.free(self.pending);
+        gpa.free(self.pending_want);
+    }
+
+    fn pos(self: *Experts, layer: usize) u64
+    {
+        return self.step * self.local.cfg.layers + layer;
+    }
+
+    fn want(self: *Experts, layer: usize, expert: usize) !Want
     {
         if (self.cache) |cache|
         {
-            return cache.acquire(layer, expert);
+            return cache.want(layer, expert);
         }
-        return .{ .expert = self.local.get(layer, expert) orelse return error.ExpertNotLocal, .slot = 0 };
+        return .{ .layer = @intCast(layer), .expert = @intCast(expert) };
+    }
+
+    /// The expert if it is ready now, or null while it loads.
+    fn poll(self: *Experts, w: *Want) !?ExpertCache.Held
+    {
+        if (self.cache) |cache|
+        {
+            return cache.poll(w);
+        }
+        return .{ .expert = self.local.get(w.layer, w.expert) orelse return error.ExpertNotLocal, .slot = 0 };
+    }
+
+    fn wait(self: *Experts, w: *Want) !ExpertCache.Held
+    {
+        if (self.cache) |cache|
+        {
+            return cache.wait(w);
+        }
+        return (try self.poll(w)).?;
     }
 
     fn put(self: *Experts, h: ExpertCache.Held) void
@@ -337,12 +399,101 @@ const Experts = struct {
         }
     }
 
+    /// Hints at an expert of this pass's `layer`.
     fn hint(self: *Experts, layer: usize, expert: usize) void
+    {
+        self.hintAt(self.pos(layer), layer, expert);
+    }
+
+    fn hintAt(self: *Experts, at: u64, layer: usize, expert: usize) void
     {
         if (self.cache) |cache|
         {
-            cache.hint(layer, expert);
+            cache.hint(at, layer, expert);
         }
+    }
+
+    /// Marks this pass's `layer` as started, so its queued hints are dropped.
+    fn enter(self: *Experts, layer: usize) void
+    {
+        self.enterAt(self.pos(layer));
+    }
+
+    fn enterAt(self: *Experts, at: u64) void
+    {
+        if (self.cache) |cache|
+        {
+            cache.enter(at);
+        }
+    }
+
+    /// Runs the calls of `idx` that rank 0 owns (all without `owner`) into `contrib`,
+    /// ready experts first and the rest as they load. Returns how many ran.
+    fn runCalls(self: *Experts, layer: usize, x: []const f32, n: usize, idx: []const u32, contrib: []f32, owner: ?[]const u8) !usize
+    {
+        const d = self.local.cfg.d_model;
+        const k = self.local.cfg.top_k;
+        var ran: usize = 0;
+        var waiting: usize = 0;
+        for (0..n * k) |s|
+        {
+            if (owner) |o|
+            {
+                if (o[idx[s]] != 0)
+                {
+                    continue;
+                }
+            }
+            var w = try self.want(layer, idx[s]);
+            if (try self.poll(&w)) |h|
+            {
+                h.expert.forward(x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], self.local.scratch);
+                self.put(h);
+                ran += 1;
+                continue;
+            }
+            self.pending[waiting] = @intCast(s);
+            self.pending_want[waiting] = w;
+            waiting += 1;
+        }
+        const cache = self.cache orelse return ran;
+        cache.stats.deferred += waiting;
+        var t0: u64 = 0;
+        while (waiting > 0)
+        {
+            var progressed = false;
+            var i: usize = 0;
+            while (i < waiting)
+            {
+                const h = (try cache.poll(&self.pending_want[i])) orelse
+                {
+                    i += 1;
+                    continue;
+                };
+                const s = self.pending[i];
+                h.expert.forward(x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], self.local.scratch);
+                cache.release(h);
+                ran += 1;
+                waiting -= 1;
+                self.pending[i] = self.pending[waiting];
+                self.pending_want[i] = self.pending_want[waiting];
+                progressed = true;
+            }
+            if (progressed and t0 != 0)
+            {
+                cache.stats.wait_ns += mf.nowNs() - t0;
+                t0 = 0;
+            }
+            else if (!progressed)
+            {
+                if (t0 == 0)
+                {
+                    t0 = mf.nowNs();
+                }
+                std.atomic.spinLoopHint();
+            }
+        }
+        return ran;
     }
 
     /// One process with every expert, through the cache.
@@ -356,16 +507,21 @@ const Experts = struct {
         const self: *Experts = @ptrCast(@alignCast(ctx));
         const d = self.local.cfg.d_model;
         const k = self.local.cfg.top_k;
+        if (n > max_tokens)
+        {
+            return error.TooManyTokens;
+        }
+        self.enter(layer);
+        _ = try self.runCalls(layer, x, n, idx, self.contrib, null);
+        // Fixed order (token, then choice), whatever order the experts ran in.
         for (0..n) |t|
         {
             for (0..k) |j|
             {
-                const h = try self.get(layer, idx[t * k + j]);
-                h.expert.forward(x[t * d ..][0..d], self.local.out, self.local.scratch);
-                self.put(h);
-                for (out[t * d ..][0..d], self.local.out) |*o, y|
+                const s = t * k + j;
+                for (out[t * d ..][0..d], self.contrib[s * d ..][0..d]) |*o, y|
                 {
-                    o.* += w[t * k + j] * y;
+                    o.* += w[s] * y;
                 }
             }
         }
@@ -374,6 +530,11 @@ const Experts = struct {
     fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
     {
         const self: *Experts = @ptrCast(@alignCast(ctx));
+        // Layer 0's hint comes first in every pass.
+        if (layer == 0)
+        {
+            self.step += 1;
+        }
         for (experts) |e|
         {
             self.hint(layer, e);
@@ -384,7 +545,9 @@ const Experts = struct {
 /// The expert cache's memory, file reader, and checksums (TASK-11).
 const CacheBox = struct {
     arena: Arena,
-    source: mf.DirectSource,
+    /// One reader per loader thread.
+    readers: []mf.DirectSource,
+    sources: []CacheSource,
     index: loader.Index,
     heap: std.heap.ArenaAllocator,
     cache: *ExpertCache,
@@ -398,8 +561,21 @@ const CacheBox = struct {
         self.arena = try Arena.init(slot_bytes * opts.cache);
         errdefer self.arena.deinit();
         const region = self.arena.buf[0 .. slot_bytes * opts.cache];
-        self.source = try mf.DirectSource.open(opts.model, l.file, region);
-        errdefer self.source.close();
+        self.readers = try gpa.alloc(mf.DirectSource, opts.loaders);
+        errdefer gpa.free(self.readers);
+        self.sources = try gpa.alloc(CacheSource, opts.loaders);
+        errdefer gpa.free(self.sources);
+        var opened: usize = 0;
+        errdefer for (self.readers[0..opened]) |*r|
+        {
+            r.close();
+        };
+        for (self.readers, self.sources) |*r, *src|
+        {
+            r.* = try mf.DirectSource.open(opts.model, l.file, region);
+            opened += 1;
+            src.* = .{ .ctx = r, .read = mf.DirectSource.read, .pad = mf.DirectSource.pad, .alignment = mf.alignment };
+        }
         const sum_path = try std.fmt.allocPrint(gpa, "{s}.tfsum", .{opts.model});
         defer gpa.free(sum_path);
         const sum_text = try mf.readWhole(gpa, sum_path);
@@ -409,17 +585,12 @@ const CacheBox = struct {
         self.heap = .init(gpa);
         errdefer self.heap.deinit();
         const t0 = mf.nowNs();
-        self.cache = try ExpertCache.init(self.heap.allocator(), l.cfg, m, owned[0..l.cfg.experts], .{
-            .ctx = &self.source,
-            .read = mf.DirectSource.read,
-            .pad = mf.DirectSource.pad,
-            .alignment = mf.alignment,
-        }, &self.index, region, opts.pin);
+        self.cache = try ExpertCache.init(self.heap.allocator(), l.cfg, m, owned[0..l.cfg.experts], self.sources, &self.index, region, opts.pin);
         const pinned = self.cache.stats.loads;
         const on_gpu = opts.gpu and try gpu.mapLive(region);
         try self.cache.start();
-        std.debug.print("{s}: expert cache: {d} slots ({d:.2} GB), {d} experts of layers below {d} loaded and kept in {d:.2} s; cached experts run on the {s}\n", .{
-            name, opts.cache, @as(f64, @floatFromInt(region.len)) / 1e9, pinned, opts.pin, @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9, if (on_gpu) "GPU" else "CPU",
+        std.debug.print("{s}: expert cache: {d} slots ({d:.2} GB), {d} loader threads, {d} experts of layers below {d} loaded and kept in {d:.2} s; cached experts run on the {s}\n", .{
+            name, opts.cache, @as(f64, @floatFromInt(region.len)) / 1e9, opts.loaders, pinned, opts.pin, @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9, if (on_gpu) "GPU" else "CPU",
         });
         return self;
     }
@@ -429,7 +600,12 @@ const CacheBox = struct {
         self.cache.deinit();
         self.heap.deinit();
         self.index.deinit(gpa);
-        self.source.close();
+        for (self.readers) |*r|
+        {
+            r.close();
+        }
+        gpa.free(self.readers);
+        gpa.free(self.sources);
         self.arena.deinit();
         gpa.destroy(self);
     }
@@ -453,19 +629,21 @@ fn reportCache(name: []const u8, cache: *ExpertCache) void
             return @as(f64, @floatFromInt(a)) * 100 / @as(f64, @floatFromInt(b));
         }
     }.f;
-    std.debug.print("{s}: expert cache: {d} expert calls: {d:.1}% already loaded, {d:.1}% loaded by a hint in time, {d:.1}% hinted but still loading, {d:.1}% missed; {d:.1} ms waiting in all; {d} loads ({d} for hints, {d:.2} GB, {d:.2} ms each); {d} hinted experts evicted unused, {d} hints dropped\n", .{
+    std.debug.print("{s}: expert cache: {d} expert calls: {d:.1}% already loaded, {d:.1}% loaded by a hint in time, {d:.1}% hinted but still loading, {d:.1}% missed; {d} calls set aside while others ran; {d:.1} ms with nothing to run but loads; {d} loads ({d} for hints, {d:.2} GB, {d:.2} ms each); {d} hinted experts evicted unused; {d} hints dropped as stale, {d} for a full queue\n", .{
         name,
         st.calls(),
         p(st.resident, calls),
         p(st.hinted, calls),
         p(st.late, calls),
         p(st.missed, calls),
+        st.deferred,
         @as(f64, @floatFromInt(st.wait_ns)) / 1e6,
         st.loads,
         st.hint_loads,
         @as(f64, @floatFromInt(st.bytes)) / 1e9,
         @as(f64, @floatFromInt(st.load_ns)) / @as(f64, @floatFromInt(@max(st.loads, 1))) / 1e6,
         st.wasted,
+        st.cancelled,
         st.dropped,
     });
 }
@@ -482,8 +660,6 @@ const SplitMoe = struct {
     pkt: *wire.Packet,
     remote: u64 = 0,
     local_calls: u64 = 0,
-    /// Forward passes so far, so rank 1 can tell one pass's hints from the next.
-    step: u64 = 0,
     hints: u64 = 0,
 
     fn moe(self: *SplitMoe) olmoe.Moe {
@@ -495,12 +671,12 @@ const SplitMoe = struct {
     fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
     {
         const self: *SplitMoe = @ptrCast(@alignCast(ctx));
-        // Layer 0's hint comes first in every pass.
+        // Layer 0's hint comes first in every pass; the step tells rank 1's passes apart.
         if (layer == 0)
         {
-            self.step += 1;
+            self.experts.step += 1;
         }
-        wire.beginPrefetch(self.pkt, self.step, @intCast(layer));
+        wire.beginPrefetch(self.pkt, self.experts.step, @intCast(layer));
         for (experts) |e|
         {
             if (self.owner[e] != 0)
@@ -531,6 +707,7 @@ const SplitMoe = struct {
         const k = self.local.cfg.top_k;
         const d = self.local.cfg.d_model;
         if (n * k * d > self.contrib.len) return error.TooManyTokens;
+        self.experts.enter(layer);
         const chunks = wire.chunkCount(self.enc, d);
         // Packets, not expert calls: each call is `chunks` packets each way.
         var sent: usize = 0;
@@ -562,13 +739,7 @@ const SplitMoe = struct {
             self.remote += 1;
         }
         // Local experts run while the peer works on the remote ones.
-        for (0..n * k) |s| {
-            if (self.owner[idx[s]] != 0) continue;
-            const h = try self.experts.get(layer, idx[s]);
-            h.expert.forward(x[(s / k) * d ..][0..d], self.contrib[s * d ..][0..d], self.local.scratch);
-            self.experts.put(h);
-            self.local_calls += 1;
-        }
+        self.local_calls += try self.experts.runCalls(layer, x, n, idx, self.contrib, self.owner);
         while (got < sent) {
             try self.take(try self.ep.recv(), layer, idx, n);
             got += 1;
@@ -637,6 +808,17 @@ const HintLog = struct {
         self.hints += 1;
     }
 
+    /// Where rank 0's pass is when `layer` starts, as the cache counts it.
+    fn position(self: *HintLog, layer: usize) ?u64
+    {
+        const step = self.latest[layer];
+        if (step == none)
+        {
+            return null;
+        }
+        return step * self.latest.len + layer;
+    }
+
     fn call(self: *HintLog, layer: usize, now: u64) void
     {
         const step = self.latest[layer];
@@ -655,11 +837,39 @@ const HintLog = struct {
     }
 };
 
+/// A call whose expert was still loading when it arrived (TASK-14).
+const Parked = struct {
+    hdr: wire.Header,
+    want: Want,
+};
+
+/// Runs one call and sends its result back in as many chunks as it came in.
+fn answer(ep: *transport.Endpoint, experts: *Experts, held: ExpertCache.Held, hdr: wire.Header, x: []const f32, y: []f32, out: *wire.Packet) !void
+{
+    held.expert.forward(x, y, experts.local.scratch);
+    experts.put(held);
+    const enc = wire.encodingOf(hdr);
+    for (0..wire.chunkCount(enc, experts.local.cfg.d_model)) |ch|
+    {
+        out.header = .{ .token_id = hdr.token_id, .generation = 0, .src_rank = 1, .layer = hdr.layer, .expert = hdr.expert, .flags = 0, .gate_weight = hdr.gate_weight, .payload_len = 0 };
+        try wire.encodeChunk(out, enc, y, ch);
+        try ep.send(out, .combine);
+    }
+}
+
 /// Rank 1: answers dispatches with its experts until rank 0 says goodbye.
+/// A call whose expert is still loading waits while later calls run.
 fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool) !void {
     const local = experts.local;
     const cfg = local.cfg;
     const d = cfg.d_model;
+    const park_cap = Experts.max_tokens * cfg.top_k;
+    const parked = try std.heap.page_allocator.alloc(Parked, park_cap);
+    defer std.heap.page_allocator.free(parked);
+    const parked_x = try std.heap.page_allocator.alloc(f32, park_cap * d);
+    defer std.heap.page_allocator.free(parked_x);
+    var n_parked: usize = 0;
+    var set_aside: u64 = 0;
     var hint_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer hint_arena.deinit();
     var hints = try HintLog.init(hint_arena.allocator(), cfg.layers, cfg.experts);
@@ -675,8 +885,22 @@ fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool)
     var have: usize = 0;
     var first: wire.Header = undefined;
     while (true) {
+        var i: usize = 0;
+        while (i < n_parked)
+        {
+            const held = (try experts.poll(&parked[i].want)) orelse
+            {
+                i += 1;
+                continue;
+            };
+            try answer(ep, experts, held, parked[i].hdr, parked_x[i * d ..][0..d], y, out);
+            served += 1;
+            n_parked -= 1;
+            parked[i] = parked[n_parked];
+            @memcpy(parked_x[i * d ..][0..d], parked_x[n_parked * d ..][0..d]);
+        }
         const r = (try ep.tryRecv()) orelse {
-            if (ep.peer_done) break;
+            if (ep.peer_done and n_parked == 0) break;
             std.atomic.spinLoopHint();
             continue;
         };
@@ -684,9 +908,9 @@ fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool)
         if (r.kind == .dispatch and wire.isPrefetch(hdr) and have == 0)
         {
             try hints.hint(r.packet, mf.nowNs());
-            for (0..try wire.prefetchCount(r.packet)) |i|
+            for (0..try wire.prefetchCount(r.packet)) |j|
             {
-                experts.hint(hdr.layer, wire.prefetchExpert(r.packet, i));
+                experts.hintAt(hdr.token_id * cfg.layers + hdr.layer, hdr.layer, wire.prefetchExpert(r.packet, j));
             }
             try ep.release();
             continue;
@@ -698,6 +922,10 @@ fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool)
         {
             first = hdr;
             hints.call(hdr.layer, mf.nowNs());
+            if (hints.position(hdr.layer)) |at|
+            {
+                experts.enterAt(at);
+            }
         }
         if (hdr.token_id != first.token_id or hdr.layer != first.layer or hdr.expert != first.expert or
             try wire.decodeChunk(r.packet, x[0..d]) != have) return error.BadDispatch;
@@ -705,17 +933,33 @@ fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool)
         have += 1;
         if (have < chunks) continue;
         have = 0;
-        const held = try experts.get(hdr.layer, hdr.expert);
-        held.expert.forward(x[0..d], y, local.scratch);
-        experts.put(held);
-        for (0..chunks) |ch| {
-            out.header = .{ .token_id = hdr.token_id, .generation = 0, .src_rank = 1, .layer = hdr.layer, .expert = hdr.expert, .flags = 0, .gate_weight = hdr.gate_weight, .payload_len = 0 };
-            try wire.encodeChunk(out, enc, y, ch);
-            try ep.send(out, .combine);
+        var w = try experts.want(hdr.layer, hdr.expert);
+        if (try experts.poll(&w)) |held|
+        {
+            try answer(ep, experts, held, hdr, x[0..d], y, out);
+            served += 1;
+            continue;
         }
-        served += 1;
+        if (n_parked == park_cap)
+        {
+            // Full: finish the oldest first.
+            const held = try experts.wait(&parked[0].want);
+            try answer(ep, experts, held, parked[0].hdr, parked_x[0..d], y, out);
+            served += 1;
+            n_parked -= 1;
+            parked[0] = parked[n_parked];
+            @memcpy(parked_x[0..d], parked_x[n_parked * d ..][0..d]);
+        }
+        parked[n_parked] = .{ .hdr = hdr, .want = w };
+        @memcpy(parked_x[n_parked * d ..][0..d], x[0..d]);
+        n_parked += 1;
+        set_aside += 1;
     }
     try ep.finish();
+    if (experts.cache) |cache|
+    {
+        cache.stats.deferred += set_aside;
+    }
     std.debug.print("expert: ran {d} expert FFNs for rank 0; resident memory {d:.0} MB\n", .{ served, mb(rssBytes()) });
     if (hints.hints > 0)
     {
@@ -745,6 +989,8 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         try gpu.map(l.weightRegion());
     }
     var experts: Experts = .{ .local = &l.local };
+    try experts.alloc(gpa);
+    defer experts.free(gpa);
     const label = if (rank == 1) "expert" else name;
     const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &owned, label) else null;
     defer if (box) |b| b.close(gpa);
@@ -777,7 +1023,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .pkt = pkt,
     };
     defer gpa.free(split.contrib);
-    var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra };
+    var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra, .mispredict = opts.mispredict };
     var moe = split.moe();
     if (opts.lookahead > 0)
     {
@@ -1015,8 +1261,12 @@ fn reportLookahead(la: *olmoe.Lookahead, name: []const u8, phase: []const u8, sa
     {
         std.debug.print("; predictor on vs off: {s} ({d} values)", .{ if (same_bits) "bit-identical" else "DIFFERENT", compared });
     }
+    if (la.mispredict > 0)
+    {
+        std.debug.print("; {d} guesses forced wrong ({d:.0}% asked)", .{ la.replaced, la.mispredict * 100 });
+    }
     std.debug.print("\n", .{});
-    la.* = .{ .horizon = la.horizon, .extra = la.extra };
+    la.restart();
     if (phase_cache) |cache|
     {
         std.debug.print("{s}: ({s}{s}) ", .{ name, phase, if (compared > 0) ", including the predictor-off passes" else "" });
@@ -1150,9 +1400,8 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
     std.debug.print("{s}: PASS: every generated token matches transformers' generate(), logits within 1e-2\n", .{name});
 }
 
-/// Repeats generation over the golden prompts for `opts.minutes`. Fails if a
-/// round's tokens differ from the first round's or resident memory grows by
-/// 1% or more after the first round.
+/// Repeats generation for `opts.minutes`; fails if tokens or logits leave the reference
+/// (a predictor-off round, or else round 1) or memory grows 1% after round 1.
 fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, golden: tfref.File, opts: Options, name: []const u8) !void
 {
     const cfg = w.cfg;
@@ -1171,6 +1420,24 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
     defer gpa.free(first);
     const out = try gpa.alloc(u32, n_new);
     defer gpa.free(out);
+    const logits = try gpa.alloc(f32, n_new * cfg.vocab);
+    defer gpa.free(logits);
+    const ref_hash = try gpa.alloc(u64, prompts);
+    defer gpa.free(ref_hash);
+    const plain = moe.ahead != null;
+    if (plain)
+    {
+        var sampler = olmoe.Sampler.seeded(opts.temperature, opts.top_k, opts.seed);
+        for (0..prompts) |p|
+        {
+            const prompt = try goldenTokens(gpa, golden, p);
+            defer gpa.free(prompt);
+            try olmoe.generate(gpa, w, withoutLookahead(moe), &cache, prompt, &sampler, out, logits);
+            @memcpy(first[p * n_new ..][0..n_new], out);
+            ref_hash[p] = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(logits));
+        }
+        std.debug.print("{s}: soak reference round run with the predictor off\n", .{name});
+    }
     const t0 = mf.nowNs();
     const end = t0 + @as(u64, @intFromFloat(opts.minutes * 60e9));
     var rounds: usize = 0;
@@ -1187,13 +1454,15 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
         {
             const prompt = try goldenTokens(gpa, golden, p);
             defer gpa.free(prompt);
-            try olmoe.generate(gpa, w, moe, &cache, prompt, &sampler, out, null);
+            try olmoe.generate(gpa, w, moe, &cache, prompt, &sampler, out, logits);
             const ref = first[p * n_new ..][0..n_new];
-            if (rounds == 0)
+            const hash = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(logits));
+            if (rounds == 0 and !plain)
             {
                 @memcpy(ref, out);
+                ref_hash[p] = hash;
             }
-            else if (!std.mem.eql(u32, ref, out))
+            else if (!std.mem.eql(u32, ref, out) or hash != ref_hash[p])
             {
                 same = false;
             }
@@ -1208,14 +1477,14 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
         rss_max = @max(rss_max, rss);
         const rs = @as(f64, @floatFromInt(mf.nowNs() - r0)) / 1e9;
         std.debug.print("{s}: soak round {d}: {d:.1} tokens/s, resident memory {d:.0} MB{s}\n", .{
-            name, rounds, @as(f64, @floatFromInt(prompts * n_new)) / rs, mb(rss), if (same) "" else ", tokens differ from round 1",
+            name, rounds, @as(f64, @floatFromInt(prompts * n_new)) / rs, mb(rss), if (same) "" else ", tokens or logits differ from the reference",
         });
     }
     const secs = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9;
     const drift = if (rss_base > 0) (mb(rss_max) - mb(rss_base)) / mb(rss_base) * 100 else 0;
     const pass = same and drift < 1;
-    std.debug.print("{s}: soak: {d} tokens in {d:.1} min ({d:.1} tokens/s), {d} rounds, every round identical: {s}, resident memory {d:.0} MB after round 1, max {d:.0} MB (+{d:.2}%) {s}\n", .{
-        name, tokens, secs / 60, @as(f64, @floatFromInt(tokens)) / secs, rounds, if (same) "yes" else "no", mb(rss_base), mb(rss_max), drift, if (pass) "PASS" else "FAIL",
+    std.debug.print("{s}: soak: {d} tokens in {d:.1} min ({d:.1} tokens/s), {d} rounds, tokens and logits identical to the {s} in every round: {s}, resident memory {d:.0} MB after round 1, max {d:.0} MB (+{d:.2}%) {s}\n", .{
+        name, tokens, secs / 60, @as(f64, @floatFromInt(tokens)) / secs, rounds, if (plain) "predictor-off round" else "first round", if (same) "yes" else "no", mb(rss_base), mb(rss_max), drift, if (pass) "PASS" else "FAIL",
     });
     if (!pass)
     {

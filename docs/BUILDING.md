@@ -88,6 +88,8 @@ Lookahead predictor (TASK-11): add `--lookahead 2` to any `olmoe` command. After
 
 Expert cache (TASK-11): add `--cache N` to hold each process's experts in N slots (about 6.7 MB each for OLMoE) instead of loading them all at startup. A worker thread reads experts from the model file through the io_uring reader when a prefetch hint names them, and on demand when a call needs one that is not loaded; each expert's CRC32C is checked the first time it is read. `--pin L` keeps layers below L loaded (default 1, since layer 0 is guessed worst). Each run reports how expert calls found their expert: already loaded, loaded by a hint in time, hinted but still loading, or missed. On a GPU that reads host memory in place (GB10) the cached experts run on the GPU; on a discrete GPU they run on the CPU.
 
+Miss handling (TASK-14): `--loaders N` sets how many threads read experts for the cache, each with its own reader (default 2). A hint whose layer has already started is dropped instead of loaded, and an expert that is not loaded when a call needs it is loaded ahead of every hint. Both ranks run the calls whose experts are ready first and the rest as their experts arrive; results are still added in a fixed order, so the output does not change. `--mispredict 0.1` replaces 10% of the guesses with wrong experts, to test all of this. With the predictor on, `--minutes M` checks every round's tokens and logits against a round run with the predictor off.
+
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 
 ```bash

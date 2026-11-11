@@ -203,8 +203,56 @@ pub const Lookahead = struct {
     /// Time spent guessing, and in whole layers, for the overhead figure.
     predict_ns: u64 = 0,
     layer_ns: u64 = 0,
+    /// Share of guesses replaced with wrong experts, to test miss handling
+    /// (TASK-14), and how many were replaced.
+    mispredict: f32 = 0,
+    replaced: u64 = 0,
+    rng: u64 = 0x9E3779B97F4A7C15,
 
     pub const max_horizon = 2;
+
+    /// A fresh count with the same settings.
+    pub fn restart(self: *Lookahead) void
+    {
+        self.* = .{ .horizon = self.horizon, .extra = self.extra, .mispredict = self.mispredict, .rng = self.rng };
+    }
+
+    /// Replaces about a `mispredict` share of one token's guesses with
+    /// experts it does not hold.
+    fn corrupt(self: *Lookahead, row: []u32, experts: usize) void
+    {
+        for (row) |*e|
+        {
+            if (self.uniform() >= self.mispredict)
+            {
+                continue;
+            }
+            while (true)
+            {
+                const r: u32 = @intCast(self.random() % experts);
+                if (std.mem.indexOfScalar(u32, row, r) == null)
+                {
+                    e.* = r;
+                    break;
+                }
+            }
+            self.replaced += 1;
+        }
+    }
+
+    fn random(self: *Lookahead) u64
+    {
+        self.rng +%= 0x9E3779B97F4A7C15;
+        var z = self.rng;
+        z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
+        return z ^ (z >> 31);
+    }
+
+    fn uniform(self: *Lookahead) f32
+    {
+        return @as(f32, @floatFromInt(self.random() >> 40)) / 16777216.0;
+    }
 
     pub fn recall(self: Lookahead, h: usize) f64
     {
@@ -427,8 +475,8 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const horizon = if (la) |p| @min(p.horizon, Lookahead.max_horizon) else 0;
     const guess = try a.alloc(u32, horizon * cfg.layers * n * kx);
     const guess_val = try a.alloc(f32, kx);
-    const wanted = try a.alloc(bool, if (la != null) cfg.experts else 0);
-    const wanted_list = try a.alloc(u32, wanted.len);
+    const votes = try a.alloc(u32, if (la != null) cfg.experts else 0);
+    const wanted_list = try a.alloc(u32, votes.len);
 
     for (tokens, 0..) |tok, t|
     {
@@ -438,7 +486,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         }
         w.embed.row(tok, h[t * d ..][0..d]);
     }
-    const ahead: Guesser = .{ .w = w, .moe = moe, .n = n, .kx = kx, .out = guess, .val = guess_val, .wanted = wanted, .wanted_list = wanted_list };
+    const ahead: Guesser = .{ .w = w, .moe = moe, .n = n, .kx = kx, .out = guess, .val = guess_val, .votes = votes, .wanted_list = wanted_list };
     if (la) |p|
     {
         // The first layers' guesses come from the token embeddings, before any attention.
@@ -592,7 +640,8 @@ const Guesser = struct {
     kx: usize,
     out: []u32,
     val: []f32,
-    wanted: []bool,
+    /// Per expert: how many tokens guessed it.
+    votes: []u32,
     wanted_list: []u32,
 
     /// Guesses layer `target`'s experts from the hidden states `h`, `hz` layers
@@ -613,20 +662,33 @@ const Guesser = struct {
         for (0..n) |t|
         {
             // Softmax keeps the order, so the raw router outputs rank the same.
-            topK(logits[t * cfg.experts ..][0..cfg.experts], self.kx, out[t * self.kx ..][0..self.kx], self.val);
+            const row = out[t * self.kx ..][0..self.kx];
+            topK(logits[t * cfg.experts ..][0..cfg.experts], self.kx, row, self.val);
+            const p = self.moe.ahead.?;
+            if (p.mispredict > 0)
+            {
+                p.corrupt(row, cfg.experts);
+            }
         }
         const f = self.moe.prefetch orelse return;
-        @memset(self.wanted, false);
+        @memset(self.votes, 0);
         var count: usize = 0;
         for (out) |e|
         {
-            if (!self.wanted[e])
+            if (self.votes[e] == 0)
             {
-                self.wanted[e] = true;
                 self.wanted_list[count] = e;
                 count += 1;
             }
+            self.votes[e] += 1;
         }
+        // Experts that more tokens guessed are hinted, and so loaded, first.
+        std.sort.insertion(u32, self.wanted_list[0..count], self.votes, struct {
+            fn more(v: []u32, a: u32, b: u32) bool
+            {
+                return v[a] > v[b];
+            }
+        }.more);
         try f(self.moe.ctx, target, self.wanted_list[0..count]);
         self.moe.ahead.?.prefetches += 1;
     }

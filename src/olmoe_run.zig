@@ -988,10 +988,12 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     {
         try gpu.map(l.weightRegion());
     }
+    const weights_hash = if (opts.minutes > 0) std.hash.Wyhash.hash(0, l.weightRegion()) else 0;
     var experts: Experts = .{ .local = &l.local };
     try experts.alloc(gpa);
     defer experts.free(gpa);
     const label = if (rank == 1) "expert" else name;
+    defer if (opts.minutes > 0) reportWeights(label, weights_hash, l.weightRegion());
     const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &owned, label) else null;
     defer if (box) |b| b.close(gpa);
     if (box) |b|
@@ -1402,6 +1404,61 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
 
 /// Repeats generation for `opts.minutes`; fails if tokens or logits leave the reference
 /// (a predictor-off round, or else round 1) or memory grows 1% after round 1.
+/// Says how a soak round's generation for one prompt differs from the reference.
+fn reportDiff(name: []const u8, round: usize, prompt: usize, ref: []const u32, out: []const u32, ref_l: []const f32, logits: []const f32, vocab: usize) void
+{
+    var tokens_differ: usize = 0;
+    var first_token: ?usize = null;
+    for (ref, out, 0..) |a, b, i|
+    {
+        if (a != b)
+        {
+            tokens_differ += 1;
+            if (first_token == null)
+            {
+                first_token = i;
+            }
+        }
+    }
+    var first_row: ?usize = null;
+    var rows_differ: usize = 0;
+    var worst: f32 = 0;
+    for (0..ref.len) |t|
+    {
+        const ra = ref_l[t * vocab ..][0..vocab];
+        const rb = logits[t * vocab ..][0..vocab];
+        if (std.mem.eql(u8, std.mem.sliceAsBytes(ra), std.mem.sliceAsBytes(rb)))
+        {
+            continue;
+        }
+        rows_differ += 1;
+        if (first_row == null)
+        {
+            first_row = t;
+        }
+        for (ra, rb) |a, b|
+        {
+            const e = @abs(a - b);
+            if (std.math.isNan(e) or e > worst)
+            {
+                worst = if (std.math.isNan(e)) std.math.inf(f32) else e;
+            }
+        }
+    }
+    std.debug.print("{s}: soak round {d}, prompt {d}: {d} of {d} tokens differ (first at {?d}); logits of {d} tokens differ (first at {?d}), by up to {e}\n", .{
+        name, round, prompt, tokens_differ, ref.len, first_token, rows_differ, first_row, worst,
+    });
+}
+
+/// With `--minutes`, says whether this process's loaded weights still hash as they did at startup.
+fn reportWeights(name: []const u8, before: u64, region: []const u8) void
+{
+    const after = std.hash.Wyhash.hash(0, region);
+    std.debug.print("{s}: weights in memory ({d:.2} GB) {s} since startup\n", .{
+        name, @as(f64, @floatFromInt(region.len)) / 1e9, if (after == before) "unchanged" else "CHANGED",
+    });
+}
+
 fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, golden: tfref.File, opts: Options, name: []const u8) !void
 {
     const cfg = w.cfg;
@@ -1422,8 +1479,9 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
     defer gpa.free(out);
     const logits = try gpa.alloc(f32, n_new * cfg.vocab);
     defer gpa.free(logits);
-    const ref_hash = try gpa.alloc(u64, prompts);
-    defer gpa.free(ref_hash);
+    const per = n_new * cfg.vocab;
+    const ref_logits = try gpa.alloc(f32, prompts * per);
+    defer gpa.free(ref_logits);
     const plain = moe.ahead != null;
     if (plain)
     {
@@ -1434,7 +1492,7 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
             defer gpa.free(prompt);
             try olmoe.generate(gpa, w, withoutLookahead(moe), &cache, prompt, &sampler, out, logits);
             @memcpy(first[p * n_new ..][0..n_new], out);
-            ref_hash[p] = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(logits));
+            @memcpy(ref_logits[p * per ..][0..per], logits);
         }
         std.debug.print("{s}: soak reference round run with the predictor off\n", .{name});
     }
@@ -1445,9 +1503,11 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
     var rss_base: u64 = 0;
     var rss_max: u64 = 0;
     var same = true;
+    var bad_rounds: usize = 0;
     while (rounds == 0 or mf.nowNs() < end)
     {
         const r0 = mf.nowNs();
+        var differ = false;
         // The same seed every round, so a healthy run repeats its tokens exactly.
         var sampler = olmoe.Sampler.seeded(opts.temperature, opts.top_k, opts.seed);
         for (0..prompts) |p|
@@ -1456,19 +1516,25 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
             defer gpa.free(prompt);
             try olmoe.generate(gpa, w, moe, &cache, prompt, &sampler, out, logits);
             const ref = first[p * n_new ..][0..n_new];
-            const hash = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(logits));
+            const ref_l = ref_logits[p * per ..][0..per];
             if (rounds == 0 and !plain)
             {
                 @memcpy(ref, out);
-                ref_hash[p] = hash;
+                @memcpy(ref_l, logits);
             }
-            else if (!std.mem.eql(u32, ref, out) or hash != ref_hash[p])
+            else if (!std.mem.eql(u32, ref, out) or !std.mem.eql(u8, std.mem.sliceAsBytes(ref_l), std.mem.sliceAsBytes(logits)))
             {
                 same = false;
+                differ = true;
+                reportDiff(name, rounds + 1, p, ref, out, ref_l, logits, cfg.vocab);
             }
             tokens += n_new;
         }
         rounds += 1;
+        if (differ)
+        {
+            bad_rounds += 1;
+        }
         const rss = rssBytes();
         if (rounds == 1)
         {
@@ -1477,14 +1543,14 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
         rss_max = @max(rss_max, rss);
         const rs = @as(f64, @floatFromInt(mf.nowNs() - r0)) / 1e9;
         std.debug.print("{s}: soak round {d}: {d:.1} tokens/s, resident memory {d:.0} MB{s}\n", .{
-            name, rounds, @as(f64, @floatFromInt(prompts * n_new)) / rs, mb(rss), if (same) "" else ", tokens or logits differ from the reference",
+            name, rounds, @as(f64, @floatFromInt(prompts * n_new)) / rs, mb(rss), if (differ) ", tokens or logits differ from the reference" else "",
         });
     }
     const secs = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e9;
     const drift = if (rss_base > 0) (mb(rss_max) - mb(rss_base)) / mb(rss_base) * 100 else 0;
     const pass = same and drift < 1;
-    std.debug.print("{s}: soak: {d} tokens in {d:.1} min ({d:.1} tokens/s), {d} rounds, tokens and logits identical to the {s} in every round: {s}, resident memory {d:.0} MB after round 1, max {d:.0} MB (+{d:.2}%) {s}\n", .{
-        name, tokens, secs / 60, @as(f64, @floatFromInt(tokens)) / secs, rounds, if (plain) "predictor-off round" else "first round", if (same) "yes" else "no", mb(rss_base), mb(rss_max), drift, if (pass) "PASS" else "FAIL",
+    std.debug.print("{s}: soak: {d} tokens in {d:.1} min ({d:.1} tokens/s), {d} rounds, tokens and logits identical to the {s} in every round: {s} ({d} rounds differ), resident memory {d:.0} MB after round 1, max {d:.0} MB (+{d:.2}%) {s}\n", .{
+        name, tokens, secs / 60, @as(f64, @floatFromInt(tokens)) / secs, rounds, if (plain) "predictor-off round" else "first round", if (same) "yes" else "no", bad_rounds, mb(rss_base), mb(rss_max), drift, if (pass) "PASS" else "FAIL",
     });
     if (!pass)
     {

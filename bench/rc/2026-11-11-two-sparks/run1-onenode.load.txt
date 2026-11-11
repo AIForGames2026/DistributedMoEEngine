@@ -1,0 +1,12 @@
+GX10-02 2026-11-11T06:51:55Z load 1.27 1.28 1.18 mem_used_mb 6232 avail_mb 118305 gpu 0% gpu_procs 
+GX10-03 2026-11-11T06:51:56Z load 1.01 1.04 1.00 mem_used_mb 113375 avail_mb 11167 gpu 0% gpu_procs VLLM::EngineCore, 95738 MiB;src/engine/zig-out-gen/bin/olmoe, 170 MiB;src/engine/zig-out-gen/bin/olmoe, 170 MiB;
+GX10-02 2026-11-11T06:56:58Z load 2.06 1.78 1.43 mem_used_mb 13887 avail_mb 110657 gpu 89% gpu_procs src/engine/zig-out-gen/bin/olmoe, 172 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+GX10-03 2026-11-11T06:57:06Z load 2.00 1.74 1.34 mem_used_mb 116277 avail_mb 8266 gpu 86% gpu_procs VLLM::EngineCore, 95738 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;src/engine/zig-out-gen/bin/olmoe, 172 MiB;
+GX10-02 2026-11-11T07:02:08Z load 2.00 1.95 1.61 mem_used_mb 13895 avail_mb 110649 gpu 87% gpu_procs src/engine/zig-out-gen/bin/olmoe, 172 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+GX10-03 2026-11-11T07:02:09Z load 2.02 1.95 1.55 mem_used_mb 116262 avail_mb 8281 gpu 93% gpu_procs VLLM::EngineCore, 95738 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;src/engine/zig-out-gen/bin/olmoe, 172 MiB;
+GX10-02 2026-11-11T07:07:11Z load 2.00 2.00 1.74 mem_used_mb 13879 avail_mb 110664 gpu 86% gpu_procs src/engine/zig-out-gen/bin/olmoe, 172 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+GX10-03 2026-11-11T07:07:12Z load 2.05 2.02 1.71 mem_used_mb 116224 avail_mb 8319 gpu 88% gpu_procs VLLM::EngineCore, 95738 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;src/engine/zig-out-gen/bin/olmoe, 172 MiB;
+GX10-02 2026-11-11T07:12:14Z load 2.03 2.02 1.83 mem_used_mb 13888 avail_mb 110656 gpu 88% gpu_procs src/engine/zig-out-gen/bin/olmoe, 172 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+GX10-03 2026-11-11T07:12:15Z load 2.12 2.06 1.83 mem_used_mb 116259 avail_mb 8285 gpu 85% gpu_procs VLLM::EngineCore, 95738 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;src/engine/zig-out-gen/bin/olmoe, 172 MiB;
+GX10-02 2026-11-11T07:17:17Z load 2.09 2.08 1.93 mem_used_mb 13874 avail_mb 110669 gpu 87% gpu_procs src/engine/zig-out-gen/bin/olmoe, 172 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+GX10-03 2026-11-11T07:17:18Z load 2.07 2.06 1.91 mem_used_mb 116217 avail_mb 8326 gpu 93% gpu_procs VLLM::EngineCore, 95738 MiB;src/engine/zig-out-gen/bin/olmoe, 176 MiB;src/engine/zig-out-gen/bin/olmoe, 172 MiB;

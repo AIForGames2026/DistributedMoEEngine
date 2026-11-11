@@ -11,7 +11,8 @@
 | Machine | What it is | Availability | Role in this project |
 |---|---|---|---|
 | `gx10-03` | NVIDIA DGX Spark (GB10, 128 GB unified LPDDR5X, ConnectX-7) | **Now**, shared with another student (about 11 GB of memory free while their vLLM job runs) | Primary engine node and all published benchmarks |
-| `gx10-01`, `gx10-02` | NVIDIA DGX Spark (GB10) | **Busy** running GLM 5.3; may free up later | Multi-node RDMA if and when available (TASK-15b) |
+| `gx10-02` | NVIDIA DGX Spark (GB10) | **Free since Nov 11** (the GLM 5.3 job ended); set up with `~/lukehinojosa/` | Multi-node RDMA (TASK-15b) |
+| `gx10-01` | NVIDIA DGX Spark (GB10) | **Busy** (GLM 5.3 until Nov 10, another model server since Nov 11) | A third node if it frees up (TASK-15b) |
 | Desktop | Windows 11 workstation: RTX 5070 Ti (16 GB, Blackwell, compute capability 12.0), i7-12700K, 64 GB DDR4 | **Always** | Development in WSL2, local CUDA kernel work, and the second node in cross-machine TCP runs |
 
 **Probe results for `gx10-03` (Oct 26, read-only):**
@@ -263,10 +264,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-15b] Multi-Spark RDMA Run (2 to 3 Nodes)
 - **Milestone**: RC (Nov 29)
-- **Status**: Backlog
+- **Status**: Review
 - **Priority**: `could` | **Area**: `benchmarking` | **Tag**: `cut-1`
 - **Description**: Only if `gx10-01` or `gx10-02` frees up (cabling is already in place: the three Sparks are direct-cabled in a full mesh): repeat the soak with one engine process per Spark over real node-to-node RDMA.
 - **Acceptance Criteria**: Done when a 2 or 3 node run passes the TASK-07 suite across nodes, single-packet p50 latency is within 1.5x of node-to-node `ib_write_lat`, and a 30-minute generation run is archived under `bench/rc/` with scaling against the single-node soak.
+- **Results (Nov 11)**: acceptance met with two nodes (`gx10-01` was busy): rank 0 on `gx10-02`, rank 1 on `gx10-03`, RDMA over their direct cable. The TASK-07 suite passes across nodes (20 of 20 dispatch checks, 20 of 20 MoE checks, 45 unit tests on each machine); p50 one-way latency is 4.38 to 4.44 us against `ib_write_lat`'s 3.34 to 3.41 (1.30x, target 1.5x); bandwidth 98.3 Gb/s median against `ib_write_bw`'s 106. A 40-minute generation run went 681 rounds at 54.4 tokens/s, every round bit-identical, memory flat, weights unchanged on both ranks: 2.7x the single-node soak (20.5 tokens/s), mostly from the second GPU. **Open issue:** in an earlier 30-minute repeat, one round (164 of 508) stalled for about 8 seconds and produced different output, with nothing logged; it did not recur, and the soak now reports each differing round and checks the weights so it can be caught. With the expert cache, each rank reads from its own drive and hints add 17 to 23% (`bench/olmoe/2026-11-11-two-sparks.md`). See `bench/rc/2026-11-11-two-sparks.md`.
 
 #### [TASK-16] Telemetry Recording & WebGL Trace Replay
 - **Milestone**: RC (Nov 29)
@@ -371,10 +373,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-09, TASK-12, TASK-13, TASK-15 to TASK-20 (including 15b, 16b), TASK-22, TASK-25, TASK-27, TASK-28 |
+| **Backlog** | TASK-09, TASK-12, TASK-13, TASK-15, TASK-16 to TASK-20 (including 16b), TASK-22, TASK-25, TASK-27, TASK-28 |
 | **To Do** | (none) |
 | **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
@@ -445,7 +447,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | # | Risk | PoC test (task) | Trigger date & condition | Fallback |
 |---|---|---|---|---|
 | **R1** | **Zig is new to the only engineer.** Zig is pre-1.0, with breaking changes between versions and fewer learning resources; combining it with C, CUDA, liburing, and verbs could stall the schedule. | TASK-01 toolchain gate: `build.zig` compiles C, links `liburing` and `libcudart`, calls CUDA on the 5070 Ti, cross-compiles to aarch64, and runs on `gx10-03`. | **Wed Oct 28**: gate not passing, or the TASK-01 matmul not working by Fri Oct 30. | Write the engine core in C11 with CMake (reusing the existing CLion project). No task changes, because every subsystem already sits behind a C ABI; Zig can return later for the scheduler only. |
-| **R2** | **Only one node, and it is shared.** `gx10-01` and `gx10-02` are busy, so real node-to-node RDMA may never be available; `gx10-03`'s ConnectX-7 ports may be unlinked, which can block even RDMA loopback; the other student's jobs compete for memory, GPU, and disk. | TASK-05 probe: ConnectX-7 port state, loopback `ib_write_lat` on `gx10-03`, and realistic free memory; TASK-02 TCP backend between the desktop and `gx10-03`. | **Fri Oct 30**: loopback `ib_write_lat` does not run on `gx10-03`, or less than about 40 GB of memory is realistically free. **Memory condition already met on Oct 26 (about 11 GB free).** | RDMA code is developed against Soft-RoCE (`rdma_rxe`) and performance runs use the shared-memory and TCP backends if loopback fails (Emergency cut); for memory, cap each engine process at 4 GB on `gx10-03`, develop and test models on the desktop (64 GB RAM), use OLMoE-1B-7B-class models on the Spark, and ask the co-tenant for a window with vLLM paused for the soak; label every benchmark with the hardware and co-tenant load it ran under. |
+| **R2** | **Only one node, and it is shared.** **Partly retired Nov 11:** `gx10-02` freed up and the two-node RDMA run passed (TASK-15b). `gx10-01` and `gx10-02` are busy, so real node-to-node RDMA may never be available; `gx10-03`'s ConnectX-7 ports may be unlinked, which can block even RDMA loopback; the other student's jobs compete for memory, GPU, and disk. | TASK-05 probe: ConnectX-7 port state, loopback `ib_write_lat` on `gx10-03`, and realistic free memory; TASK-02 TCP backend between the desktop and `gx10-03`. | **Fri Oct 30**: loopback `ib_write_lat` does not run on `gx10-03`, or less than about 40 GB of memory is realistically free. **Memory condition already met on Oct 26 (about 11 GB free).** | RDMA code is developed against Soft-RoCE (`rdma_rxe`) and performance runs use the shared-memory and TCP backends if loopback fails (Emergency cut); for memory, cap each engine process at 4 GB on `gx10-03`, develop and test models on the desktop (64 GB RAM), use OLMoE-1B-7B-class models on the Spark, and ask the co-tenant for a window with vLLM paused for the soak; label every benchmark with the hardware and co-tenant load it ran under. |
 | **R3** | **NVMe expert streaming is too slow or unsupported.** Direct I/O alignment may not be supported by `gx10-03`'s filesystem, or throughput may fall far below what streaming needs. **Retired Oct 27 for single-drive reads:** ext4 reports DIO alignment and the reader reaches 7.2 GB/s, matching `fio`; contention with GPU kernels is still untested. | TASK-03 reader versus the `fio` O_DIRECT baseline on `gx10-03`. | **Fri Oct 30**: O_DIRECT reads fail, or the reader reaches under 50% of the `fio` baseline. | Load every expert at startup and run resident-only (the RC model fits in memory); TASK-12 and TASK-13 drop with the first cut, and TASK-11 prefetching targets the transport only. |
 
 ### 7.2 Other Risks

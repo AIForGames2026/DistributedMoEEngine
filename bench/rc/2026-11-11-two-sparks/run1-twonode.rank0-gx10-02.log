@@ -1,0 +1,552 @@
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 0.70 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+rdma: prompt 0 (5 tokens, 99 ms): logits max err 2.19e-5, top-1 5/5, hidden max err 2.67e-4, experts chosen 640/640 same ok
+rdma: prompt 1 (21 tokens, 299 ms): logits max err 3.53e-5, top-1 21/21, hidden max err 3.05e-4, experts chosen 2688/2688 same ok
+rdma: prompt 2 (17 tokens, 262 ms): logits max err 4.01e-5, top-1 17/17, hidden max err 3.20e-4, experts chosen 2176/2176 same ok
+rdma: PASS: OLMoE-1B-7B logits within 1e-2 of the PyTorch reference (worst 4.01e-5), every top-1 token identical
+rdma: generate prompt 0: 64 tokens in 1.32 s (48.5 tokens/s, prompt included)
+rdma:   tokens: 7785 15 187 187 510 14731 273 6181 310 253 14029 15 187 187 510 3072 273 6181 310 1475 9963 3041 952 15 187 187 510 3565 3448 273 6181 310 5112 15 187 187 510 6253 2846 275 6181 310 7785 15 187 187 510 4585 11129 275 6181 310 7812 2071 1377 13 534 9572 387 577 13 23576 17249 313
+rdma:   same as transformers' generate(): 64/64 tokens, logits max err 4.53e-5 ok
+rdma: generate prompt 1: 64 tokens in 1.44 s (44.5 tokens/s, prompt included)
+rdma:   tokens: 5713 251 42401 9 79 14 18 10 559 5713 251 42401 9 79 14 19 10 187 187 3845 9 36240 251 42401 9 740 1228 187 187 1552 2086 13067 247 1159 1925 5713 251 42401 326 45319 253 295 394 1180 275 253 34125 251 42401 3425 15 380 34125 251 42401 3425 310 247 2962 273 3904 275 534 1016
+rdma:   same as transformers' generate(): 64/64 tokens, logits max err 4.43e-5 ok
+rdma: generate prompt 2: 64 tokens in 1.32 s (48.4 tokens/s, prompt included)
+rdma:   tokens: 326 1016 6485 310 5506 323 247 2173 873 273 21761 15 380 10071 840 897 616 1211 3210 281 3283 253 1735 10669 15 831 476 320 625 5919 685 247 2014 1566 13 347 253 10071 476 3894 1491 285 3037 432 1016 643 15 187 187 510 4477 273 436 2929 897 247 5019 273 418 27127 285 4480 19946 3210
+rdma:   same as transformers' generate(): 64/64 tokens, logits max err 4.39e-5 ok
+rdma: PASS: every generated token matches transformers' generate(), logits within 1e-2
+rdma: soak round 1: 50.2 tokens/s, resident memory 4147 MB
+rdma: soak round 2: 55.6 tokens/s, resident memory 4147 MB
+rdma: soak round 3: 55.4 tokens/s, resident memory 4147 MB
+rdma: soak round 4: 55.6 tokens/s, resident memory 4147 MB
+rdma: soak round 5: 55.5 tokens/s, resident memory 4147 MB
+rdma: soak round 6: 55.4 tokens/s, resident memory 4147 MB
+rdma: soak round 7: 55.5 tokens/s, resident memory 4147 MB
+rdma: soak round 8: 55.5 tokens/s, resident memory 4147 MB
+rdma: soak round 9: 55.5 tokens/s, resident memory 4147 MB
+rdma: soak round 10: 55.4 tokens/s, resident memory 4147 MB
+rdma: soak round 11: 55.5 tokens/s, resident memory 4147 MB
+rdma: soak round 12: 55.5 tokens/s, resident memory 4147 MB
+rdma: soak round 13: 55.4 tokens/s, resident memory 4147 MB
+rdma: soak round 14: 55.2 tokens/s, resident memory 4147 MB
+rdma: soak round 15: 55.2 tokens/s, resident memory 4147 MB
+rdma: soak round 16: 55.1 tokens/s, resident memory 4147 MB
+rdma: soak round 17: 55.0 tokens/s, resident memory 4147 MB
+rdma: soak round 18: 55.2 tokens/s, resident memory 4147 MB
+rdma: soak round 19: 55.2 tokens/s, resident memory 4147 MB
+rdma: soak round 20: 54.9 tokens/s, resident memory 4147 MB
+rdma: soak round 21: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 22: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 23: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 24: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 25: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 26: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 27: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 28: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 29: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 30: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 31: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 32: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 33: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 34: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 35: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 36: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 37: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 38: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 39: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 40: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 41: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 42: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 43: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 44: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 45: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 46: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 47: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 48: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 49: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 50: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 51: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 52: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 53: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 54: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 55: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 56: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 57: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 58: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 59: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 60: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 61: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 62: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 63: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 64: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 65: 54.8 tokens/s, resident memory 4147 MB
+rdma: soak round 66: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 67: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 68: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 69: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 70: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 71: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 72: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 73: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 74: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 75: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 76: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 77: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 78: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 79: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 80: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 81: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 82: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 83: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 84: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 85: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 86: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 87: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 88: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 89: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 90: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 91: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 92: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 93: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 94: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 95: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 96: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 97: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 98: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 99: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 100: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 101: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 102: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 103: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 104: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 105: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 106: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 107: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 108: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 109: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 110: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 111: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 112: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 113: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 114: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 115: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 116: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 117: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 118: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 119: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 120: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 121: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 122: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 123: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 124: 54.7 tokens/s, resident memory 4147 MB
+rdma: soak round 125: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 126: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 127: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 128: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 129: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 130: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 131: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 132: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 133: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 134: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 135: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 136: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 137: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 138: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 139: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 140: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 141: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 142: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 143: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 144: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 145: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 146: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 147: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 148: 54.6 tokens/s, resident memory 4147 MB
+rdma: soak round 149: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 150: 54.5 tokens/s, resident memory 4147 MB
+rdma: soak round 151: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 152: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 153: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 154: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 155: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 156: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 157: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 158: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 159: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 160: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 161: 54.3 tokens/s, resident memory 4147 MB
+rdma: soak round 162: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 163: 54.4 tokens/s, resident memory 4147 MB
+rdma: soak round 164: 17.6 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 165: 53.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 166: 53.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 167: 53.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 168: 53.6 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 169: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 170: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 171: 53.6 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 172: 53.6 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 173: 53.7 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 174: 53.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 175: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 176: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 177: 53.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 178: 53.6 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 179: 53.7 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 180: 53.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 181: 52.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 182: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 183: 53.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 184: 53.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 185: 53.7 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 186: 53.9 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 187: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 188: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 189: 53.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 190: 53.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 191: 53.7 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 192: 54.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 193: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 194: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 195: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 196: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 197: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 198: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 199: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 200: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 201: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 202: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 203: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 204: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 205: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 206: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 207: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 208: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 209: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 210: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 211: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 212: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 213: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 214: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 215: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 216: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 217: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 218: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 219: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 220: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 221: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 222: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 223: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 224: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 225: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 226: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 227: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 228: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 229: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 230: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 231: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 232: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 233: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 234: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 235: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 236: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 237: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 238: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 239: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 240: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 241: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 242: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 243: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 244: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 245: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 246: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 247: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 248: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 249: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 250: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 251: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 252: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 253: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 254: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 255: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 256: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 257: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 258: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 259: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 260: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 261: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 262: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 263: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 264: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 265: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 266: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 267: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 268: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 269: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 270: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 271: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 272: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 273: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 274: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 275: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 276: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 277: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 278: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 279: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 280: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 281: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 282: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 283: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 284: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 285: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 286: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 287: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 288: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 289: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 290: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 291: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 292: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 293: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 294: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 295: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 296: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 297: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 298: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 299: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 300: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 301: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 302: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 303: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 304: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 305: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 306: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 307: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 308: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 309: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 310: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 311: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 312: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 313: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 314: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 315: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 316: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 317: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 318: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 319: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 320: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 321: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 322: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 323: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 324: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 325: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 326: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 327: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 328: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 329: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 330: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 331: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 332: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 333: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 334: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 335: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 336: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 337: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 338: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 339: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 340: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 341: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 342: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 343: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 344: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 345: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 346: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 347: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 348: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 349: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 350: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 351: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 352: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 353: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 354: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 355: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 356: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 357: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 358: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 359: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 360: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 361: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 362: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 363: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 364: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 365: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 366: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 367: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 368: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 369: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 370: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 371: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 372: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 373: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 374: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 375: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 376: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 377: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 378: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 379: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 380: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 381: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 382: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 383: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 384: 54.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 385: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 386: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 387: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 388: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 389: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 390: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 391: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 392: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 393: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 394: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 395: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 396: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 397: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 398: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 399: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 400: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 401: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 402: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 403: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 404: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 405: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 406: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 407: 54.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 408: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 409: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 410: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 411: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 412: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 413: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 414: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 415: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 416: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 417: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 418: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 419: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 420: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 421: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 422: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 423: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 424: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 425: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 426: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 427: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 428: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 429: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 430: 53.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 431: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 432: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 433: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 434: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 435: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 436: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 437: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 438: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 439: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 440: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 441: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 442: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 443: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 444: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 445: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 446: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 447: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 448: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 449: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 450: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 451: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 452: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 453: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 454: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 455: 54.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 456: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 457: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 458: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 459: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 460: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 461: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 462: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 463: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 464: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 465: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 466: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 467: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 468: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 469: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 470: 53.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 471: 53.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 472: 53.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 473: 53.9 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 474: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 475: 53.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 476: 53.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 477: 53.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 478: 53.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 479: 53.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 480: 53.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 481: 53.0 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 482: 53.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 483: 53.9 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 484: 53.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 485: 53.4 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 486: 52.9 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 487: 53.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 488: 53.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 489: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 490: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 491: 53.5 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 492: 52.8 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 493: 53.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 494: 53.6 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 495: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 496: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 497: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 498: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 499: 54.3 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 500: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 501: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 502: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 503: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 504: 54.1 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 505: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 506: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 507: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak round 508: 54.2 tokens/s, resident memory 4147 MB, tokens or logits differ from the reference
+rdma: soak: 97536 tokens in 30.0 min (54.1 tokens/s), 508 rounds, tokens and logits identical to the first round in every round: no, resident memory 4147 MB after round 1, max 4147 MB (+0.00%) FAIL
+rdma: 7402933 expert calls sent to rank 1, 7717835 run locally; payload f32
+error: SoakFailed
+Command exited with non-zero status 1
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe rdma-router models/olmoe-1b-7b-0924-instruct-q8_0.gguf --host 192.168.197.13 --port 47992 --dev rocep1s0f0 --golden models/olmoe_generate.tfref --payload f32 --gpu --generate 64 --minutes 30"
+	User time (seconds): 1807.43
+	System time (seconds): 1.11
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 30:08.69
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4049572
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1989404
+	Voluntary context switches: 21904
+	Involuntary context switches: 19721
+	Swaps: 0
+	File system inputs: 7687120
+	File system outputs: 544
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
+rc=1

@@ -78,5 +78,5 @@ Rank 1 reports no time with nothing to run, because it never stops to wait for a
 ## Not yet measured or done
 
 - Reading experts from a peer over RDMA READ (see above; needs replicated experts).
-- Experts on two machines, each with its own drive, where the extra loaders and hints should help most.
+- Experts on two machines, each with its own drive: measured Nov 11 in `2026-11-11-two-sparks.md`, where hints add 17 to 23%.
 - Cancelling a read that has already started: a loader drops a stale hint only before it starts reading.

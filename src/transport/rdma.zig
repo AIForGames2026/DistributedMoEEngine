@@ -94,6 +94,13 @@ pub const Link = struct {
         self.* = undefined;
     }
 
+    /// Tears the link down at once, for a peer that will never answer.
+    pub fn abort(self: *Link) void {
+        tcp.closeSocket(self.sock);
+        tf_rdma_close(self.handle);
+        self.* = undefined;
+    }
+
     pub fn stats(self: *const Link) Stats {
         var s: Stats = undefined;
         tf_rdma_get_stats(self.handle, &s);

@@ -1,0 +1,4 @@
+bench: 16 peers, 20 rounds, tracker at 192.168.197.12:47300, heartbeat 250 ms, timeout 1000 ms
+  join seen by every peer: p50 3.4 ms, max 10.9 ms
+  dropped connection marked unhealthy everywhere: p50 22.3 ms, max 29.0 ms
+  stopped heartbeat marked unhealthy everywhere: p50 1014.0 ms, max 1024.0 ms

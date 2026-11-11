@@ -19,7 +19,12 @@
 //!          instead of all at startup), --pin L (keep layers below L loaded;
 //!          default 1), --loaders N (TASK-14: cache loader threads, each
 //!          with its own reader; default 2), --mispredict P (replace a share
-//!          P of the guesses with wrong experts, to test miss handling)
+//!          P of the guesses with wrong experts, to test miss handling),
+//!          --tracker IP[:PORT] (TASK-09: join the swarm tracker; an expert
+//!          announces its address and experts there, and a router given no
+//!          --host connects to a healthy expert it lists and refuses to route
+//!          to it once the tracker marks it unhealthy), --advertise IP (the
+//!          address an expert announces; default the one the tracker sees)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -51,6 +56,7 @@ const Arena = @import("arena.zig").Arena;
 const ExpertCache = @import("expert_cache.zig").ExpertCache;
 const Want = @import("expert_cache.zig").Want;
 const CacheSource = @import("expert_cache.zig").Source;
+const tracker = @import("tracker.zig");
 const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
@@ -89,6 +95,17 @@ const Options = struct {
     pin: usize = 1,
     loaders: usize = 2,
     mispredict: f32 = 0,
+    tracker: ?[]const u8 = null,
+    advertise: ?[]const u8 = null,
+    swarm: ?*const Swarm = null,
+};
+
+/// A router's view of the swarm (TASK-09): its tracker link, watching the
+/// expert process it connected to, and the ownership that process announced.
+const Swarm = struct {
+    client: *tracker.Client,
+    peer: tracker.Entry,
+    owner: [max_experts]u8,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -101,6 +118,7 @@ pub fn main(init: std.process.Init) !void {
             \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
             \\         --lookahead H  --extra E  --cache N  --pin L  --loaders N  --mispredict P
+            \\         --tracker IP[:PORT]  --advertise IP  (a router with --tracker needs no --host)
             \\
         , .{});
         std.process.exit(2);
@@ -146,11 +164,17 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, mode, "expert") or std.mem.eql(u8, mode, "rdma-expert")) {
         const l = try transport.tcp.listen(opts.port);
         std.debug.print("expert: listening on port {d}\n", .{l.port});
+        const client = if (opts.tracker) |t| try joinAsExpert(gpa, opts, t, l.port) else null;
+        defer if (client) |cl| cl.close(gpa, false);
         const fd = try transport.tcp.acceptOn(l.fd);
         transport.tcp.closeSocket(l.fd);
         return runLinked(gpa, opts, slots, is_rdma, fd, 1);
     }
     if (std.mem.eql(u8, mode, "router") or std.mem.eql(u8, mode, "rdma-router")) {
+        if (opts.tracker) |t|
+        {
+            return runTrackedRouter(gpa, opts, slots, is_rdma, t);
+        }
         return runLinked(gpa, opts, slots, is_rdma, try transport.tcp.connect(opts.host, opts.port, 300), 0);
     }
     std.debug.print("unknown mode '{s}'\n", .{mode});
@@ -205,6 +229,10 @@ fn parseArgs(init: std.process.Init) !Options {
         } else if (std.mem.eql(u8, arg, "--loaders")) {
             opts.loaders = try std.fmt.parseInt(usize, value, 10);
             if (opts.loaders == 0 or opts.loaders > 16) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--tracker")) {
+            opts.tracker = value;
+        } else if (std.mem.eql(u8, arg, "--advertise")) {
+            opts.advertise = value;
         } else if (std.mem.eql(u8, arg, "--mispredict")) {
             opts.mispredict = try std.fmt.parseFloat(f32, value);
             if (opts.mispredict < 0 or opts.mispredict > 1) return error.Usage;
@@ -323,14 +351,92 @@ const Loaded = struct {
 };
 
 /// Experts this rank owns, as a mask, after reading the header for the count.
-fn ownedMask(gpa: std.mem.Allocator, opts: Options, rank: u8, owner: *[max_experts]u8, owned: *[max_experts]bool) !void {
+/// A router that found its expert through the tracker uses what it announced.
+fn ownedMask(gpa: std.mem.Allocator, opts: Options, rank: u8, owner: *[max_experts]u8, owned: *[max_experts]bool) !usize {
     const file = try mf.File.open(opts.model);
     defer file.close();
     var state = try mf.openModel(gpa, file, null);
     defer state.deinit(gpa);
     const experts = state.model.experts;
-    try readPlacement(gpa, opts.placement, experts, owner);
+    if (opts.swarm) |sw|
+    {
+        if (sw.peer.info.experts != experts)
+        {
+            std.debug.print("{s}: the expert process announced {d} experts, but this model has {d}\n", .{ opts.mode, sw.peer.info.experts, experts });
+            return error.PlacementMismatch;
+        }
+        owner.* = sw.owner;
+    }
+    else
+    {
+        try readPlacement(gpa, opts.placement, experts, owner);
+    }
     for (owned, 0..) |*o, e| o.* = e < experts and owner[e] == rank;
+    return experts;
+}
+
+/// Announces this expert process to the tracker: where to reach it and which
+/// experts it owns. The tracker link sends heartbeats until it is closed.
+fn joinAsExpert(gpa: std.mem.Allocator, opts: Options, where: []const u8, port: u16) !*tracker.Client
+{
+    var owner: [max_experts]u8 = undefined;
+    var owned: [max_experts]bool = undefined;
+    const experts = try ownedMask(gpa, opts, 1, &owner, &owned);
+    var info: tracker.Info = .{ .role = .expert, .rank = 1, .port = port, .experts = @intCast(experts) };
+    info.setLocal();
+    if (opts.advertise) |a|
+    {
+        info.addr = try transport.tcp.parseIp4(a);
+    }
+    for (0..experts) |e|
+    {
+        if (owned[e])
+        {
+            info.setOwned(e);
+        }
+    }
+    const t = try tracker.parseAddress(where);
+    const client = try tracker.Client.start(gpa, t.host, t.port, info);
+    var ts: [16]u8 = undefined;
+    std.debug.print("{s} expert: joined the tracker at {s}:{d} as id {d} with {d} of {d} experts (heartbeat {d} ms)\n", .{ tracker.stamp(&ts), t.host, t.port, client.id, info.ownedCount(), experts, client.beat_ms });
+    return client;
+}
+
+/// A router with no --host: joins the tracker, connects to a healthy expert
+/// process it lists, takes that process's experts as the placement, and
+/// watches its health for the rest of the run.
+fn runTrackedRouter(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool, where: []const u8) !void
+{
+    const t = try tracker.parseAddress(where);
+    var info: tracker.Info = .{ .role = .router, .rank = 0 };
+    info.setLocal();
+    const client = try tracker.Client.start(gpa, t.host, t.port, info);
+    defer client.close(gpa, false);
+    var tj: [16]u8 = undefined;
+    std.debug.print("{s} router: joined the tracker at {s}:{d} as id {d}; waiting for a healthy expert process\n", .{ tracker.stamp(&tj), t.host, t.port, client.id });
+    const peer = try client.waitFor(.expert, 120_000);
+    var swarm: Swarm = .{ .client = client, .peer = peer, .owner = @splat(0) };
+    info.experts = peer.info.experts;
+    for (0..peer.info.experts) |e|
+    {
+        if (peer.info.owns(e))
+        {
+            swarm.owner[e] = 1;
+        }
+        else
+        {
+            info.setOwned(e);
+        }
+    }
+    try client.update(info);
+    client.watch(peer.id);
+    var ip: [16]u8 = undefined;
+    const host = tracker.formatIp4(peer.info.addr, &ip);
+    var ts: [16]u8 = undefined;
+    std.debug.print("{s} router: tracker lists expert id {d} (pid {d} on {s}) at {s}:{d} with {d} of {d} experts\n", .{ tracker.stamp(&ts), peer.id, peer.info.pid, peer.info.nodeName(), host, peer.info.port, peer.info.ownedCount(), peer.info.experts });
+    var tracked = opts;
+    tracked.swarm = &swarm;
+    return runLinked(gpa, tracked, slots, is_rdma, try transport.tcp.connect(host, peer.info.port, 300), 0);
 }
 
 /// This process's experts: all loaded at startup, or held in an expert cache.
@@ -665,9 +771,41 @@ const SplitMoe = struct {
     remote: u64 = 0,
     local_calls: u64 = 0,
     hints: u64 = 0,
+    /// The tracker link watching rank 1 (TASK-09), if there is one.
+    health: ?*tracker.Client = null,
 
     fn moe(self: *SplitMoe) olmoe.Moe {
         return .{ .ctx = self, .run = run };
+    }
+
+    /// Refuses to route to rank 1 once the tracker marks it unhealthy.
+    fn checkPeer(self: *SplitMoe) !void
+    {
+        if (self.health) |h|
+        {
+            if (!h.peerHealthy())
+            {
+                return error.PeerUnhealthy;
+            }
+        }
+    }
+
+    /// `ep.send`, but gives up if rank 1 turns unhealthy while it waits.
+    fn sendChecked(self: *SplitMoe, kind: wire.Kind) !void
+    {
+        while (true)
+        {
+            self.ep.trySend(self.pkt, kind) catch |err| switch (err) {
+                error.WouldBlock => {
+                    try self.ep.flushCredits();
+                    try self.checkPeer();
+                    std.atomic.spinLoopHint();
+                    continue;
+                },
+                else => |e| return e,
+            };
+            return;
+        }
     }
 
     /// Sends rank 1 the guessed experts it owns for `layer` (TASK-11), even
@@ -692,7 +830,8 @@ const SplitMoe = struct {
                 self.experts.hint(layer, e);
             }
         }
-        try self.ep.send(self.pkt, .dispatch);
+        try self.checkPeer();
+        try self.sendChecked(.dispatch);
         self.hints += 1;
     }
 
@@ -711,6 +850,7 @@ const SplitMoe = struct {
         const k = self.local.cfg.top_k;
         const d = self.local.cfg.d_model;
         if (n * k * d > self.contrib.len) return error.TooManyTokens;
+        try self.checkPeer();
         self.experts.enter(layer);
         const chunks = wire.chunkCount(self.enc, d);
         // Packets, not expert calls: each call is `chunks` packets each way.
@@ -732,6 +872,7 @@ const SplitMoe = struct {
                                 got += 1;
                             }
                             try self.ep.flushCredits();
+                            try self.checkPeer();
                             continue;
                         },
                         else => |e2| return e2,
@@ -745,7 +886,13 @@ const SplitMoe = struct {
         // Local experts run while the peer works on the remote ones.
         self.local_calls += try self.experts.runCalls(layer, x, n, idx, self.contrib, self.owner);
         while (got < sent) {
-            try self.take(try self.ep.recv(), layer, idx, n);
+            const r = (try self.ep.tryRecv()) orelse
+            {
+                try self.checkPeer();
+                std.atomic.spinLoopHint();
+                continue;
+            };
+            try self.take(r, layer, idx, n);
             got += 1;
         }
         try self.ep.flushCredits();
@@ -981,7 +1128,7 @@ fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool)
 fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank: u8, name: []const u8) !void {
     var owner: [max_experts]u8 = undefined;
     var owned: [max_experts]bool = undefined;
-    try ownedMask(gpa, opts, rank, &owner, &owned);
+    _ = try ownedMask(gpa, opts, rank, &owner, &owned);
     // After any fork (CUDA state does not survive one), before the weights.
     if (opts.gpu) try gpu.open();
     defer if (opts.gpu) gpu.stop();
@@ -1027,6 +1174,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .enc = opts.payload,
         .contrib = try gpa.alloc(f32, 64 * cfg.top_k * cfg.d_model),
         .pkt = pkt,
+        .health = if (opts.swarm) |sw| sw.client else null,
     };
     defer gpa.free(split.contrib);
     var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra, .mispredict = opts.mispredict };
@@ -1037,6 +1185,14 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         moe.prefetch = SplitMoe.prefetch;
     }
     const result = runGolden(gpa, &l.weights.?, moe, opts, name);
+    if (result) |_| {} else |err|
+    {
+        if (err == error.PeerUnhealthy)
+        {
+            reportRefusal(name, opts.swarm.?, split.remote);
+            return err;
+        }
+    }
     try ep.finish();
     std.debug.print("{s}: {d} expert calls sent to rank 1, {d} run locally; payload {t}\n", .{ name, split.remote, split.local_calls, opts.payload });
     if (opts.lookahead > 0)
@@ -1048,6 +1204,18 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         reportCache(name, b.cache);
     }
     return result;
+}
+
+/// Says why rank 0 stopped routing: what the tracker reports for rank 1.
+fn reportRefusal(name: []const u8, sw: *const Swarm, sent: u64) void
+{
+    var v: tracker.View = .{};
+    sw.client.snapshot(&v);
+    const why = if (sw.client.lost.load(.acquire)) "the tracker connection was lost" else if (v.find(sw.peer.id)) |e| @tagName(e.health) else "missing from the map";
+    var t: [16]u8 = undefined;
+    std.debug.print("{s} {s}: refusing to route to rank 1 (tracker id {d}, pid {d} on {s}): {s} in map v{d}, received {d:.0} ms ago; {d} expert calls had been sent to it\n", .{
+        tracker.stamp(&t), name, sw.peer.id, sw.peer.info.pid, sw.peer.info.nodeName(), why, v.version, @as(f64, @floatFromInt(tracker.monoNs() - v.at_ns)) / 1e6, sent,
+    });
 }
 
 /// Both ranks on this machine: rank 1 is a fork. Each loads only its own
@@ -1107,9 +1275,26 @@ fn runLinked(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool, f
     defer ring_arena.deinit();
     const ring = try ring_arena.alloc(wire.Packet, slots);
     var link = transport.tcp.Link.init(fd, ring);
-    defer if (rank == 0) link.close() else link.closeAfterPeer();
     var ep = transport.Endpoint.init(link.backend(), @intCast(rank), slots);
-    return runRank(gpa, opts, &ep, rank, "tcp");
+    const result = runRank(gpa, opts, &ep, rank, "tcp");
+    if (result) |_| {} else |err|
+    {
+        // An unhealthy peer may never close its side, so do not wait for it.
+        if (err == error.PeerUnhealthy)
+        {
+            transport.tcp.closeSocket(link.fd);
+            return err;
+        }
+    }
+    if (rank == 0)
+    {
+        link.close();
+    }
+    else
+    {
+        link.closeAfterPeer();
+    }
+    return result;
 }
 
 fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.tcp.Socket, rank: u8, name: []const u8) !void {
@@ -1117,9 +1302,18 @@ fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.
     defer ring_arena.deinit();
     const ring = try ring_arena.alloc(wire.Packet, slots);
     var link = try transport.rdma.Link.connect(fd, @intCast(rank), ring, .{ .device = opts.device, .gid_index = opts.gid });
-    defer link.close();
     var ep = transport.Endpoint.init(link.backend(), @intCast(rank), slots);
-    return runRank(gpa, opts, &ep, rank, name);
+    const result = runRank(gpa, opts, &ep, rank, name);
+    if (result) |_| {} else |err|
+    {
+        if (err == error.PeerUnhealthy)
+        {
+            link.abort();
+            return err;
+        }
+    }
+    link.close();
+    return result;
 }
 
 /// Largest absolute difference; a NaN anywhere counts as infinitely wrong

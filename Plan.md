@@ -191,12 +191,13 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 ### Milestone 3: Beta (Target: Nov 22)
 
-#### [TASK-09] Swarm Node Tracker (Lumabri / Colibri Integration)
+#### [TASK-09] Swarm Node Tracker (after Lumabri / Colibri)
 - **Milestone**: Beta (Nov 22)
-- **Status**: Backlog
+- **Status**: Review
 - **Priority**: `should` | **Area**: `architecture` | **Tag**: `cut-2`
-- **Description**: Replace the static placement manifest with the pure-C Lumabri tracker daemon (TCP/UDP 47300) as the control plane: live process and node registry, health heartbeats, and the expert ownership map the dispatcher reads. Token payloads never pass through it. Check Lumabri's license for GPLv3 compatibility before vendoring.
+- **Description**: Replace the static placement manifest with a tracker as the control plane: live process and node registry, health heartbeats, and the expert ownership map the dispatcher reads. Token payloads never pass through it. Changed Nov 11: Lumabri turned out to be Apache-2.0 (compatible) but a large, fast-moving C project whose tracker beats every 10 s on port 7300, too slow for the 5 s target below, so the tracker is written in Zig (`src/tracker.zig`, TCP 47300) after Lumabri's index-only design instead of vendored.
 - **Acceptance Criteria**: Done when a new engine process joins and its expert assignment appears in every peer's ownership map within 2 seconds, a killed process is marked unhealthy within 5 seconds, and the dispatcher refuses to route to an unhealthy process.
+- **Results (Nov 11)**: acceptance met across two Sparks: tracker on `gx10-02`, router on `gx10-02`, expert on `gx10-03` over RDMA. Processes join over TCP with their address and experts, send a heartbeat every 250 ms, and get the whole map on every change. A process is unhealthy when its connection closes without a goodbye or after 1 s without a heartbeat. `olmoe ... --tracker IP` replaces `--host` and `--placement`: the router waits for a healthy expert, uses the experts it announced, and stops with `PeerUnhealthy` instead of routing to it once it is unhealthy. Measured: a join reached every peer in 2 ms (bench with 16 peers on the other node: p50 3.4 ms, max 10.9 ms); a SIGKILLed expert was marked unhealthy in 52 ms and a SIGSTOPped one in 0.79 s, and the router refused 10 ms after each map arrived; a router started while the only expert was stopped waited 4.8 s and connected when it resumed. With the tracker, generation stays at 55 tokens/s and passes every check. Limits: the tracker is a single point of failure (clients then fail closed), there is no authentication, and the engine still runs two ranks. See `bench/tracker/2026-11-11.md`.
 
 #### [TASK-11] Speculative Lookahead Router
 - **Milestone**: Beta (Nov 22)
@@ -373,10 +374,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-09, TASK-12, TASK-13, TASK-15, TASK-16 to TASK-20 (including 16b), TASK-22, TASK-25, TASK-27, TASK-28 |
+| **Backlog** | TASK-12, TASK-13, TASK-15, TASK-16 to TASK-20 (including 16b), TASK-22, TASK-25, TASK-27, TASK-28 |
 | **To Do** | (none) |
 | **In Progress** | TASK-23 (built Nov 5 and played live on a second machine; tagged `v0.2.0-alpha` Nov 10; first-time tester in Testing Session 1 left) |
-| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat) |
+| **Review** | TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
@@ -458,7 +459,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | R5 | Co-tenant load makes `gx10-03` benchmarks noisy | High | Medium | Record co-tenant GPU and memory use with each run; repeat runs and report the median; agree on a quiet window for the soak |
 | R6 | Lookahead recall below 80% at H = 2 | Medium | Medium | Report H = 1; exact-mode miss handling keeps output correct |
 | R7 | Kernel code written on the 5070 Ti (12.0) behaves differently on GB10 (12.1) | Medium | Medium | Build for both `sm_120` and `sm_121`; run correctness tests on both; never publish desktop numbers as GB10 numbers |
-| R8 | GPLv3 vs. proprietary NVIDIA libraries (CUDA runtime, nvCOMP) in distributed binaries | Medium | Medium | Add a GPLv3 section 7 linking exception for NVIDIA libraries before the first release; check Lumabri's license before vendoring |
+| R8 | GPLv3 vs. proprietary NVIDIA libraries (CUDA runtime, nvCOMP) in distributed binaries | Medium | Medium | Add a GPLv3 section 7 linking exception for NVIDIA libraries before the first release. Lumabri (Apache-2.0) is not vendored: TASK-09's tracker is written in Zig and follows its design |
 | R9 | Public demo exposes a live endpoint or lab machine details | Low | High | Pages ships recorded traces only; live `wss://` is operator-configured; no IP addresses or credentials in the repo |
 
 ### 7.3 Research-Verified Constraints

@@ -75,6 +75,18 @@ pub fn build(b: *std.Build) void {
     run_dispatch.addPassthruArgs();
     b.step("dispatch", "Run the dispatch/combine check (args after --)").dependOn(&run_dispatch.step);
 
+    // Swarm node tracker (TASK-09), Linux only like the engine's other services.
+    if (target.result.os.tag == .linux) {
+        const tracker_mod = b.createModule(.{
+            .root_source_file = b.path("src/tracker.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        const tracker = b.addExecutable(.{ .name = "tracker", .root_module = tracker_mod });
+        b.installArtifact(tracker);
+    }
+
     // Process start to first kernel call (TASK-01).
     const startup_mod = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libc = true });
     startup_mod.addCSourceFile(.{ .file = b.path("tools/bench/startup.c"), .flags = &c_flags });

@@ -1,0 +1,660 @@
+tracker: listening on port 47300, heartbeat every 250 ms, unhealthy after 1000 ms without one
+11:53:20.154 tracker: id 1 watcher rank 0 pid 760352 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.155 tracker: map v1: 0 processes, 0 healthy
+11:53:20.882 tracker: id 2 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.882 tracker: map v2: 0 processes, 0 healthy
+11:53:20.884 tracker: id 3 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.884 tracker: map v3: 0 processes, 0 healthy
+11:53:20.885 tracker: id 4 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.885 tracker: map v4: 0 processes, 0 healthy
+11:53:20.886 tracker: id 5 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.887 tracker: map v5: 0 processes, 0 healthy
+11:53:20.887 tracker: id 6 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.887 tracker: map v6: 0 processes, 0 healthy
+11:53:20.888 tracker: id 7 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.888 tracker: map v7: 0 processes, 0 healthy
+11:53:20.889 tracker: id 8 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.889 tracker: map v8: 0 processes, 0 healthy
+11:53:20.890 tracker: id 9 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.890 tracker: map v9: 0 processes, 0 healthy
+11:53:20.890 tracker: id 10 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.890 tracker: map v10: 0 processes, 0 healthy
+11:53:20.891 tracker: id 11 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.891 tracker: map v11: 0 processes, 0 healthy
+11:53:20.891 tracker: id 12 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.891 tracker: map v12: 0 processes, 0 healthy
+11:53:20.892 tracker: id 13 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.892 tracker: map v13: 0 processes, 0 healthy
+11:53:20.892 tracker: id 14 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.892 tracker: map v14: 0 processes, 0 healthy
+11:53:20.893 tracker: id 15 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.893 tracker: map v15: 0 processes, 0 healthy
+11:53:20.893 tracker: id 16 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.893 tracker: map v16: 0 processes, 0 healthy
+11:53:20.894 tracker: id 17 watcher rank 0 pid 760532 on GX10-03 (192.168.197.13:0, 0 of 0 experts): joined
+11:53:20.894 tracker: map v17: 0 processes, 0 healthy
+11:53:20.894 tracker: id 18 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:20.895 tracker: map v18: 1 processes, 1 healthy
+11:53:20.915 tracker: id 18 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:20.916 tracker: map v19: 1 processes, 0 healthy
+11:53:20.924 tracker: id 19 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:20.924 tracker: map v20: 2 processes, 1 healthy
+11:53:21.926 tracker: id 19 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:21.927 tracker: map v21: 2 processes, 0 healthy
+11:53:21.948 tracker: id 19 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:21.948 tracker: map v22: 2 processes, 0 healthy
+11:53:21.949 tracker: id 20 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:21.949 tracker: map v23: 3 processes, 1 healthy
+11:53:21.970 tracker: id 20 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:21.970 tracker: map v24: 3 processes, 0 healthy
+11:53:21.983 tracker: id 21 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:21.983 tracker: map v25: 4 processes, 1 healthy
+11:53:22.988 tracker: id 21 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:22.988 tracker: map v26: 4 processes, 0 healthy
+11:53:23.009 tracker: id 21 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:23.009 tracker: map v27: 4 processes, 0 healthy
+11:53:23.009 tracker: id 22 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:23.009 tracker: map v28: 5 processes, 1 healthy
+11:53:23.031 tracker: id 22 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:23.031 tracker: map v29: 5 processes, 0 healthy
+11:53:23.033 tracker: id 23 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:23.033 tracker: map v30: 6 processes, 1 healthy
+11:53:24.049 tracker: id 23 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:24.049 tracker: map v31: 6 processes, 0 healthy
+11:53:24.070 tracker: id 23 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:24.070 tracker: map v32: 6 processes, 0 healthy
+11:53:24.070 tracker: id 24 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:24.070 tracker: map v33: 7 processes, 1 healthy
+11:53:24.091 tracker: id 24 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:24.091 tracker: map v34: 7 processes, 0 healthy
+11:53:24.095 tracker: id 25 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:24.095 tracker: map v35: 8 processes, 1 healthy
+11:53:25.110 tracker: id 25 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:25.110 tracker: map v36: 8 processes, 0 healthy
+11:53:25.132 tracker: id 25 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:25.132 tracker: map v37: 8 processes, 0 healthy
+11:53:25.132 tracker: id 26 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:25.132 tracker: map v38: 9 processes, 1 healthy
+11:53:25.153 tracker: id 26 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:25.153 tracker: map v39: 9 processes, 0 healthy
+11:53:25.155 tracker: id 27 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:25.155 tracker: map v40: 10 processes, 1 healthy
+11:53:26.157 tracker: id 27 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:26.157 tracker: map v41: 10 processes, 0 healthy
+11:53:26.179 tracker: id 27 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:26.179 tracker: map v42: 10 processes, 0 healthy
+11:53:26.179 tracker: id 28 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:26.179 tracker: map v43: 11 processes, 1 healthy
+11:53:26.201 tracker: id 28 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:26.201 tracker: map v44: 11 processes, 0 healthy
+11:53:26.203 tracker: id 29 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:26.204 tracker: map v45: 12 processes, 1 healthy
+11:53:27.218 tracker: id 29 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:27.218 tracker: map v46: 12 processes, 0 healthy
+11:53:27.239 tracker: id 29 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:27.239 tracker: map v47: 12 processes, 0 healthy
+11:53:27.240 tracker: id 30 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:27.240 tracker: map v48: 13 processes, 1 healthy
+11:53:27.262 tracker: id 30 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:27.262 tracker: map v49: 13 processes, 0 healthy
+11:53:27.263 tracker: id 31 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:27.263 tracker: map v50: 14 processes, 1 healthy
+11:53:28.280 tracker: id 31 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:28.280 tracker: map v51: 14 processes, 0 healthy
+11:53:28.302 tracker: id 31 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:28.302 tracker: map v52: 14 processes, 0 healthy
+11:53:28.303 tracker: id 32 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:28.303 tracker: map v53: 15 processes, 1 healthy
+11:53:28.325 tracker: id 32 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:28.325 tracker: map v54: 15 processes, 0 healthy
+11:53:28.329 tracker: id 33 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:28.329 tracker: map v55: 16 processes, 1 healthy
+11:53:29.342 tracker: id 33 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:29.342 tracker: map v56: 16 processes, 0 healthy
+11:53:29.364 tracker: id 33 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:29.364 tracker: map v57: 16 processes, 0 healthy
+11:53:29.365 tracker: id 34 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:29.365 tracker: map v58: 17 processes, 1 healthy
+11:53:29.386 tracker: id 34 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:29.386 tracker: map v59: 17 processes, 0 healthy
+11:53:29.391 tracker: id 35 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:29.391 tracker: map v60: 18 processes, 1 healthy
+11:53:30.392 tracker: id 35 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:30.392 tracker: map v61: 18 processes, 0 healthy
+11:53:30.414 tracker: id 35 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:30.415 tracker: map v62: 18 processes, 0 healthy
+11:53:30.415 tracker: id 36 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:30.415 tracker: map v63: 19 processes, 1 healthy
+11:53:30.437 tracker: id 36 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:30.437 tracker: map v64: 19 processes, 0 healthy
+11:53:30.443 tracker: id 37 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:30.443 tracker: map v65: 20 processes, 1 healthy
+11:53:31.448 tracker: id 37 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:31.448 tracker: map v66: 20 processes, 0 healthy
+11:53:31.470 tracker: id 37 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:31.470 tracker: map v67: 20 processes, 0 healthy
+11:53:31.470 tracker: id 38 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:31.470 tracker: map v68: 21 processes, 1 healthy
+11:53:31.492 tracker: id 38 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:31.492 tracker: map v69: 21 processes, 0 healthy
+11:53:31.493 tracker: id 39 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:31.493 tracker: map v70: 22 processes, 1 healthy
+11:53:32.511 tracker: id 39 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:32.511 tracker: map v71: 22 processes, 0 healthy
+11:53:32.533 tracker: id 39 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:32.534 tracker: map v72: 22 processes, 0 healthy
+11:53:32.534 tracker: id 40 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:32.534 tracker: map v73: 23 processes, 1 healthy
+11:53:32.555 tracker: id 40 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:32.555 tracker: map v74: 23 processes, 0 healthy
+11:53:32.559 tracker: id 41 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:32.559 tracker: map v75: 24 processes, 1 healthy
+11:53:33.571 tracker: id 41 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:33.572 tracker: map v76: 24 processes, 0 healthy
+11:53:33.593 tracker: id 41 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:33.593 tracker: map v77: 24 processes, 0 healthy
+11:53:33.594 tracker: id 42 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:33.594 tracker: map v78: 25 processes, 1 healthy
+11:53:33.615 tracker: id 42 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:33.615 tracker: map v79: 25 processes, 0 healthy
+11:53:33.616 tracker: id 43 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:33.616 tracker: map v80: 26 processes, 1 healthy
+11:53:34.632 tracker: id 43 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:34.632 tracker: map v81: 26 processes, 0 healthy
+11:53:34.653 tracker: id 43 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:34.654 tracker: map v82: 26 processes, 0 healthy
+11:53:34.654 tracker: id 44 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:34.654 tracker: map v83: 27 processes, 1 healthy
+11:53:34.675 tracker: id 44 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:34.675 tracker: map v84: 27 processes, 0 healthy
+11:53:34.678 tracker: id 45 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:34.678 tracker: map v85: 28 processes, 1 healthy
+11:53:35.699 tracker: id 45 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:35.699 tracker: map v86: 28 processes, 0 healthy
+11:53:35.721 tracker: id 45 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:35.721 tracker: map v87: 28 processes, 0 healthy
+11:53:35.721 tracker: id 46 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:35.721 tracker: map v88: 29 processes, 1 healthy
+11:53:35.742 tracker: id 46 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:35.742 tracker: map v89: 29 processes, 0 healthy
+11:53:35.743 tracker: id 47 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:35.743 tracker: map v90: 30 processes, 1 healthy
+11:53:36.760 tracker: id 47 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:36.760 tracker: map v91: 30 processes, 0 healthy
+11:53:36.781 tracker: id 47 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:36.781 tracker: map v92: 30 processes, 0 healthy
+11:53:36.782 tracker: id 48 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:36.782 tracker: map v93: 31 processes, 1 healthy
+11:53:36.803 tracker: id 48 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:36.803 tracker: map v94: 31 processes, 0 healthy
+11:53:36.804 tracker: id 49 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:36.804 tracker: map v95: 32 processes, 1 healthy
+11:53:37.822 tracker: id 49 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:37.822 tracker: map v96: 32 processes, 0 healthy
+11:53:37.843 tracker: id 49 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:37.843 tracker: map v97: 32 processes, 0 healthy
+11:53:37.844 tracker: id 50 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:37.844 tracker: map v98: 33 processes, 1 healthy
+11:53:37.866 tracker: id 50 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:37.866 tracker: map v99: 33 processes, 0 healthy
+11:53:37.870 tracker: id 51 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:37.870 tracker: map v100: 34 processes, 1 healthy
+11:53:38.881 tracker: id 51 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:38.881 tracker: map v101: 34 processes, 0 healthy
+11:53:38.902 tracker: id 51 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:38.902 tracker: map v102: 34 processes, 0 healthy
+11:53:38.903 tracker: id 52 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:38.903 tracker: map v103: 35 processes, 1 healthy
+11:53:38.925 tracker: id 52 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:38.925 tracker: map v104: 35 processes, 0 healthy
+11:53:38.926 tracker: id 53 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:38.927 tracker: map v105: 36 processes, 1 healthy
+11:53:39.928 tracker: id 53 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:39.928 tracker: map v106: 36 processes, 0 healthy
+11:53:39.950 tracker: id 53 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:39.950 tracker: map v107: 36 processes, 0 healthy
+11:53:39.950 tracker: id 54 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:39.951 tracker: map v108: 37 processes, 1 healthy
+11:53:39.972 tracker: id 54 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:39.973 tracker: map v109: 37 processes, 0 healthy
+11:53:39.982 tracker: id 55 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:39.982 tracker: map v110: 38 processes, 1 healthy
+11:53:40.990 tracker: id 55 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:40.990 tracker: map v111: 38 processes, 0 healthy
+11:53:41.012 tracker: id 55 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:41.012 tracker: map v112: 38 processes, 0 healthy
+11:53:41.012 tracker: id 56 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:41.012 tracker: map v113: 39 processes, 1 healthy
+11:53:41.034 tracker: id 56 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:41.034 tracker: map v114: 39 processes, 0 healthy
+11:53:41.037 tracker: id 57 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): joined
+11:53:41.037 tracker: map v115: 40 processes, 1 healthy
+11:53:42.053 tracker: id 57 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): no heartbeat
+11:53:42.053 tracker: map v116: 40 processes, 0 healthy
+11:53:42.075 tracker: id 57 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:42.075 tracker: map v117: 40 processes, 0 healthy
+11:53:43.054 tracker: id 58 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.054 tracker: map v118: 40 processes, 0 healthy
+11:53:43.054 tracker: id 59 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.054 tracker: map v119: 40 processes, 0 healthy
+11:53:43.054 tracker: id 60 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.054 tracker: map v120: 40 processes, 0 healthy
+11:53:43.055 tracker: id 61 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.055 tracker: map v121: 40 processes, 0 healthy
+11:53:43.055 tracker: id 62 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.055 tracker: map v122: 40 processes, 0 healthy
+11:53:43.055 tracker: id 63 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.055 tracker: map v123: 40 processes, 0 healthy
+11:53:43.056 tracker: id 64 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.056 tracker: map v124: 40 processes, 0 healthy
+11:53:43.056 tracker: id 65 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.056 tracker: map v125: 40 processes, 0 healthy
+11:53:43.056 tracker: id 66 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.056 tracker: map v126: 40 processes, 0 healthy
+11:53:43.056 tracker: id 67 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.056 tracker: map v127: 40 processes, 0 healthy
+11:53:43.056 tracker: id 68 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.056 tracker: map v128: 40 processes, 0 healthy
+11:53:43.056 tracker: id 69 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.057 tracker: map v129: 40 processes, 0 healthy
+11:53:43.057 tracker: id 70 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.057 tracker: map v130: 40 processes, 0 healthy
+11:53:43.057 tracker: id 71 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.057 tracker: map v131: 40 processes, 0 healthy
+11:53:43.057 tracker: id 72 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.057 tracker: map v132: 40 processes, 0 healthy
+11:53:43.057 tracker: id 73 watcher rank 0 pid 1709344 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:53:43.057 tracker: map v133: 40 processes, 0 healthy
+11:53:43.057 tracker: id 74 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:43.057 tracker: map v134: 41 processes, 1 healthy
+11:53:43.078 tracker: id 74 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:43.078 tracker: map v135: 41 processes, 0 healthy
+11:53:43.079 tracker: id 75 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:43.079 tracker: map v136: 42 processes, 1 healthy
+11:53:44.097 tracker: id 75 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:44.098 tracker: map v137: 42 processes, 0 healthy
+11:53:44.118 tracker: id 75 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:44.119 tracker: map v138: 42 processes, 0 healthy
+11:53:44.119 tracker: id 76 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:44.119 tracker: map v139: 43 processes, 1 healthy
+11:53:44.139 tracker: id 76 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:44.140 tracker: map v140: 43 processes, 0 healthy
+11:53:44.155 tracker: id 77 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:44.155 tracker: map v141: 44 processes, 1 healthy
+11:53:45.159 tracker: id 77 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:45.159 tracker: map v142: 44 processes, 0 healthy
+11:53:45.179 tracker: id 77 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:45.180 tracker: map v143: 44 processes, 0 healthy
+11:53:45.180 tracker: id 78 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:45.180 tracker: map v144: 45 processes, 1 healthy
+11:53:45.201 tracker: id 78 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:45.201 tracker: map v145: 45 processes, 0 healthy
+11:53:45.202 tracker: id 79 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:45.203 tracker: map v146: 46 processes, 1 healthy
+11:53:46.221 tracker: id 79 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:46.221 tracker: map v147: 46 processes, 0 healthy
+11:53:46.242 tracker: id 79 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:46.242 tracker: map v148: 46 processes, 0 healthy
+11:53:46.243 tracker: id 80 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:46.243 tracker: map v149: 47 processes, 1 healthy
+11:53:46.264 tracker: id 80 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:46.264 tracker: map v150: 47 processes, 0 healthy
+11:53:46.264 tracker: id 18 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:46.265 tracker: map v151: 46 processes, 0 healthy
+11:53:46.265 tracker: id 81 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:46.265 tracker: map v152: 47 processes, 1 healthy
+11:53:47.283 tracker: id 81 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:47.283 tracker: map v153: 47 processes, 0 healthy
+11:53:47.304 tracker: id 19 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:47.304 tracker: id 81 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:47.304 tracker: map v154: 46 processes, 0 healthy
+11:53:47.304 tracker: id 82 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:47.304 tracker: map v155: 47 processes, 1 healthy
+11:53:47.325 tracker: id 82 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:47.325 tracker: map v156: 47 processes, 0 healthy
+11:53:47.326 tracker: id 20 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:47.326 tracker: map v157: 46 processes, 0 healthy
+11:53:47.326 tracker: id 83 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:47.326 tracker: map v158: 47 processes, 1 healthy
+11:53:48.328 tracker: id 83 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:48.328 tracker: map v159: 47 processes, 0 healthy
+11:53:48.349 tracker: id 21 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:48.349 tracker: id 83 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:48.349 tracker: map v160: 46 processes, 0 healthy
+11:53:48.349 tracker: id 84 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:48.349 tracker: map v161: 47 processes, 1 healthy
+11:53:48.370 tracker: id 84 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:48.370 tracker: map v162: 47 processes, 0 healthy
+11:53:48.370 tracker: id 22 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:48.370 tracker: map v163: 46 processes, 0 healthy
+11:53:48.370 tracker: id 85 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:48.370 tracker: map v164: 47 processes, 1 healthy
+11:53:49.371 tracker: id 85 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:49.371 tracker: map v165: 47 processes, 0 healthy
+11:53:49.392 tracker: id 23 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:49.392 tracker: id 85 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:49.392 tracker: map v166: 46 processes, 0 healthy
+11:53:49.392 tracker: id 86 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:49.392 tracker: map v167: 47 processes, 1 healthy
+11:53:49.413 tracker: id 86 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:49.414 tracker: map v168: 47 processes, 0 healthy
+11:53:49.415 tracker: id 24 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:49.415 tracker: map v169: 46 processes, 0 healthy
+11:53:49.415 tracker: id 87 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:49.415 tracker: map v170: 47 processes, 1 healthy
+11:53:50.432 tracker: id 87 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:50.432 tracker: map v171: 47 processes, 0 healthy
+11:53:50.453 tracker: id 25 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:50.453 tracker: id 87 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:50.453 tracker: map v172: 46 processes, 0 healthy
+11:53:50.453 tracker: id 88 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:50.453 tracker: map v173: 47 processes, 1 healthy
+11:53:50.475 tracker: id 88 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:50.475 tracker: map v174: 47 processes, 0 healthy
+11:53:50.477 tracker: id 26 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:50.477 tracker: map v175: 46 processes, 0 healthy
+11:53:50.477 tracker: id 89 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:50.477 tracker: map v176: 47 processes, 1 healthy
+11:53:51.493 tracker: id 89 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:51.494 tracker: map v177: 47 processes, 0 healthy
+11:53:51.515 tracker: id 27 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:51.515 tracker: id 89 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:51.515 tracker: map v178: 46 processes, 0 healthy
+11:53:51.515 tracker: id 90 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:51.515 tracker: map v179: 47 processes, 1 healthy
+11:53:51.536 tracker: id 90 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:51.536 tracker: map v180: 47 processes, 0 healthy
+11:53:51.541 tracker: id 28 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:51.541 tracker: map v181: 46 processes, 0 healthy
+11:53:51.541 tracker: id 91 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:51.542 tracker: map v182: 47 processes, 1 healthy
+11:53:52.555 tracker: id 91 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:52.556 tracker: map v183: 47 processes, 0 healthy
+11:53:52.577 tracker: id 29 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:52.577 tracker: id 91 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:52.577 tracker: map v184: 46 processes, 0 healthy
+11:53:52.577 tracker: id 92 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:52.577 tracker: map v185: 47 processes, 1 healthy
+11:53:52.598 tracker: id 92 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:52.598 tracker: map v186: 47 processes, 0 healthy
+11:53:52.600 tracker: id 30 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:52.601 tracker: map v187: 46 processes, 0 healthy
+11:53:52.601 tracker: id 93 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:52.601 tracker: map v188: 47 processes, 1 healthy
+11:53:53.620 tracker: id 93 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:53.620 tracker: map v189: 47 processes, 0 healthy
+11:53:53.642 tracker: id 93 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:53.642 tracker: map v190: 47 processes, 0 healthy
+11:53:53.642 tracker: id 31 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:53.642 tracker: map v191: 46 processes, 0 healthy
+11:53:53.642 tracker: id 94 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:53.642 tracker: map v192: 47 processes, 1 healthy
+11:53:53.663 tracker: id 94 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:53.663 tracker: map v193: 47 processes, 0 healthy
+11:53:53.665 tracker: id 32 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:53.665 tracker: map v194: 46 processes, 0 healthy
+11:53:53.666 tracker: id 95 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:53.666 tracker: map v195: 47 processes, 1 healthy
+11:53:54.685 tracker: id 95 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:54.686 tracker: map v196: 47 processes, 0 healthy
+11:53:54.707 tracker: id 33 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:54.707 tracker: id 95 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:54.707 tracker: map v197: 46 processes, 0 healthy
+11:53:54.707 tracker: id 96 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:54.707 tracker: map v198: 47 processes, 1 healthy
+11:53:54.728 tracker: id 96 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:54.728 tracker: map v199: 47 processes, 0 healthy
+11:53:54.730 tracker: id 34 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:54.730 tracker: map v200: 46 processes, 0 healthy
+11:53:54.730 tracker: id 97 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:54.731 tracker: map v201: 47 processes, 1 healthy
+11:53:55.746 tracker: id 97 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:55.747 tracker: map v202: 47 processes, 0 healthy
+11:53:55.768 tracker: id 35 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:55.768 tracker: id 97 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:55.768 tracker: map v203: 46 processes, 0 healthy
+11:53:55.768 tracker: id 98 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:55.768 tracker: map v204: 47 processes, 1 healthy
+11:53:55.790 tracker: id 98 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:55.790 tracker: map v205: 47 processes, 0 healthy
+11:53:55.790 tracker: id 36 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:55.790 tracker: map v206: 46 processes, 0 healthy
+11:53:55.790 tracker: id 99 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:55.791 tracker: map v207: 47 processes, 1 healthy
+11:53:56.806 tracker: id 99 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:56.806 tracker: map v208: 47 processes, 0 healthy
+11:53:56.826 tracker: id 99 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:56.827 tracker: map v209: 47 processes, 0 healthy
+11:53:56.827 tracker: id 37 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:56.827 tracker: map v210: 46 processes, 0 healthy
+11:53:56.827 tracker: id 100 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:56.827 tracker: map v211: 47 processes, 1 healthy
+11:53:56.849 tracker: id 100 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:56.849 tracker: map v212: 47 processes, 0 healthy
+11:53:56.851 tracker: id 38 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:56.851 tracker: map v213: 46 processes, 0 healthy
+11:53:56.851 tracker: id 101 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:56.851 tracker: map v214: 47 processes, 1 healthy
+11:53:57.870 tracker: id 101 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:57.871 tracker: map v215: 47 processes, 0 healthy
+11:53:57.891 tracker: id 101 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:57.892 tracker: map v216: 47 processes, 0 healthy
+11:53:57.892 tracker: id 39 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:57.892 tracker: map v217: 46 processes, 0 healthy
+11:53:57.892 tracker: id 102 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:57.892 tracker: map v218: 47 processes, 1 healthy
+11:53:57.912 tracker: id 102 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:57.912 tracker: map v219: 47 processes, 0 healthy
+11:53:57.913 tracker: id 40 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:57.913 tracker: map v220: 46 processes, 0 healthy
+11:53:57.913 tracker: id 103 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:57.913 tracker: map v221: 47 processes, 1 healthy
+11:53:58.916 tracker: id 103 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:58.916 tracker: map v222: 47 processes, 0 healthy
+11:53:58.916 tracker: id 41 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:58.916 tracker: id 103 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:58.917 tracker: map v223: 46 processes, 0 healthy
+11:53:58.917 tracker: id 104 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:58.917 tracker: map v224: 47 processes, 1 healthy
+11:53:58.938 tracker: id 104 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:58.938 tracker: map v225: 47 processes, 0 healthy
+11:53:58.940 tracker: id 42 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:58.940 tracker: map v226: 46 processes, 0 healthy
+11:53:58.940 tracker: id 105 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:58.940 tracker: map v227: 47 processes, 1 healthy
+11:53:59.956 tracker: id 105 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:53:59.957 tracker: map v228: 47 processes, 0 healthy
+11:53:59.977 tracker: id 105 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:59.977 tracker: map v229: 47 processes, 0 healthy
+11:53:59.977 tracker: id 43 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:53:59.978 tracker: map v230: 46 processes, 0 healthy
+11:53:59.978 tracker: id 106 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:53:59.978 tracker: map v231: 47 processes, 1 healthy
+11:53:59.998 tracker: id 106 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:53:59.999 tracker: map v232: 47 processes, 0 healthy
+11:54:00.000 tracker: id 44 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:54:00.000 tracker: map v233: 46 processes, 0 healthy
+11:54:00.000 tracker: id 107 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:54:00.001 tracker: map v234: 47 processes, 1 healthy
+11:54:01.016 tracker: id 107 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:54:01.016 tracker: map v235: 47 processes, 0 healthy
+11:54:01.037 tracker: id 45 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:54:01.038 tracker: id 107 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:54:01.038 tracker: map v236: 46 processes, 0 healthy
+11:54:01.038 tracker: id 108 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:54:01.038 tracker: map v237: 47 processes, 1 healthy
+11:54:01.058 tracker: id 108 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:54:01.058 tracker: map v238: 47 processes, 0 healthy
+11:54:01.063 tracker: id 46 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:54:01.064 tracker: map v239: 46 processes, 0 healthy
+11:54:01.064 tracker: id 109 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:54:01.064 tracker: map v240: 47 processes, 1 healthy
+11:54:02.067 tracker: id 109 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:54:02.067 tracker: map v241: 47 processes, 0 healthy
+11:54:02.089 tracker: id 109 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:54:02.089 tracker: map v242: 47 processes, 0 healthy
+11:54:02.089 tracker: id 47 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:54:02.089 tracker: map v243: 46 processes, 0 healthy
+11:54:02.089 tracker: id 110 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:54:02.089 tracker: map v244: 47 processes, 1 healthy
+11:54:02.110 tracker: id 110 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:54:02.110 tracker: map v245: 47 processes, 0 healthy
+11:54:02.112 tracker: id 48 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:54:02.112 tracker: map v246: 46 processes, 0 healthy
+11:54:02.112 tracker: id 111 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:54:02.112 tracker: map v247: 47 processes, 1 healthy
+11:54:03.115 tracker: id 111 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:54:03.115 tracker: map v248: 47 processes, 0 healthy
+11:54:03.135 tracker: id 49 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:54:03.136 tracker: id 111 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:54:03.136 tracker: map v249: 46 processes, 0 healthy
+11:54:03.136 tracker: id 112 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:54:03.136 tracker: map v250: 47 processes, 1 healthy
+11:54:03.157 tracker: id 112 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:54:03.158 tracker: map v251: 47 processes, 0 healthy
+11:54:03.158 tracker: id 50 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map to make room
+11:54:03.158 tracker: map v252: 46 processes, 0 healthy
+11:54:03.158 tracker: id 113 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): joined
+11:54:03.158 tracker: map v253: 47 processes, 1 healthy
+11:54:04.166 tracker: id 113 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): no heartbeat
+11:54:04.166 tracker: map v254: 47 processes, 0 healthy
+11:54:04.187 tracker: id 113 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): connection closed without a goodbye
+11:54:04.187 tracker: map v255: 47 processes, 0 healthy
+11:54:05.460 tracker: id 114 router rank 0 pid 1709694 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:54:05.460 tracker: map v256: 48 processes, 1 healthy
+11:54:08.527 tracker: id 115 expert rank 1 pid 760934 on GX10-03 (192.168.197.13:47993, 32 of 64 experts): joined
+11:54:08.528 tracker: map v257: 49 processes, 2 healthy
+11:54:08.529 tracker: id 114 router rank 0 pid 1709694 on GX10-02 (127.0.0.1:0, 32 of 64 experts): updated
+11:54:08.530 tracker: map v258: 49 processes, 2 healthy
+11:54:08.918 tracker: id 51 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map
+11:54:08.918 tracker: map v259: 48 processes, 2 healthy
+11:54:08.938 tracker: id 52 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map
+11:54:08.938 tracker: map v260: 47 processes, 2 healthy
+11:54:09.958 tracker: id 53 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map
+11:54:09.958 tracker: map v261: 46 processes, 2 healthy
+11:54:09.982 tracker: id 54 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map
+11:54:09.982 tracker: map v262: 45 processes, 2 healthy
+11:54:11.022 tracker: id 55 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map
+11:54:11.022 tracker: map v263: 44 processes, 2 healthy
+11:54:11.050 tracker: id 56 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map
+11:54:11.050 tracker: map v264: 43 processes, 2 healthy
+11:54:12.091 tracker: id 57 expert rank 1 pid 760532 on GX10-03 (192.168.197.13:7480, 32 of 64 experts): dropped from the map
+11:54:12.092 tracker: map v265: 42 processes, 2 healthy
+11:54:13.091 tracker: id 74 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:13.091 tracker: map v266: 41 processes, 2 healthy
+11:54:14.132 tracker: id 75 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:14.132 tracker: map v267: 40 processes, 2 healthy
+11:54:14.152 tracker: id 76 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:14.152 tracker: map v268: 39 processes, 2 healthy
+11:54:15.188 tracker: id 77 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:15.188 tracker: map v269: 38 processes, 2 healthy
+11:54:15.209 tracker: id 78 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:15.209 tracker: map v270: 37 processes, 2 healthy
+11:54:16.253 tracker: id 79 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:16.253 tracker: map v271: 36 processes, 2 healthy
+11:54:16.274 tracker: id 80 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:16.274 tracker: map v272: 35 processes, 2 healthy
+11:54:17.322 tracker: id 81 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:17.322 tracker: map v273: 34 processes, 2 healthy
+11:54:17.343 tracker: id 82 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:17.343 tracker: map v274: 33 processes, 2 healthy
+11:54:18.363 tracker: id 83 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:18.363 tracker: map v275: 32 processes, 2 healthy
+11:54:18.384 tracker: id 84 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:18.384 tracker: map v276: 31 processes, 2 healthy
+11:54:19.403 tracker: id 85 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:19.403 tracker: map v277: 30 processes, 2 healthy
+11:54:19.419 tracker: id 86 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:19.419 tracker: map v278: 29 processes, 2 healthy
+11:54:20.460 tracker: id 87 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:20.460 tracker: map v279: 28 processes, 2 healthy
+11:54:20.483 tracker: id 88 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:20.483 tracker: map v280: 27 processes, 2 healthy
+11:54:21.524 tracker: id 89 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:21.524 tracker: map v281: 26 processes, 2 healthy
+11:54:21.554 tracker: id 90 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:21.554 tracker: map v282: 25 processes, 2 healthy
+11:54:22.595 tracker: id 91 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:22.595 tracker: map v283: 24 processes, 2 healthy
+11:54:22.615 tracker: id 92 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:22.615 tracker: map v284: 23 processes, 2 healthy
+11:54:23.656 tracker: id 93 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:23.657 tracker: map v285: 22 processes, 2 healthy
+11:54:23.669 tracker: id 94 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:23.669 tracker: map v286: 21 processes, 2 healthy
+11:54:24.710 tracker: id 95 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:24.711 tracker: map v287: 20 processes, 2 healthy
+11:54:24.734 tracker: id 96 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:24.734 tracker: map v288: 19 processes, 2 healthy
+11:54:25.775 tracker: id 97 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:25.775 tracker: map v289: 18 processes, 2 healthy
+11:54:25.805 tracker: id 98 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:25.805 tracker: map v290: 17 processes, 2 healthy
+11:54:26.846 tracker: id 99 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:26.846 tracker: map v291: 16 processes, 2 healthy
+11:54:26.866 tracker: id 100 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:26.866 tracker: map v292: 15 processes, 2 healthy
+11:54:27.907 tracker: id 101 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:27.907 tracker: map v293: 14 processes, 2 healthy
+11:54:27.919 tracker: id 102 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:27.919 tracker: map v294: 13 processes, 2 healthy
+11:54:28.919 tracker: id 103 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:28.919 tracker: map v295: 12 processes, 2 healthy
+11:54:28.939 tracker: id 104 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:28.940 tracker: map v296: 11 processes, 2 healthy
+11:54:29.986 tracker: id 105 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:29.986 tracker: map v297: 10 processes, 2 healthy
+11:54:30.006 tracker: id 106 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:30.006 tracker: map v298: 9 processes, 2 healthy
+11:54:31.057 tracker: id 107 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:31.057 tracker: map v299: 8 processes, 2 healthy
+11:54:31.077 tracker: id 108 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:31.078 tracker: map v300: 7 processes, 2 healthy
+11:54:32.098 tracker: id 109 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:32.098 tracker: map v301: 6 processes, 2 healthy
+11:54:32.118 tracker: id 110 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:32.119 tracker: map v302: 5 processes, 2 healthy
+11:54:33.138 tracker: id 111 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:33.138 tracker: map v303: 4 processes, 2 healthy
+11:54:33.158 tracker: id 112 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:33.158 tracker: map v304: 3 processes, 2 healthy
+11:54:34.190 tracker: id 113 expert rank 1 pid 1709344 on GX10-02 (127.0.0.1:7480, 32 of 64 experts): dropped from the map
+11:54:34.190 tracker: map v305: 2 processes, 2 healthy
+11:55:09.589 tracker: id 115 expert rank 1 pid 760934 on GX10-03 (192.168.197.13:47993, 32 of 64 experts): connection closed without a goodbye
+11:55:09.590 tracker: map v306: 2 processes, 1 healthy
+11:55:09.866 tracker: id 114 router rank 0 pid 1709694 on GX10-02 (127.0.0.1:0, 32 of 64 experts): left
+11:55:09.866 tracker: map v307: 2 processes, 0 healthy
+11:55:13.705 tracker: id 116 router rank 0 pid 1710258 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:55:13.705 tracker: map v308: 3 processes, 1 healthy
+11:55:16.490 tracker: id 117 expert rank 1 pid 761894 on GX10-03 (192.168.197.13:47987, 32 of 64 experts): joined
+11:55:16.490 tracker: map v309: 4 processes, 2 healthy
+11:55:16.492 tracker: id 116 router rank 0 pid 1710258 on GX10-02 (127.0.0.1:0, 32 of 64 experts): updated
+11:55:16.492 tracker: map v310: 4 processes, 2 healthy
+11:55:39.600 tracker: id 115 expert rank 1 pid 760934 on GX10-03 (192.168.197.13:47993, 32 of 64 experts): dropped from the map
+11:55:39.600 tracker: map v311: 3 processes, 2 healthy
+11:55:39.869 tracker: id 114 router rank 0 pid 1709694 on GX10-02 (127.0.0.1:0, 32 of 64 experts): dropped from the map
+11:55:39.869 tracker: map v312: 2 processes, 2 healthy
+11:56:18.263 tracker: id 117 expert rank 1 pid 761894 on GX10-03 (192.168.197.13:47987, 32 of 64 experts): no heartbeat
+11:56:18.263 tracker: map v313: 2 processes, 1 healthy
+11:56:18.533 tracker: id 116 router rank 0 pid 1710258 on GX10-02 (127.0.0.1:0, 32 of 64 experts): left
+11:56:18.533 tracker: map v314: 2 processes, 0 healthy
+11:56:19.359 tracker: id 117 expert rank 1 pid 761894 on GX10-03 (192.168.197.13:47987, 32 of 64 experts): connection closed without a goodbye
+11:56:19.359 tracker: map v315: 2 processes, 0 healthy
+11:56:22.071 tracker: id 118 expert rank 1 pid 762652 on GX10-03 (192.168.197.13:47988, 32 of 64 experts): joined
+11:56:22.071 tracker: map v316: 3 processes, 1 healthy
+11:56:48.545 tracker: id 116 router rank 0 pid 1710258 on GX10-02 (127.0.0.1:0, 32 of 64 experts): dropped from the map
+11:56:48.545 tracker: map v317: 2 processes, 1 healthy
+11:56:48.586 tracker: id 118 expert rank 1 pid 762652 on GX10-03 (192.168.197.13:47988, 32 of 64 experts): no heartbeat
+11:56:48.586 tracker: map v318: 2 processes, 0 healthy
+11:56:49.377 tracker: id 117 expert rank 1 pid 761894 on GX10-03 (192.168.197.13:47987, 32 of 64 experts): dropped from the map
+11:56:49.377 tracker: map v319: 1 processes, 0 healthy
+11:56:50.855 tracker: id 119 router rank 0 pid 1710647 on GX10-02 (127.0.0.1:0, 0 of 0 experts): joined
+11:56:50.856 tracker: map v320: 2 processes, 1 healthy
+11:56:55.665 tracker: id 118 expert rank 1 pid 762652 on GX10-03 (192.168.197.13:47988, 32 of 64 experts): heartbeat again, healthy
+11:56:55.665 tracker: map v321: 2 processes, 2 healthy
+11:56:55.670 tracker: id 119 router rank 0 pid 1710647 on GX10-02 (127.0.0.1:0, 32 of 64 experts): updated
+11:56:55.670 tracker: map v322: 2 processes, 2 healthy
+11:56:57.787 tracker: id 118 expert rank 1 pid 762652 on GX10-03 (192.168.197.13:47988, 32 of 64 experts): left
+11:56:57.787 tracker: map v323: 2 processes, 1 healthy
+11:56:57.788 tracker: id 119 router rank 0 pid 1710647 on GX10-02 (127.0.0.1:0, 32 of 64 experts): left
+11:56:57.788 tracker: map v324: 2 processes, 0 healthy

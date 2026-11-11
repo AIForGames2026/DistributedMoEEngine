@@ -1,0 +1,6 @@
+expert: listening on port 47988
+11:56:22.069 expert: joined the tracker at 192.168.197.12:47300 as id 118 with 32 of 64 experts (heartbeat 250 ms)
+load: 32 of 64 experts, 3.42 GB in 0.66 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.42 GB in 0.09 s)
+expert: serving, resident memory 3548 MB
+expert: ran 2627 expert FFNs for rank 0; resident memory 3548 MB

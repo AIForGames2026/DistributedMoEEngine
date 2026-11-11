@@ -178,11 +178,23 @@ pub fn parseIp4(text: []const u8) !u32 {
 
 /// Listens on `port` on all interfaces; port 0 picks a free port. Returns the
 /// listening socket and the bound port. Accept a peer with `acceptOn`.
-pub fn listen(port: u16) !struct { fd: Socket, port: u16 } {
+pub const Listener = struct { fd: Socket, port: u16 };
+
+pub fn listen(port: u16) !Listener {
+    return listenMany(port, 1);
+}
+
+/// Like `listen`, with room for `backlog` connections waiting to be accepted.
+pub fn listenMany(port: u16, backlog: c_int) !Listener {
     const lfd = try sock.open();
     errdefer sock.close(lfd);
-    try sock.bindListen(lfd, 0, port);
+    try sock.bindListen(lfd, 0, port, backlog);
     return .{ .fd = lfd, .port = try sock.boundPort(lfd) };
+}
+
+/// Waits up to `timeout_ms` for `fd` to have bytes (or a close) to read.
+pub fn waitReadable(fd: Socket, timeout_ms: c_int) !bool {
+    return sock.waitReadable(fd, timeout_ms);
 }
 
 pub fn acceptOn(lfd: Socket) !Socket {
@@ -273,11 +285,11 @@ const sock = if (is_windows) struct {
         _ = win32.setsockopt(fd, ws.IPPROTO.TCP, ws.TCP.NODELAY, &one, @sizeOf(c_int));
     }
 
-    fn bindListen(fd: Socket, addr: u32, port: u16) !void {
+    fn bindListen(fd: Socket, addr: u32, port: u16, backlog: c_int) !void {
         // No SO_REUSEADDR: on Windows it lets another socket take over a bound port.
         const sa: ws.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
         if (win32.bind(fd, &sa, @sizeOf(ws.sockaddr.in)) != 0) return error.AddressInUse;
-        if (win32.listen(fd, 1) != 0) return error.SystemResources;
+        if (win32.listen(fd, backlog) != 0) return error.SystemResources;
     }
 
     fn boundPort(fd: Socket) !u16 {
@@ -353,12 +365,12 @@ const sock = if (is_windows) struct {
         _ = c.setsockopt(fd, c.IPPROTO.TCP, c.TCP.NODELAY, &one, @sizeOf(c_int));
     }
 
-    fn bindListen(fd: Socket, addr: u32, port: u16) !void {
+    fn bindListen(fd: Socket, addr: u32, port: u16, backlog: c_int) !void {
         const one: c_int = 1;
         _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &one, @sizeOf(c_int));
         var sa: c.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
         if (c.bind(fd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) != 0) return error.AddressInUse;
-        if (c.listen(fd, 1) != 0) return error.SystemResources;
+        if (c.listen(fd, @intCast(backlog)) != 0) return error.SystemResources;
     }
 
     fn boundPort(fd: Socket) !u16 {

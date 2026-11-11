@@ -1,0 +1,10 @@
+11:56:50.856 router: joined the tracker at 127.0.0.1:47300 as id 119; waiting for a healthy expert process
+11:56:55.670 router: tracker lists expert id 118 (pid 762652 on GX10-03) at 192.168.197.13:47988 with 32 of 64 experts
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 0.71 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+rdma: prompt 0 (5 tokens, 102 ms): logits max err 2.19e-5, top-1 5/5, hidden max err 2.67e-4, experts chosen 640/640 same ok
+rdma: prompt 1 (21 tokens, 286 ms): logits max err 3.53e-5, top-1 21/21, hidden max err 3.05e-4, experts chosen 2688/2688 same ok
+rdma: prompt 2 (17 tokens, 249 ms): logits max err 4.01e-5, top-1 17/17, hidden max err 3.20e-4, experts chosen 2176/2176 same ok
+rdma: PASS: OLMoE-1B-7B logits within 1e-2 of the PyTorch reference (worst 4.01e-5), every top-1 token identical
+rdma: 2627 expert calls sent to rank 1, 2877 run locally; payload f32
+rc=0

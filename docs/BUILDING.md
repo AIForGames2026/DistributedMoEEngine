@@ -90,6 +90,20 @@ Expert cache (TASK-11): add `--cache N` to hold each process's experts in N slot
 
 Miss handling (TASK-14): `--loaders N` sets how many threads read experts for the cache, each with its own reader (default 2). A hint whose layer has already started is dropped instead of loaded, and an expert that is not loaded when a call needs it is loaded ahead of every hint. Both ranks run the calls whose experts are ready first and the rest as their experts arrive; results are still added in a fixed order, so the output does not change. `--mispredict 0.1` replaces 10% of the guesses with wrong experts, to test all of this. With the predictor on, `--minutes M` checks every round's tokens and logits against a round run with the predictor off.
 
+Swarm tracker (TASK-09): `tracker serve` (built by `zig build install`, Linux) keeps the live list of engine processes on TCP port 47300. Each process sends a heartbeat every 250 ms, and every change goes out to all of them at once. A process is marked unhealthy when its connection closes without a goodbye (killed) or after 1 s without a heartbeat (stopped or hung). Add `--tracker IP[:PORT]` to `olmoe expert` (or `rdma-expert`) to announce its address and its experts, and to `olmoe router` (or `rdma-router`) in place of `--host`. The router then waits for a healthy expert process, takes that process's experts as the placement, and stops with `error.PeerUnhealthy` instead of routing to it once the tracker marks it unhealthy. `--advertise IP` sets the address an expert announces; by default it is the one the tracker sees. `tracker watch IP` prints the map on every change, and `tracker bench IP --peers 16` measures how long joins and failures take to reach every peer:
+
+```bash
+zig-out/bin/tracker serve
+```
+
+```bash
+zig-out/bin/olmoe rdma-expert ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --port 7480 --tracker <tracker IPv4> --gpu --payload f32
+```
+
+```bash
+zig-out/bin/olmoe rdma-router ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --tracker <tracker IPv4> --golden ~/models/olmoe_forward.tfref --gpu --payload f32
+```
+
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 
 ```bash

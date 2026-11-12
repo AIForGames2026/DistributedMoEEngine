@@ -74,13 +74,16 @@
         </section>
 
         <section>
-          <h2>Recorded on real hardware <span class="hint">(Nov 5, not simulated)</span></h2>
+          <h2>Recorded on real hardware <span class="hint">(Nov 5 to 11, not simulated)</span></h2>
           <ul class="sources real">
-            <li>RDMA between two engine processes on <code>gx10-03</code>: 4.4 µs one way, 102 Gb/s (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/transport/2026-11-05.md" target="_blank" rel="noopener">raw results</a>)</li>
-            <li>OLMoE-1B-7B split across two processes: every top token matches Hugging Face's own code, 43 of 43 (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-05.md" target="_blank" rel="noopener">raw results</a>)</li>
-            <li>That split on the Spark's GPU over RDMA: a 17-token prompt in 0.67 s (2.88 s on its CPU)</li>
-            <li>Desktop and Spark, CPU, relay to direct TCP: 24.3 s to 3.9 s for that prompt (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/transport/2026-11-05-direct-path.md" target="_blank" rel="noopener">raw results</a>)</li>
-            <li>Laptop RTX 3060 (Ampere) and desktop GPU over Tailscale, Nov 10: the same split, every top token matches, 2.1 s for that prompt (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-10-ampere.md" target="_blank" rel="noopener">raw results</a>)</li>
+            <li>Two DGX Sparks over RDMA: OLMoE-1B-7B split across them writes 54.4 tokens/s for 40 minutes, 2.7x one Spark, every round identical (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/rc/2026-11-11-two-sparks.md" target="_blank" rel="noopener">raw results</a>)</li>
+            <li>The split matches Hugging Face's own code: every top token, and all 192 generated tokens (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-10-generate.md" target="_blank" rel="noopener">raw results</a>)</li>
+            <li>RDMA between the Sparks: 4.4 µs one way, 1.3x the hardware's own test (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/rc/2026-11-11-two-sparks.md" target="_blank" rel="noopener">raw results</a>)</li>
+            <li>Lookahead: guesses 83.6% of the experts two layers ahead, with output unchanged; 30 minutes with 10% of guesses forced wrong never changed a token (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-10-miss-handling.md" target="_blank" rel="noopener">raw results</a>)</li>
+            <li>Tracker: a killed machine is marked unhealthy in 52 ms, and the router stops sending it tokens (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/tracker/2026-11-11.md" target="_blank" rel="noopener">raw results</a>)</li>
+            <li>Mixed machines: a desktop CPU with no GPU, and a laptop RTX 3060, each run half of the experts with every top token matching (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-11-cpu-expert.md" target="_blank" rel="noopener">CPU</a>, <a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-10-ampere.md" target="_blank" rel="noopener">laptop</a>)</li>
+            <li>Qwen3-30B-A3B reads a 131,040-token prompt (about a novel) on one Spark: first word in 510 s, then 0.18 s per word; with most of its memory moved to disk, the output is identical (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-11-speedups-2.md" target="_blank" rel="noopener">raw results</a>)</li>
+            <li>Saved prompts: the same 131,040-token prompt a second time reaches its first word in 4.2 s instead of 510 s, with identical output (<a href="https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/bench/olmoe/2026-11-11-prefix-cache.md" target="_blank" rel="noopener">raw results</a>)</li>
           </ul>
         </section>
 

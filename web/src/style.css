@@ -157,6 +157,8 @@ button.wide[hidden] { display: none; }
 .mission .ask { font-weight: 600; margin-top: 8px; }
 .mission .need { min-height: 1.45em; color: #fde68a; }
 .mission .good { color: #86efac; }
+.mission .questions { margin: 0 0 8px; padding-left: 20px; }
+.mission .questions li { margin: 4px 0; }
 .mission .link {
   flex: none;
   width: auto;

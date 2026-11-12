@@ -8,6 +8,23 @@ const BENCH = 'https://github.com/AIForGames2026/DistributedMoEEngine/blob/main/
 const tps = (r) => `${r.tps.toFixed(r.tps < 100 ? 1 : 0)} tok/s`;
 const narrow = () => window.matchMedia('(max-width: 760px)').matches; // matches style.css
 
+// The questions in the testing post (TestPlan.md), shown with the result line.
+const QUESTIONS = [
+  'Without scrolling back: why does data have to travel between machines?',
+  'Where were you least sure what to do next, and what did you do?',
+  'In the final challenge, what made you try what you tried?',
+  'In experiment 2, what changed on screen when prediction was off? From 1 to 5, how easy was it to see when an expert was stalled, and why?',
+  'If you ran this on your own machines, what would you want to control first: the machines, the router, the models, or the API that apps call? Why?',
+];
+
+// Browser and OS, for the tester's context.
+function platform() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Other';
+  const os = /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS' : /Android/.test(ua) ? 'Android' : /Linux/.test(ua) ? 'Linux' : /iPhone|iPad/.test(ua) ? 'iOS' : 'Other';
+  return `${browser}/${os}`;
+}
+
 const STEPS = [
   {
     title: 'Experiment 1 of 4: watch it work',
@@ -92,6 +109,9 @@ export function createMission(api) {
   let wrong = 0;
   let tries = 0;
   let startedAt = 0;
+  let introAt = 0;
+  let stepAt = [];
+  let hinted = false;
   let last = null;
 
   const clearSpots = () => document.querySelectorAll('.spot').forEach((e) => e.classList.remove('spot'));
@@ -115,6 +135,8 @@ export function createMission(api) {
     runs = [];
     wrong = 0;
     tries = 0;
+    stepAt = [];
+    hinted = false;
     showIntro();
   }
 
@@ -134,11 +156,13 @@ export function createMission(api) {
   function showIntro() {
     clearSpots();
     phase = 'intro';
+    introAt = performance.now();
     api.enter();
     render(`<h2>Find out what slows down a giant AI model, then fix it</h2>
       <p>The largest AI models do not fit on one machine, so this project splits one across several.</p>
       <p>For every word, each of the model's 16 layers picks 8 of its 64 specialist parts, called <b>experts</b>. Those experts live on different machines, so the word's data has to fly to them and back. You will see that happen.</p>
       <p>This is a <b>simulation</b> driven by speeds measured on the real hardware. It takes about 3 minutes, and there is nothing to install.</p>
+      <p>Nobody is here to explain it. If something is unclear, remember where: that is the most useful thing you can report.</p>
       <div class="row"><button type="button" class="primary" data-act="start">Start</button></div>
       ${footer()}`);
     card.querySelector('[data-act="start"]').addEventListener('click', () => {
@@ -149,6 +173,7 @@ export function createMission(api) {
 
   function enterStep(i) {
     step = i;
+    stepAt[i] = performance.now();
     phase = 'ready';
     note = '';
     last = null;
@@ -217,6 +242,7 @@ export function createMission(api) {
       if (r.tps >= MISSION.targetTps) {
         phase = 'answered';
       } else {
+        hinted = hinted || tries >= 2;
         phase = 'ready';
         spotlight(s.spot);
       }
@@ -238,9 +264,12 @@ export function createMission(api) {
   }
 
   function showReport() {
-    const seconds = Math.round((performance.now() - startedAt) / 1000);
+    const now = performance.now();
+    const seconds = Math.round((now - startedAt) / 1000);
+    const intro = Math.round((startedAt - introAt) / 1000);
+    const steps = stepAt.map((t, i) => Math.round(((stepAt[i + 1] ?? now) - t) / 1000)).join(',');
     const final = runs[runs.length - 1];
-    const line = `TFS-alpha time=${seconds}s wrong=${wrong} challenge_tries=${tries} runs=${runs.length} final=${Math.round(final.tps)}tok/s`;
+    const line = `TFS-alpha2 time=${seconds}s intro=${intro}s steps=${steps} wrong=${wrong} challenge_tries=${tries} hint=${hinted ? 1 : 0} runs=${runs.length} final=${Math.round(final.tps)}tok/s on=${platform()}`;
     phase = 'done';
     clearSpots();
     render(`<h2>Swarm fixed: ${tps(final)}</h2>
@@ -249,10 +278,13 @@ export function createMission(api) {
       ${runs.map((r) => `<tr><td>${r.label}${r.lookahead ? '' : ', no prediction'}</td><td>${tps(r)}</td><td>${r.misses}</td></tr>`).join('')}
       </tbody></table>
       <h3>What the real engine did</h3>
-      <p>The fix you found is real: this week the actual engine moved from the relay to a direct connection. The same model, split across the same two machines on their CPUs, took a 17-token prompt from <a href="${BENCH}/olmoe/2026-11-05.md" target="_blank" rel="noopener">24.3 s</a> to <a href="${BENCH}/transport/2026-11-05-direct-path.md" target="_blank" rel="noopener">3.9 s</a>. The simulation assumes both machines compute at full speed, so its numbers are higher than that CPU run.</p>
-      <p class="ask">Paste this line into your feedback form:</p>
+      <p>The fix you found is real: on Nov 5 the actual engine moved from the relay to a direct connection. The same model, split across the same two machines on their CPUs, took a 17-token prompt from <a href="${BENCH}/olmoe/2026-11-05.md" target="_blank" rel="noopener">24.3 s</a> to <a href="${BENCH}/transport/2026-11-05-direct-path.md" target="_blank" rel="noopener">3.9 s</a>. The simulation assumes both machines compute at full speed, so its numbers are higher than that CPU run.</p>
+      <p class="ask">Copy this line to the top of your reply to the testing post:</p>
       <input class="code" type="text" readonly value="${line}" aria-label="Result line to copy" />
       <div class="row"><button type="button" class="primary" data-act="copy">Copy</button><button type="button" data-act="restart">Play again</button></div>
+      <p class="ask">Then answer the post's questions in order:</p>
+      <ol class="questions">${QUESTIONS.map((q) => `<li>${q}</li>`).join('')}</ol>
+      <p>Before question 5, press <b>Exit and explore freely</b> and try one thing you are curious about for 30 seconds. After the answers, add your device and anything else you noticed, with what you did and saw before what you think.</p>
       ${footer()}`);
     const code = card.querySelector('.code');
     const copy = card.querySelector('[data-act="copy"]');
@@ -265,7 +297,7 @@ export function createMission(api) {
         copy.textContent = 'Press Ctrl+C to copy';
       }
     });
-    window.__mission = { line, seconds, wrong, tries, runs: runs.length };
+    window.__mission = { line, seconds, intro, steps, wrong, tries, hinted, runs: runs.length };
   }
 
   return { open: restart, tryRun, onRunEnd, onConfigChanged, isOpen: () => !card.hidden };

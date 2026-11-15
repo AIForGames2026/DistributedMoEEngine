@@ -1297,6 +1297,8 @@ pub const Sampler = struct {
     temperature: f32 = 0,
     /// Draw only from this many of the most likely tokens; 0 keeps them all.
     top_k: usize = 0,
+    /// Draw only from the most likely tokens that together hold this much probability.
+    top_p: f32 = 1,
     rng: std.Random.DefaultPrng = .init(0),
 
     pub fn seeded(temperature: f32, top_k: usize, seed: u64) Sampler
@@ -1326,6 +1328,10 @@ pub const Sampler = struct {
             pv.* = if (v >= floor) @exp((v - logits[best]) / self.temperature) else 0;
             sum += pv.*;
         }
+        if (self.top_p > 0 and self.top_p < 1)
+        {
+            sum = nucleus(p, sum * self.top_p);
+        }
         var r = self.rng.random().float(f32) * sum;
         for (p, 0..) |pv, i|
         {
@@ -1337,7 +1343,59 @@ pub const Sampler = struct {
         }
         return @intCast(best);
     }
+
+    /// Zeroes the weights below the highest cutoff whose kept weights still
+    /// reach `target`, found by bisection; returns the kept total.
+    fn nucleus(p: []f32, target: f32) f32
+    {
+        var lo: f32 = 0;
+        var hi: f32 = 1; // the most likely token's weight is exactly 1
+        for (0..40) |_|
+        {
+            const mid = (lo + hi) / 2;
+            var mass: f32 = 0;
+            for (p) |pv|
+            {
+                if (pv >= mid)
+                {
+                    mass += pv;
+                }
+            }
+            if (mass >= target)
+            {
+                lo = mid;
+            }
+            else
+            {
+                hi = mid;
+            }
+        }
+        var kept: f32 = 0;
+        for (p) |*pv|
+        {
+            if (pv.* < lo)
+            {
+                pv.* = 0;
+            }
+            kept += pv.*;
+        }
+        return kept;
+    }
 };
+
+test "top-p keeps only the most likely tokens" {
+    // Weights relative to the top token: 1, 0.5, 0.25, 0.125.
+    const logits = [_]f32{ 0, -std.math.ln2, -2 * std.math.ln2, -3 * std.math.ln2 };
+    var scratch: [4]f32 = undefined;
+    var seen: [4]bool = @splat(false);
+    var s = Sampler.seeded(1, 0, 7);
+    s.top_p = 0.7; // 1 and 0.5 hold 1.5 of 1.875, which is 0.8
+    for (0..200) |_|
+    {
+        seen[s.pick(&logits, &scratch)] = true;
+    }
+    try std.testing.expect(seen[0] and seen[1] and !seen[2] and !seen[3]);
+}
 
 /// Feeds `prompt` from an empty cache, then picks `out.len` tokens one at a
 /// time. If set, `step_logits` gets the logits each token was picked from

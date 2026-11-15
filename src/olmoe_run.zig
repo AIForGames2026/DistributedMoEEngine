@@ -27,7 +27,11 @@
 //!          to it once the tracker marks it unhealthy), --advertise IP (the
 //!          address an expert announces; default the one the tracker sees),
 //!          --yarn F (TASK-12: YaRN rope scaling by F over 32,768 positions,
-//!          for Qwen3-MoE past its native context; Qwen uses 4 for 128k)
+//!          for Qwen3-MoE past its native context; Qwen uses 4 for 128k),
+//!          --serve [IP:]PORT (TASK-30: instead of the golden checks, rank 0
+//!          answers OpenAI chat completions; 127.0.0.1 unless an IP is given),
+//!          --ctx N (the server's context, default 4096), --no-reuse (every
+//!          request runs cold instead of reusing the previous one's prefix)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -62,7 +66,11 @@ const CacheSource = @import("expert_cache.zig").Source;
 const tracker = @import("tracker.zig");
 const kv_tier = @import("kv_tier.zig");
 const prefix_cache = @import("prefix_cache.zig");
-const gpu = if (build_options.gpu) @import("gpu.zig") else struct {
+const tokenizer = @import("tokenizer.zig");
+const chat = @import("chat.zig");
+const completion = @import("completion.zig");
+const serve = @import("serve.zig");
+const gpu =if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
         return error.NoGpuSupport;
@@ -115,6 +123,9 @@ const Options = struct {
     save: ?[]const u8 = null,
     compare: ?[]const u8 = null,
     swarm: ?*const Swarm = null,
+    serve: ?[]const u8 = null,
+    ctx: usize = 4096,
+    reuse: bool = true,
 };
 
 /// A router's view of the swarm (TASK-09): its tracker link, watching the
@@ -136,6 +147,7 @@ pub fn main(init: std.process.Init) !void {
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
             \\         --lookahead H  --extra E  --cache N  --pin L  --loaders N  --mispredict P
             \\         --tracker IP[:PORT]  --advertise IP  (a router with --tracker needs no --host)
+            \\         --serve [IP:]PORT  --ctx N  --no-reuse  (an OpenAI-compatible server instead of --golden)
             \\
         , .{});
         std.process.exit(2);
@@ -164,7 +176,12 @@ pub fn main(init: std.process.Init) !void {
         {
             moe.ahead = &la;
         }
-        const result = if (opts.context > 0) runLong(gpa, &l.weights.?, moe, opts, "local") else runGolden(gpa, &l.weights.?, moe, opts, "local");
+        const result = if (opts.serve != null)
+            runServe(gpa, &l, moe, opts, "local")
+        else if (opts.context > 0)
+            runLong(gpa, &l.weights.?, moe, opts, "local")
+        else
+            runGolden(gpa, &l.weights.?, moe, opts, "local");
         if (box) |b|
         {
             reportCache("local", b.cache);
@@ -205,6 +222,11 @@ fn parseArgs(init: std.process.Init) !Options {
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--gpu")) {
             opts.gpu = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-reuse"))
+        {
+            opts.reuse = false;
             continue;
         }
         const value = it.next() orelse return error.Usage;
@@ -265,6 +287,11 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.compare = value;
         } else if (std.mem.eql(u8, arg, "--yarn")) {
             yarn_factor = try std.fmt.parseFloat(f32, value);
+        } else if (std.mem.eql(u8, arg, "--serve")) {
+            opts.serve = value;
+        } else if (std.mem.eql(u8, arg, "--ctx")) {
+            opts.ctx = try std.fmt.parseInt(usize, value, 10);
+            if (opts.ctx < 2) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--tracker")) {
             opts.tracker = value;
         } else if (std.mem.eql(u8, arg, "--advertise")) {
@@ -1239,7 +1266,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         moe.ahead = &la;
         moe.prefetch = SplitMoe.prefetch;
     }
-    const result = runGolden(gpa, &l.weights.?, moe, opts, name);
+    const result = if (opts.serve != null) runServe(gpa, &l, moe, opts, name) else runGolden(gpa, &l.weights.?, moe, opts, name);
     if (result) |_| {} else |err|
     {
         if (err == error.PeerUnhealthy)
@@ -1370,6 +1397,65 @@ fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.
     link.close();
     return result;
 }
+
+/// `--serve [IP:]PORT` (TASK-30): answers OpenAI chat completions with this
+/// rank's weights and `moe` (local experts or a split over any transport),
+/// keeping one `--ctx` position KV cache whose shared prefix later requests
+/// reuse unless `--no-reuse`.
+fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, name: []const u8) !void
+{
+    const spec = opts.serve.?;
+    const colon = std.mem.lastIndexOfScalar(u8, spec, ':');
+    const addr = try transport.tcp.parseIp4(if (colon) |i| spec[0..i] else "127.0.0.1");
+    const port = try std.fmt.parseInt(u16, if (colon) |i| spec[i + 1 ..] else spec, 10);
+
+    var tok = try tokenizer.Tokenizer.fromGguf(gpa, l.state.gguf_header.?);
+    defer tok.deinit();
+    const format = chat.detect(&tok) orelse {
+        std.debug.print("{s}: this model's chat template is not one the server knows (OLMoE's or Qwen3's)\n", .{name});
+        return error.UnknownChatTemplate;
+    };
+    const w = &l.weights.?;
+    var cache = try olmoe.KvCache.init(gpa, w.cfg, opts.ctx);
+    defer cache.deinit(gpa);
+    var eng: ServeEngine = .{ .gpa = gpa, .w = w, .moe = moe, .cache = &cache };
+    const base = if (std.mem.lastIndexOfScalar(u8, opts.model, '/')) |i| opts.model[i + 1 ..] else opts.model;
+    const model_id = if (std.mem.endsWith(u8, base, ".gguf")) base[0 .. base.len - 5] else base;
+    return serve.run(gpa, eng.engine(opts.ctx), &tok, format, .{
+        .addr = addr,
+        .port = port,
+        .model_id = model_id,
+        .chunk = opts.chunk,
+        .reuse = opts.reuse,
+        .clock = mf.nowNs,
+        .name = name,
+    });
+}
+
+/// The model behind the server's engine interface.
+const ServeEngine = struct {
+    gpa: std.mem.Allocator,
+    w: *const olmoe.Weights,
+    moe: olmoe.Moe,
+    cache: *olmoe.KvCache,
+
+    fn engine(self: *ServeEngine, cap: usize) completion.Engine
+    {
+        return .{ .ctx = self, .vocab = self.w.cfg.vocab, .cap = cap, .truncate = truncate, .step = step };
+    }
+
+    fn truncate(ctx: *anyopaque, len: usize) void
+    {
+        const self: *ServeEngine = @ptrCast(@alignCast(ctx));
+        self.cache.len = @min(self.cache.len, len);
+    }
+
+    fn step(ctx: *anyopaque, tokens: []const u32, logits: []f32) anyerror!void
+    {
+        const self: *ServeEngine = @ptrCast(@alignCast(ctx));
+        try olmoe.step(self.gpa, self.w, self.moe, self.cache, tokens, logits, null);
+    }
+};
 
 /// Long context (TASK-12): `--context N` tokens from `--tokens FILE` (u32
 /// ids, repeated if short) are prefilled `--chunk` at a time, then

@@ -1,0 +1,408 @@
+//! The HTTP server behind `olmoe ... --serve [IP:]PORT` (TASK-30). Linux.
+//!
+//! A front thread accepts connections, reads each request, and answers
+//! everything but chat completions itself. Chat requests pass through a pipe
+//! to the calling thread, which owns the engine (its transport and GPU state)
+//! and generates them one at a time; a few more may wait, and beyond that the
+//! front thread answers 429. Each connection carries one request and is closed
+//! after the answer.
+//!
+//!   POST /v1/chat/completions   OpenAI chat completions, streamed or not
+//!   GET  /v1/models             the one model this server runs
+//!   GET  /health                200 once the model is loaded
+const std = @import("std");
+const c = std.c;
+const http = @import("http.zig");
+const openai = @import("openai.zig");
+const chat = @import("chat.zig");
+const completion = @import("completion.zig");
+const tokenizer = @import("tokenizer.zig");
+const olmoe = @import("olmoe.zig");
+
+pub const Options = struct {
+    /// IPv4 address in network byte order; 127.0.0.1 unless asked otherwise.
+    addr: u32,
+    port: u16,
+    model_id: []const u8,
+    chunk: usize = 2048,
+    reuse: bool = true,
+    /// Chat requests that may wait while one generates.
+    queue: usize = 4,
+    clock: *const fn () u64,
+    name: []const u8 = "serve",
+};
+
+const max_head = 16 << 10;
+const max_body = 8 << 20;
+
+/// A chat request handed from the front thread to the engine thread.
+const Job = struct {
+    fd: c.fd_t,
+    arena: std.heap.ArenaAllocator,
+    req: openai.Request,
+};
+
+const Shared = struct {
+    opts: Options,
+    listen_fd: c.fd_t,
+    pipe_w: c.fd_t,
+    waiting: std.atomic.Value(usize) = .init(0),
+};
+
+/// Serves until the process is stopped or the engine fails.
+pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokenizer.Tokenizer, format: chat.Format, opts: Options) !void {
+    const lfd = try listenOn(opts.addr, opts.port);
+    defer _ = c.close(lfd);
+    var fds: [2]c.fd_t = undefined;
+    if (c.pipe(&fds) != 0)
+    {
+        return error.SystemResources;
+    }
+    defer _ = c.close(fds[0]);
+    var shared: Shared = .{ .opts = opts, .listen_fd = lfd, .pipe_w = fds[1] };
+    const front = try std.Thread.spawn(.{}, frontLoop, .{&shared});
+    front.detach();
+    const ip: [4]u8 = @bitCast(opts.addr);
+    std.debug.print("{s}: OpenAI-compatible API at http://{d}.{d}.{d}.{d}:{d}/v1 (model \"{s}\", chat format {t}, context {d} tokens{s})\n", .{
+        opts.name, ip[0], ip[1], ip[2], ip[3], opts.port, opts.model_id, format, engine.cap, if (opts.reuse) ", reusing shared prompt prefixes" else "",
+    });
+
+    var session: completion.Session = .{};
+    defer session.deinit(gpa);
+    var count: u64 = 0;
+    while (true)
+    {
+        var ptr: usize = 0;
+        const n = c.read(fds[0], @ptrCast(&ptr), @sizeOf(usize));
+        if (n != @sizeOf(usize))
+        {
+            return error.FrontStopped;
+        }
+        const job: *Job = @ptrFromInt(ptr);
+        count += 1;
+        const result = answer(gpa, engine, &session, tok, format, &shared, job, count);
+        _ = c.close(job.fd);
+        job.arena.deinit();
+        std.heap.c_allocator.destroy(job);
+        _ = shared.waiting.fetchSub(1, .acq_rel);
+        result catch |err| {
+            if (err == error.ClientGone)
+            {
+                continue;
+            }
+            std.debug.print("{s}: request {d} failed: {t}; stopping\n", .{ opts.name, count, err });
+            return err;
+        };
+    }
+}
+
+fn listenOn(addr: u32, port: u16) !c.fd_t {
+    const fd = c.socket(c.AF.INET, c.SOCK.STREAM | c.SOCK.CLOEXEC, 0);
+    if (fd < 0)
+    {
+        return error.SystemResources;
+    }
+    errdefer _ = c.close(fd);
+    const one: c_int = 1;
+    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &one, @sizeOf(c_int));
+    var sa: c.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
+    if (c.bind(fd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) != 0)
+    {
+        return error.AddressInUse;
+    }
+    if (c.listen(fd, 16) != 0)
+    {
+        return error.SystemResources;
+    }
+    return fd;
+}
+
+fn frontLoop(shared: *Shared) void {
+    while (true)
+    {
+        const fd = c.accept(shared.listen_fd, null, null);
+        if (fd < 0)
+        {
+            continue;
+        }
+        // A slow or silent client gives up its turn instead of holding the server.
+        const rcv: c.timeval = .{ .sec = 10, .usec = 0 };
+        const snd: c.timeval = .{ .sec = 30, .usec = 0 };
+        _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.RCVTIMEO, std.mem.asBytes(&rcv), @sizeOf(c.timeval));
+        _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.SNDTIMEO, std.mem.asBytes(&snd), @sizeOf(c.timeval));
+        const handed = route(shared, fd) catch false;
+        if (!handed)
+        {
+            _ = c.close(fd);
+        }
+    }
+}
+
+/// Reads and answers one request; true if it went to the engine thread, which then owns `fd`.
+fn route(shared: *Shared, fd: c.fd_t) !bool {
+    const gpa = std.heap.c_allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    var handed = false;
+    defer if (!handed) arena.deinit();
+    const a = arena.allocator();
+
+    var buf: std.ArrayList(u8) = .empty;
+    var head: http.Head = undefined;
+    var continued = false;
+    while (true)
+    {
+        if (http.parseHead(buf.items, max_head)) |h|
+        {
+            head = h;
+            if (h.content_length > max_body)
+            {
+                try sendError(fd, 413, "The request body is too large.", "invalid_request_error", null);
+                return false;
+            }
+            if (buf.items.len >= h.len + h.content_length)
+            {
+                break;
+            }
+            if (h.expect_continue and !continued)
+            {
+                try sendAll(fd, "HTTP/1.1 100 Continue\r\n\r\n");
+                continued = true;
+            }
+        }
+        else |err| switch (err)
+        {
+            error.Incomplete => {},
+            error.LengthRequired => {
+                try sendError(fd, 411, "Send the body with a Content-Length.", "invalid_request_error", null);
+                return false;
+            },
+            error.TooLarge => {
+                try sendError(fd, 413, "The request head is too large.", "invalid_request_error", null);
+                return false;
+            },
+            error.BadRequest => {
+                try sendError(fd, 400, "Malformed HTTP request.", "invalid_request_error", null);
+                return false;
+            },
+        }
+        try buf.ensureUnusedCapacity(a, 64 << 10);
+        const n = c.recv(fd, buf.unusedCapacitySlice().ptr, buf.unusedCapacitySlice().len, 0);
+        if (n <= 0)
+        {
+            return false;
+        }
+        buf.items.len += @intCast(n);
+    }
+    const body = buf.items[head.len..][0..head.content_length];
+    const opts = shared.opts;
+
+    if (std.mem.eql(u8, head.path, "/health"))
+    {
+        try sendBody(fd, 200, "application/json", "{\"status\":\"ok\"}");
+        return false;
+    }
+    if (std.mem.eql(u8, head.path, "/v1/models"))
+    {
+        if (!std.mem.eql(u8, head.method, "GET"))
+        {
+            try sendError(fd, 405, "Use GET.", "invalid_request_error", null);
+            return false;
+        }
+        var out: std.ArrayList(u8) = .empty;
+        try openai.writeModels(a, &out, opts.model_id, unixTime());
+        try sendBody(fd, 200, "application/json", out.items);
+        return false;
+    }
+    if (!std.mem.eql(u8, head.path, "/v1/chat/completions"))
+    {
+        try sendError(fd, 404, "Not found. This server answers /v1/chat/completions and /v1/models.", "invalid_request_error", null);
+        return false;
+    }
+    if (!std.mem.eql(u8, head.method, "POST"))
+    {
+        try sendError(fd, 405, "Use POST.", "invalid_request_error", null);
+        return false;
+    }
+    var why: openai.Invalid = .{};
+    const req = openai.parseChat(a, body, &why) catch |err| {
+        if (err == error.Invalid)
+        {
+            try sendError(fd, 400, why.message, "invalid_request_error", why.param);
+            return false;
+        }
+        return err;
+    };
+    if (shared.waiting.fetchAdd(1, .acq_rel) > opts.queue)
+    {
+        _ = shared.waiting.fetchSub(1, .acq_rel);
+        try sendError(fd, 429, "The server is busy with other requests; try again shortly.", "rate_limit_error", null);
+        return false;
+    }
+    const job = try gpa.create(Job);
+    job.* = .{ .fd = fd, .arena = arena, .req = req };
+    handed = true;
+    const ptr: usize = @intFromPtr(job);
+    if (c.write(shared.pipe_w, @ptrCast(&ptr), @sizeOf(usize)) != @sizeOf(usize))
+    {
+        return error.EngineStopped;
+    }
+    return true;
+}
+
+/// Generates one chat completion and writes it to the job's connection.
+fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completion.Session, tok: *const tokenizer.Tokenizer, format: chat.Format, shared: *Shared, job: *Job, count: u64) !void {
+    const opts = shared.opts;
+    const a = job.arena.allocator();
+    const req = job.req;
+    const fd = job.fd;
+
+    var text: std.ArrayList(u8) = .empty;
+    try chat.render(a, format, req.messages, .{ .thinking = req.thinking }, &text);
+    var prompt: std.ArrayList(u32) = .empty;
+    tok.encode(a, text.items, &prompt) catch |err| {
+        if (err == error.InvalidUtf8)
+        {
+            return sendError(fd, 400, "Message text must be valid UTF-8.", "invalid_request_error", "messages");
+        }
+        return err;
+    };
+    if (prompt.items.len >= engine.cap)
+    {
+        const msg = try std.fmt.allocPrint(a, "The prompt is {d} tokens; this server's context holds {d} (start it with a larger --ctx).", .{ prompt.items.len, engine.cap });
+        return sendError(fd, 400, msg, "invalid_request_error", "messages");
+    }
+
+    var stop_buf: [2]u32 = undefined;
+    var sampler = olmoe.Sampler.seeded(req.temperature, req.top_k, req.seed orelse opts.clock());
+    sampler.top_p = req.top_p;
+    const think_open = tok.addedId("<think>");
+    const think_close = tok.addedId("</think>");
+    const p: completion.Params = .{
+        .max_tokens = req.max_tokens,
+        .sampler = sampler,
+        .stop = req.stop,
+        .stop_ids = chat.stopIds(format, tok, &stop_buf),
+        .think = if (format != .tulu and think_open != null and think_close != null) .{ .open = think_open.?, .close = think_close.? } else null,
+        .chunk = opts.chunk,
+        .reuse = opts.reuse,
+        .clock = opts.clock,
+    };
+    const ids: openai.Ids = .{ .id = try std.fmt.allocPrint(a, "chatcmpl-tf{x}{d}", .{ opts.clock() & 0xffffff, count }), .created = unixTime(), .model = opts.model_id };
+
+    var out: Out = .{ .fd = fd, .a = a, .ids = ids, .stream = req.stream };
+    if (req.stream)
+    {
+        var head: std.ArrayList(u8) = .empty;
+        try http.writeHead(a, &head, 200, "text/event-stream", null);
+        try openai.writeChunk(a, &head, ids, .role);
+        try out.send(head.items);
+    }
+    var generated: std.ArrayList(u32) = .empty;
+    const t0 = opts.clock();
+    const r = completion.run(gpa, engine, session, tok, prompt.items, p, .{ .ctx = &out, .emit = Out.emit }, &generated) catch |err| {
+        if (err == error.ClientGone)
+        {
+            std.debug.print("{s}: request {d}: the client went away after {d} tokens\n", .{ opts.name, count, generated.items.len });
+            return err;
+        }
+        if (!req.stream)
+        {
+            sendError(fd, 500, "The engine failed while generating.", "server_error", null) catch {};
+        }
+        return err;
+    };
+    var stats = r.stats;
+    if (req.return_tokens)
+    {
+        stats.prompt_ids = prompt.items;
+        stats.completion_ids = generated.items;
+    }
+    var tail: std.ArrayList(u8) = .empty;
+    if (req.stream)
+    {
+        try openai.writeChunk(a, &tail, ids, .{ .finish = r.finish });
+        try openai.writeUsageChunk(a, &tail, ids, stats, req.include_usage);
+        out.send(tail.items) catch {};
+    }
+    else
+    {
+        var body: std.ArrayList(u8) = .empty;
+        try openai.writeCompletion(a, &body, ids, out.content.items, out.reasoning.items, r.finish, stats);
+        try sendBody(fd, 200, "application/json", body.items);
+    }
+    const secs = @as(f64, @floatFromInt(opts.clock() - t0)) / 1e9;
+    std.debug.print("{s}: request {d}: {d} prompt tokens ({d} reused), {d} generated in {d:.2} s, first token {d:.0} ms, {d:.1} tokens/s decoding, finish {t}\n", .{
+        opts.name,
+        count,
+        stats.prompt_tokens,
+        stats.cached_tokens,
+        stats.completion_tokens,
+        secs,
+        @as(f64, @floatFromInt(stats.ttft_ns)) / 1e6,
+        if (stats.decode_ns > 0) @as(f64, @floatFromInt(stats.decode_steps)) / (@as(f64, @floatFromInt(stats.decode_ns)) / 1e9) else 0,
+        r.finish,
+    });
+}
+
+/// Where reply text goes: straight to the socket as events when streaming, else collected.
+const Out = struct {
+    fd: c.fd_t,
+    a: std.mem.Allocator,
+    ids: openai.Ids,
+    stream: bool,
+    content: std.ArrayList(u8) = .empty,
+    reasoning: std.ArrayList(u8) = .empty,
+    scratch: std.ArrayList(u8) = .empty,
+
+    fn emit(ctx: *anyopaque, channel: openai.Channel, text: []const u8) anyerror!void {
+        const self: *Out = @ptrCast(@alignCast(ctx));
+        if (!self.stream)
+        {
+            try (if (channel == .content) &self.content else &self.reasoning).appendSlice(self.a, text);
+            return;
+        }
+        self.scratch.clearRetainingCapacity();
+        try openai.writeChunk(self.a, &self.scratch, self.ids, .{ .text = .{ .channel = channel, .text = text } });
+        try self.send(self.scratch.items);
+    }
+
+    fn send(self: *Out, bytes: []const u8) !void {
+        sendAll(self.fd, bytes) catch return error.ClientGone;
+    }
+};
+
+fn unixTime() i64 {
+    var ts: c.timespec = undefined;
+    _ = c.clock_gettime(c.CLOCK.REALTIME, &ts);
+    return @intCast(ts.sec);
+}
+
+fn sendAll(fd: c.fd_t, bytes: []const u8) !void {
+    var off: usize = 0;
+    while (off < bytes.len)
+    {
+        const n = c.send(fd, bytes[off..].ptr, bytes.len - off, c.MSG.NOSIGNAL);
+        if (n <= 0)
+        {
+            return error.ClientGone;
+        }
+        off += @intCast(n);
+    }
+}
+
+fn sendBody(fd: c.fd_t, status: u16, content_type: []const u8, body: []const u8) !void {
+    const gpa = std.heap.c_allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    try http.writeHead(gpa, &out, status, content_type, body.len);
+    try out.appendSlice(gpa, body);
+    try sendAll(fd, out.items);
+}
+
+fn sendError(fd: c.fd_t, status: u16, message: []const u8, kind: []const u8, param: ?[]const u8) !void {
+    const gpa = std.heap.c_allocator;
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(gpa);
+    try openai.writeError(gpa, &body, message, kind, param);
+    try sendBody(fd, status, "application/json", body.items);
+}

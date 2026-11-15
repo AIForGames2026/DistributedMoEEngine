@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #31 mirror the tasks below; #23 is TASK-21, added after the PoC, and #24 to #31 are TASK-22 to TASK-29; TASK-30, added Nov 13, has no issue yet). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #34 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, and #32 to #34 are TASK-30 to TASK-32, opened Nov 15). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -314,9 +314,10 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Added Nov 13, after Testing Session 1 (`bench/playtest/session-1.md`): testers praised the polish, but most could not tell what the simulated mission showed, and a simulation undersells a working engine. What sells it is using a real model through it.
   - **Server:** `olmoe serve` runs the router (rank 0, in one process or split over any transport, with the tracker) as an HTTP server: `POST /v1/chat/completions` in OpenAI's format, with server-sent-event streaming, and `GET /v1/models`. `curl`, the `openai` Python package, and existing chat clients work unchanged.
   - **Built-in harness:** the same server serves the page from `web/`: a chat panel beside a 2D live diagram showing the machines with their expert grids, each token's chosen experts lit on the machine that ran them, links with live latency and packet counts, expert-cache hits and misses, and tokens per second. It is fed by TASK-16b's stream; sessions can be recorded for replay (TASK-16). Expert-cache hits and misses only happen when experts stream from the drive (`--cache N`); with every expert loaded, the default, every call is a hit. So one demo setup runs with `--cache` on purpose, where the lookahead's prefetches visibly matter.
-  - **Tokenizer:** a byte-level BPE tokenizer read from each model's `tokenizer.json` (OLMoE-1B-7B-Instruct, Qwen3-30B-A3B), their chat templates, and streamed decoding. Generation reuses TASK-24's loop, and TASK-28's saved prefixes skip repeated system prompts.
+  - **Tokenizer:** a byte-level BPE tokenizer read from each model's GGUF metadata or its `tokenizer.json` (OLMoE-1B-7B-Instruct, Qwen3-30B-A3B), their chat templates, and streamed decoding. Generation reuses TASK-24's loop, and TASK-28's saved prefixes skip repeated system prompts.
   - **Not in scope:** third-party harnesses (agent CLIs, desktop chat apps) are not dependencies; they connect through the standard API if they take a custom base URL. An Anthropic-format endpoint for agent tools is a stretch demo. There is no authentication: the server binds to localhost by default and is only ever exposed on a private network; public access belongs to TASK-25.
 - **Acceptance Criteria**: Done when (1) the engine's tokenizer gives the same token ids as Hugging Face's `tokenizers` on the TASK-24 prompts and a long text, for both models; (2) greedy chat requests through `curl` and the `openai` Python package, streamed and not, return the same tokens as `olmoe --generate` for the same prompt tokens; (3) the built-in page chats with OLMoE-1B-7B split across two Sparks over RDMA and with Qwen3-30B-A3B on one, streaming tokens while the diagram updates live, with its per-machine expert counts matching the engine's counters; and (4) time to first token and tokens per second through the server, against `olmoe` directly and with the diagram connected or not, are recorded in `bench/`.
+- **Progress (Nov 15)**: criterion (1) met. `src/tokenizer.zig` gives the same ids as Hugging Face's `tokenizers` for both models, from the GGUF and from `tokenizer.json`, on the golden prompts, 22 edge cases, 500 seeded random strings, and a 474k-token text (`tools/ref/check_tokenizer.py`). `src/chat.zig` renders conversations exactly as transformers' `apply_chat_template` does (72 of 72 prompts per model, `tools/ref/check_chat.py`), including the older Qwen3 template our GGUF carries. Next: the server.
 
 ---
 
@@ -375,6 +376,21 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 11, when choosing a long-context model for TASK-12. Qwen3.6-35B-A3B (April 2026, 35B total, 3B active, 262,144-token native context) fits the lab: its Q8_0 GGUF is 36.9 GB and its BF16 checkpoint 72 GB. But it is a hybrid. Of its 40 layers, 30 are Gated DeltaNet (linear attention with a fixed-size recurrent state) and 10 are full attention with an output gate, 2 KV heads of 256 dims, and partial RoPE (64 of 256 dims). It has 256 experts, 8 routed plus 1 shared per token. Supporting it means a Gated DeltaNet layer (CPU and a CUDA kernel for long prefill), gated attention, partial RoPE, and shared experts on top of TASK-12's Qwen3-MoE work. The MTP head and vision encoder stay out. TASK-12 used Qwen3-30B-A3B instead, because this model's KV cache is small (about 5 GB at 128k tokens in f32) and would not exercise NVMe offload.
 - **Acceptance Criteria**: To be written when it is scheduled. Minimum: the TASK-10 checks (logits within 1e-2 of transformers, top-1 identical, every routing choice identical) and TASK-24's greedy generation check on Qwen3.6-35B-A3B, split across two processes, recorded in `bench/`.
+- **Track (Nov 15)**: first step of the hybrid linear-attention track, TASK-29 then TASK-31 then TASK-32. The Gated DeltaNet layer, its saved recurrent state (in place of TASK-28's saved KV for those layers), and the scheduling of mixed layer types are built here, at a size the lab can check against transformers, and reused by both later models.
+
+#### [TASK-31] Qwen3.8-Flash-Next (Hybrid Attention, Expert Streaming at Scale)
+- **Milestone**: None (after v1)
+- **Status**: Backlog
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 15, second step of the hybrid track. As reported in summaries of its paper (to be checked against its `config.json` before scheduling): 125B parameters with 6B active per token, plus 51B of n-gram embedding tables kept off the GPU and a 4B multi-token prediction module; 512 experts, 10 routed plus 1 shared per token; 48 layers, three Gated DeltaNet layers to every Qwen Sparse Attention (QSA) layer, which attends to selected blocks of tokens. At 4 bits the 125B core is roughly 65 to 70 GB, so it fits on two Sparks, or on one with experts streamed from NVMe (`--cache`). Its small experts (roughly 2 to 3 MB at 4 bits) stress the expert cache and lookahead (TASK-11, TASK-14) harder than any model so far, and its n-gram tables are a per-token lookup that could also stream from NVMe. New work on top of TASK-29: QSA, the n-gram tables, and whichever weight format its releases use (K-quant GGUFs need a new loader path; NVFP4 or Q8_0 would not). The MTP module stays out.
+- **Acceptance Criteria**: To be written when it is scheduled. Minimum: the TASK-10 and TASK-24 checks against transformers, split across two Sparks, and a one-Spark run with experts streamed from NVMe, with expert-cache hit rates and tokens per second recorded in `bench/`.
+
+#### [TASK-32] GLM-5.3-Flash (Hybrid Attention, 320B)
+- **Milestone**: None (after v1)
+- **Status**: Backlog
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 15, third step of the hybrid track. As reported by NVIDIA's model coverage page and hosting providers (to be checked against its `config.json`): 320B parameters with 18B active per token; 45 layers, the first 3 with dense feed-forward blocks and the other 42 with 288 experts, 8 routed plus 1 shared per token; 34 KDA layers (a delta-rule linear attention with per-channel gates, which generalizes TASK-29's Gated DeltaNet) and 11 sparse MLA-style attention layers with a token indexer. Its smallest 4-bit GGUF is about 200 GB, so it needs two Sparks in memory or one streaming experts from NVMe. New work on top of TASK-31: per-channel gating in the delta-rule kernel, MLA with sparse token selection, dense leading layers, and the router (likely sigmoid with a bias, to be confirmed). The vision encoder stays out. Generating transformers references for a 320B model may need the lazy expert loading TASK-12's reference script uses, or more memory than the lab has; settle that before scheduling.
+- **Acceptance Criteria**: To be written when it is scheduled. Minimum: the TASK-10 and TASK-24 checks against a reference, and a one-Spark run with experts streamed from NVMe, recorded in `bench/`.
 
 ---
 
@@ -384,7 +400,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, used from a browser chat harness, and shown in a live and recorded diagram. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 16b, 18, 19, 23, 24, 30 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, and 29 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, 29, 31, and 32 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29, 31, 32 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, and CPU-only expert nodes.
 
@@ -408,15 +424,15 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-29 |
-| **To Do** | TASK-30 (server and built-in chat harness, added Nov 13) |
-| **In Progress** | (none) |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-15, TASK-16 to TASK-20 (including 16b), TASK-25, TASK-27, TASK-29, TASK-31, TASK-32 |
+| **To Do** | (none) |
+| **In Progress** | TASK-30 (server and built-in chat harness, added Nov 13; tokenizer and chat formatting done Nov 15) |
 | **Review** | TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30 | 18 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32 | 20 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b, 23, 25 | 5 |
@@ -426,7 +442,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 17 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 9 | 4 tagged `cut-1`; TASK-25, 27, 28, and 29 are post-v1; TASK-26 untagged |
+| `could` | 11 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, and 32 are post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 
@@ -471,8 +487,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-26 | 10 | 09 (classroom machines as swarm nodes) |
 | TASK-27 | 24 | (none) |
 | TASK-28 | 03, 24 | (none) |
-| TASK-29 | 12 (Qwen3-MoE support) | (none) |
+| TASK-29 | 12 (Qwen3-MoE support) | 31 |
 | TASK-30 | 09 (split runs), 24, 28 | 16, 16b, 18 |
+| TASK-31 | 29 (Gated DeltaNet), 11 and 14 (expert cache) | 32 |
+| TASK-32 | 31 (delta-rule kernels, sparse attention) | (none) |
 
 **Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-24 → TASK-30 → TASK-16 → TASK-18 (TASK-15 feeds TASK-16 in parallel).
 

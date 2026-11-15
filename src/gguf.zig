@@ -34,8 +34,23 @@ pub const Value = union(enum) {
     float: f64,
     boolean: bool,
     string: []const u8,
-    /// Element type and count; elements are not decoded.
-    array: struct { elem: ValueType, len: u64 },
+    /// Element type, count, and the elements' raw bytes (decoded on demand).
+    array: struct { elem: ValueType, len: u64, data: []const u8 },
+};
+
+/// Walks a string array's elements in order.
+pub const StringIterator = struct {
+    r: Reader,
+    left: u64,
+
+    pub fn next(self: *StringIterator) Error!?[]const u8 {
+        if (self.left == 0)
+        {
+            return null;
+        }
+        self.left -= 1;
+        return try self.r.string();
+    }
 };
 
 pub const KV = struct { key: []const u8, value: Value };
@@ -99,6 +114,35 @@ pub const Header = struct {
         const v = self.get(key) orelse return null;
         return switch (v) {
             .string => |s| s,
+            else => null,
+        };
+    }
+
+    /// A string array's elements, or null if `key` is missing or not one.
+    pub fn strings(self: Header, key: []const u8) ?StringIterator {
+        const v = self.get(key) orelse return null;
+        return switch (v) {
+            .array => |a| if (a.elem == .string) .{ .r = .{ .buf = a.data }, .left = a.len } else null,
+            else => null,
+        };
+    }
+
+    /// An integer array's element `i`, or null if missing, not one, or out of range.
+    pub fn intAt(self: Header, key: []const u8, i: u64) ?i64 {
+        const v = self.get(key) orelse return null;
+        const a = switch (v) {
+            .array => |a| a,
+            else => return null,
+        };
+        if (i >= a.len or a.elem == .string or a.elem == .f32 or a.elem == .f64)
+        {
+            return null;
+        }
+        var r: Reader = .{ .buf = a.data, .pos = @intCast(i * Reader.scalarSize(a.elem)) };
+        const x = r.value(a.elem) catch return null;
+        return switch (x) {
+            .int => |n| @intCast(n),
+            .boolean => |b| @intFromBool(b),
             else => null,
         };
     }
@@ -219,12 +263,13 @@ const Reader = struct {
                 const elem = try self.valueType();
                 const len = try self.int(u64);
                 if (elem == .array) return error.BadValueType; // nested arrays are not used
+                const start = self.pos;
                 if (elem == .string) {
                     for (0..len) |_| _ = try self.string();
                 } else {
                     _ = try self.bytes(std.math.mul(u64, len, scalarSize(elem)) catch return error.Truncated);
                 }
-                break :blk .{ .array = .{ .elem = elem, .len = len } };
+                break :blk .{ .array = .{ .elem = elem, .len = len, .data = self.buf[start..self.pos] } };
             },
         };
     }

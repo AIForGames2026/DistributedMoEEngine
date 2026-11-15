@@ -72,6 +72,8 @@ test {
     _ = @import("moe_ref.zig");
     _ = @import("quant.zig");
     _ = @import("gguf.zig");
+    _ = @import("unicode.zig");
+    _ = @import("tokenizer.zig");
     _ = @import("safetensors.zig");
     _ = @import("loader.zig");
     _ = @import("olmoe.zig");

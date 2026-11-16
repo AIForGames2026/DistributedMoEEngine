@@ -1308,7 +1308,12 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .chunks = wire.chunkCount(opts.payload, cfg.d_model),
         .probe = .{ .ctx = &split, .sample = SplitMoe.sample },
     };
-    const result = if (opts.serve != null) runServe(gpa, &l, moe, opts, name, live) else runGolden(gpa, &l.weights.?, moe, opts, name);
+    const result = if (opts.serve != null)
+        runServe(gpa, &l, moe, opts, name, live)
+    else if (opts.context > 0)
+        runLong(gpa, &l.weights.?, moe, opts, name)
+    else
+        runGolden(gpa, &l.weights.?, moe, opts, name);
     if (result) |_| {} else |err|
     {
         if (err == error.PeerUnhealthy)
@@ -1701,7 +1706,7 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     reportProfile(name, "decode");
     const steps = @max(@max(opts.generate, 1) - 1, 1);
     const per_step = @as(f64, @floatFromInt(decode_ns)) / 1e9 / @as(f64, @floatFromInt(steps));
-    std.debug.print("{s}: time to first token {d:.1} s ({d:.0} tokens/s prefill); decode {d:.3} s per token ({d:.2} tokens/s) over {d} steps from position {d}; resident memory {d:.0} MB\n", .{
+    std.debug.print("{s}: time to first token {d:.3} s ({d:.0} tokens/s prefill); decode {d:.3} s per token ({d:.2} tokens/s) over {d} steps from position {d}; resident memory {d:.0} MB\n", .{
         name,
         @as(f64, @floatFromInt(ttft)) / 1e9,
         @as(f64, @floatFromInt(n)) / (@as(f64, @floatFromInt(ttft)) / 1e9),

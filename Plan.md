@@ -146,7 +146,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-07] RoCE v2 Zero-Copy RDMA Transport
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement the RDMA backend of the TASK-02 `Transport` with libibverbs Reliable Connection QPs over ConnectX-7, using one-sided `IBV_WR_RDMA_WRITE_WITH_IMM` into pre-registered remote slot rings. Bootstrap QPN, PSN, GID index, remote address, and rkey from a launcher manifest. The CPU publishes receiver-side readiness after it sees the CQE; the immediate value does not increment memory by itself. With one free node, this is developed and accepted as two processes on `gx10-03` talking through its ConnectX-7 (HCA loopback). The Sparks are already direct-cabled in a full mesh at 200 Gb/s, so real two-node runs need only `gx10-01` or `gx10-02` to be free (TASK-15b).
 - **Acceptance Criteria**: Done when two processes on `gx10-03` pass the TASK-02 test suite unchanged on the RDMA backend, single-packet one-way latency p50 is within 1.5x of loopback `ib_write_lat` for the same size, sustained bandwidth reaches at least 90% of loopback `ib_write_bw`, and no payload slot is reused before its send completion. If TASK-05 shows RDMA loopback cannot run on `gx10-03`, the same suite passes against Soft-RoCE (`rdma_rxe`) and the Emergency cut in Section 4 applies for performance numbers.
@@ -155,7 +155,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-08] Quantized Expert Loader (GGUF + NVFP4)
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement a model loader that parses GGUF (Q8_0 and MXFP4 tensor types) and NVFP4 checkpoints (E2M1 values, E4M3 scale per 16 values, FP32 tensor scale) and loads only the experts this engine process owns, reading through the TASK-03 `io_uring` path.
 - **Acceptance Criteria**: Done when the engine parses a multi-expert model chunk, loads only this process's experts into memory, validates tensor shapes and checksums against the file metadata, and dequantized values match the reference harness within format tolerance.
@@ -163,7 +163,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-10] Top-k Expert Gating & First Two-Process Forward Pass
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Implement the gating router (softmax over top-k logits, starting with k = 1 and generalizing to k = 8) that sends each token to local or remote experts, runs the expert FFN, and combines weighted results. Combine writes each expert contribution to its own slot and reduces locally; overlapping RDMA writes do not sum. Expert placement comes from a static manifest file until TASK-09 lands.
 - **Acceptance Criteria**: Done when a token sequence completes a forward pass split across 2 engine processes (on `gx10-03` over RDMA, and between the desktop and `gx10-03` over TCP) for the TASK-06 synthetic MoE and one small public MoE (for example OLMoE-1B-7B), with output logits matching the PyTorch reference within a documented tolerance (target: max abs error at or below 1e-2 in FP8 paths) and identical top-1 next tokens on the golden prompts.
@@ -174,7 +174,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-21] Direct Desktop-to-Spark Network Path
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `should` | **Area**: `benchmarking`
 - **Description**: Added after the PoC. Every desktop-to-`gx10-03` run so far went through Tailscale's DERP relay in NYC (33 ms round trip, about 5 ms per token pipelined), so cross-machine numbers measure the relay, not the transport. Find a direct path: Tailscale direct UDP (41641) through the campus network, a subnet route, or another link the lab allows.
 - **Acceptance Criteria**: Done when `tailscale ping` (or the chosen route) reports a direct connection and `dispatch router --packets 4096` desktop to `gx10-03` is re-measured and recorded in `bench/transport/`; if no direct path is possible, the reason is recorded and TASK-10 and TASK-15 label their cross-machine numbers as relay-bound.
@@ -182,7 +182,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-23] Alpha Vertical Slice: Guided Mission & Test Plan
 - **Milestone**: Alpha (Nov 8)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `webgl`
 - **Description**: Added Nov 5 for Testing Session 1 (week of Nov 9). Classmates cannot run the engine, and the slice is simulated by design (the instructor knows the scope is deep and does not need it changed), so the page has to teach the idea with no developer help. On first load the inspector runs a guided mission: a short intro, three experiments (watch it work, remove prediction, split across the relay) with a check question, a final challenge (get two machines to 200 tok/s, which only the direct link can do), and a report card with a result line, Play again, and Exit. The numbers come from the existing simulator, and `npm test` fails if a lesson stops holding. A panel separates recorded engine results from the simulation. Top-k and recall stay locked during the mission.
 - **Acceptance Criteria**: Done when a first-time tester finishes the mission unaided on the live GitHub Pages site, the site has been loaded on a second machine, `TestPlan.md`, the release notes, and the redeploy steps are in the repo, and `v0.2.0-alpha` is tagged.
@@ -194,7 +194,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-09] Swarm Node Tracker (after Lumabri / Colibri)
 - **Milestone**: Beta (Nov 22)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `should` | **Area**: `architecture` | **Tag**: `cut-2`
 - **Description**: Replace the static placement manifest with a tracker as the control plane: live process and node registry, health heartbeats, and the expert ownership map the dispatcher reads. Token payloads never pass through it. Changed Nov 11: Lumabri turned out to be Apache-2.0 (compatible) but a large, fast-moving C project whose tracker beats every 10 s on port 7300, too slow for the 5 s target below, so the tracker is written in Zig (`src/tracker.zig`, TCP 47300) after Lumabri's index-only design instead of vendored.
 - **Acceptance Criteria**: Done when a new engine process joins and its expert assignment appears in every peer's ownership map within 2 seconds, a killed process is marked unhealthy within 5 seconds, and the dispatcher refuses to route to an unhealthy process.
@@ -202,7 +202,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-11] Speculative Lookahead Router
 - **Milestone**: Beta (Nov 22)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `should` | **Area**: `code` | **Tag**: `cut-2`
 - **Description**: Build a lightweight low-rank or cascaded predictor (following SpecPrefetch / Director) that predicts expert sets ahead (H = 1 first, H = 2 target) and issues RDMA pre-arming and NVMe prefetch commands through the Prefetch Command Ring. The native router stays authoritative: predictions only drive transfers, never which experts run. Prefetch keys are `(layer, expert)` pairs. Predictor training can run on the desktop's 5070 Ti.
 - **Acceptance Criteria**: Done when prefetches are issued before the target layer starts in at least 95% of steps, measured expert recall at H = 2 with k + 2 candidates is at least 80% on two evaluation datasets (or H = 1 results are reported if H = 2 misses), predictor compute overhead is under 2% of layer time, and outputs are bit-identical with the predictor on versus off.
@@ -210,7 +210,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-14] Misprediction & Miss Handling (Exact Mode)
 - **Milestone**: Beta (Nov 22)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `should` | **Area**: `code` | **Tag**: `cut-2`
 - **Description**: Handle experts the lookahead missed, without changing model output: cancel obsolete speculative requests, promote true misses to a high-priority queue, run resident experts while missing ones arrive, and fetch from a peer process's memory over RDMA READ when that beats local NVMe. An approximate skip-low-weight mode is out of scope (Section 4).
 - **Acceptance Criteria**: Done when, under forced 10% mispredictions for 30 minutes, the engine produces tokens continuously without crash, deadlock, or memory growth, and output is bit-identical to a no-speculation run.
@@ -218,7 +218,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-12] Tiered NVMe KV Cache Offloader
 - **Milestone**: Beta (Nov 22)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `could` | **Area**: `code` | **Tag**: `cut-1`
 - **Description**: Implement a ring-buffer KV manager that pins attention sink tokens (first 128) and the most recent 8,192 tokens in memory, and offloads cold middle context to NVMe via `io_uring`, paging it back on demand with prefetch. Changed Nov 11: OLMoE's context is 4,096 tokens, so this task runs on Qwen3-30B-A3B (Q8_0, about 32 GB; 32k native context, 128k with YaRN factor 4), which needs Qwen3-MoE support in the engine (grouped KV heads, per-head QK norm, renormalized top-8 routing, YaRN) and attention on the GPU, since a 128k prefill on the CPU takes hours. The acceptance criteria were rewritten the same day: the old target, under 15% decode slowdown against an all-RAM cache, cannot be met with exact full attention. Every new token reads every cached position, so at 128k the offloaded middle (about 23.6 GB in f32) takes about 3.4 s per token to read at the drive's 7 GB/s, against about 0.1 s from RAM. Compact formats (TASK-27) and saved prefixes (TASK-28) are follow-ups that make this faster and easier to test, not fixes.
 - **Acceptance Criteria**: Done when (1) Qwen3-30B-A3B with YaRN passes TASK-10's checks (logits within 1e-2 of transformers, top-1 identical, every routing choice identical) and TASK-24's greedy generation check on the golden prompts; (2) a 128k-token context runs with the in-memory KV cache capped to the first 128 plus the most recent 8,192 positions, and its tokens and logits match an all-RAM run at the same length exactly (both fit on `gx10-02`); (3) during decode the offloaded part is read at 5 GB/s or more, with reads overlapping compute; and (4) decode speed and time to first token at 128k, offloaded and all-RAM, are recorded in `bench/`.
@@ -241,7 +241,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-22] CPU-Only Expert Nodes
 - **Milestone**: Beta (Nov 22)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `could` | **Area**: `code` | **Tag**: `cut-1`
 - **Description**: Added Nov 3. Let a machine with no NVIDIA GPU (any x86_64 or ARM Linux or Windows box, starting with the desktop's i7-12700K) join as an expert node that runs its experts on the CPU. The PoC expert already does this for the synthetic MoE (`moe_ref.expert` behind `dispatch --moe`, over TCP, on Linux and native Windows); this task extends it to real weights: a per-process `cpu` backend flag in the placement manifest, CPU dequantization of the TASK-08 formats (Q8_0, MXFP4, NVFP4) to FP32 at load time, and a tiled CPU expert FFN. The wire format and transport do not change. This is the only supported way for non-NVIDIA hardware to take part (Section 4).
 - **Acceptance Criteria**: Done when the TASK-10 small public MoE runs split between a GPU process on `gx10-03` and a CPU-only expert process on the desktop over TCP, with logits within TASK-10's tolerance of the PyTorch reference and identical top-1 tokens, and the CPU process's per-expert latency and tokens/second are recorded in `bench/` (labeled as desktop CPU results).
@@ -249,7 +249,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-24] Token Generation Loop & In-Memory KV Cache
 - **Milestone**: Beta (Nov 22)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Added Nov 5. TASK-10 processes a whole prompt in one forward pass, and TASK-15's soak has to generate tokens for an hour, but no task owned the step between them. Add a per-layer KV cache in memory, one-token-at-a-time forward passes, greedy and seeded sampling, and an `olmoe generate` mode over every transport. TASK-12 (NVMe offload) stays separate and optional.
 - **Acceptance Criteria**: Done when greedy generation over RDMA on `gx10-03` produces the same tokens as transformers' `generate()` for the three TASK-10 prompts (at least 64 new tokens each, F32 payload), per-token logits stay within TASK-10's tolerance, and memory stays flat across a 10-minute run. Results recorded in `bench/`.
@@ -257,7 +257,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-26] Ampere GPU Expert Nodes (RTX 30-Series)
 - **Milestone**: Beta (Nov 22)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 10. Most classroom desktops have RTX 3070-class GPUs (Ampere, compute capability 8.6, 8 GB). The Q8_0 matmul kernel is plain CUDA, so the build adds an `sm_86` target (`build.zig`) next to the Blackwell ones; nothing else assumes Blackwell. Ampere has no FP4 or FP8 tensor cores, so the planned NVFP4 kernels stay Blackwell-only and Ampere nodes keep the Q8_0 path. An 8 GB card holds one half of the OLMoE split (about 3.9 GB), not the whole model. Tested on the owner's laptop, whose RTX 3060 Laptop GPU is the same architecture with 6 GB.
 - **Acceptance Criteria**: Done when OLMoE-1B-7B split between an Ampere GPU and a second machine passes the TASK-10 checks (logits within 1e-2, top-1 identical, every routing choice identical) with `TF_GPU_CHECK=1` finding no GPU result off by more than 1e-3, and the run is recorded in `bench/` labeled with the GPU.
@@ -269,7 +269,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-15] Soak Test on `gx10-03` + Cross-Machine Run
 - **Milestone**: RC (Nov 29)
-- **Status**: Review (run Nov 16)
+- **Status**: Done (run Nov 16)
 - **Priority**: `must` | **Area**: `benchmarking`
 - **Description**: Two runs with a real public MoE whose weights fit in the memory left free on `gx10-03`. With about 11 GB free today, that means a small model such as OLMoE-1B-7B at 4 bits (about 4 GB); a Qwen3-30B-A3B-class model (about 17 GB) only if the co-tenant's vLLM job is paused for the run. **Soak**: two engine processes on `gx10-03`, each owning half the experts, linked by the RDMA backend, generating for 1 hour. **Cross-machine**: the same model split between the desktop and `gx10-03` over TCP, proving the engine runs on two physically separate, mixed machines. Agree on a time with the other student before the soak.
 - **Acceptance Criteria**: Done when the soak sustains at least 10 tokens/second aggregate for 1 hour with zero crashes and flat resident memory (under 1% drift after warm-up), the cross-machine run generates correct tokens for 10 minutes (its throughput is recorded but not targeted, since it rides on Tailscale), and both runs' logs (configs, versions, counters, telemetry traces, co-tenant load) are archived under `bench/rc/`.
@@ -277,7 +277,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-15b] Multi-Spark RDMA Run (2 to 3 Nodes)
 - **Milestone**: RC (Nov 29)
-- **Status**: Review
+- **Status**: Done
 - **Priority**: `could` | **Area**: `benchmarking` | **Tag**: `cut-1`
 - **Description**: Only if `gx10-01` or `gx10-02` frees up (cabling is already in place: the three Sparks are direct-cabled in a full mesh): repeat the soak with one engine process per Spark over real node-to-node RDMA.
 - **Acceptance Criteria**: Done when a 2 or 3 node run passes the TASK-07 suite across nodes, single-packet p50 latency is within 1.5x of node-to-node `ib_write_lat`, and a 30-minute generation run is archived under `bench/rc/` with scaling against the single-node soak.
@@ -285,7 +285,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-16] Telemetry Recording & Trace Replay
 - **Milestone**: RC (Nov 29)
-- **Status**: Review (built Nov 15)
+- **Status**: Done (built Nov 15)
 - **Priority**: `must` | **Area**: `webgl`
 - **Description**: The engine writes compact telemetry (routing decisions per token and layer, the process that ran each expert, RDMA and TCP packet timings, expert-cache and NVMe events) using the TASK-04 schema, both to trace files and to TASK-30's live stream (TASK-16b). The 2D view loads a recorded chat session and replays it with the chat text alongside. These recorded sessions are what the public demo ships. Changed Nov 13: TASK-30's 2D view replaces the WebGL inspector as the main view. Recording must not slow the engine:
   - **Only data the engine already has:** routing decisions come from the router on the CPU, packet times from the transport's own timestamps, and expert-cache results from `ExpertCache`, which already counts resident, hinted, late, and missed calls. No GPU synchronization is added to time individual experts.
@@ -297,7 +297,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-16b] Live Telemetry over WebSocket
 - **Milestone**: RC (Nov 29)
-- **Status**: Review (built Nov 15)
+- **Status**: Done (built Nov 15)
 - **Priority**: `must` | **Area**: `webgl`
 - **Description**: `olmoe serve` (TASK-30) streams telemetry frames over a WebSocket beside the chat stream, so the 2D view updates as tokens arrive. Plain `ws://` on localhost; `wss://` behind a TLS proxy for a viewer on another machine. Frames may be decoded in JavaScript; a Wasm decoder built from the Zig schema code is optional. Never enabled on the public site. Changed Nov 13: the stream comes from the engine's own server instead of a separate relay, and the task moved from `could` (`cut-1`) to `must`, since the live diagram is half of TASK-30's harness. A slow or disconnected viewer only loses frames (TASK-16's rings drop instead of blocking); it never holds up generation.
 - **Acceptance Criteria**: Done when the 2D view shows a live split run with under 500 ms from an expert call to its drawing; malformed frames are rejected without crashing the page; and with a viewer connected, tokens per second drop by under 2% and tokens and logits stay identical to a run with no viewer, in one process and split across two Sparks, including when the viewer stalls (dropped frames are counted, generation is not slowed).
@@ -305,7 +305,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-17] Capacity Factor & Memory Thrashing Guardrails
 - **Milestone**: RC (Nov 29)
-- **Status**: Review (built Nov 16)
+- **Status**: Done (built Nov 16)
 - **Priority**: `should` | **Area**: `code` | **Tag**: `cut-2`
 - **Description**: Enforce per-expert capacity factors, receiver-granted credits, and a hard memory budget per engine process, so load spikes cannot overflow rings or push a shared machine into swapping. Overflow tokens take the residual path and are counted.
 - **Acceptance Criteria**: Done when a synthetic 3x load spike completes with dropped-token counts reported, no memory leak (allocator balance at zero after the run), no pipeline stall longer than 100 ms, the process never exceeds its configured memory budget, and token drop rate is under 1% at nominal load.
@@ -313,7 +313,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-30] OpenAI-Compatible Server & Built-in Chat Harness
 - **Milestone**: RC (Nov 29)
-- **Status**: Review (built Nov 15)
+- **Status**: Done (built Nov 15)
 - **Priority**: `must` | **Area**: `code`
 - **Description**: Added Nov 13, after Testing Session 1 (`bench/playtest/session-1.md`): testers praised the polish, but most could not tell what the simulated mission showed, and a simulation undersells a working engine. What sells it is using a real model through it.
   - **Server:** `olmoe serve` runs the router (rank 0, in one process or split over any transport, with the tracker) as an HTTP server: `POST /v1/chat/completions` in OpenAI's format, with server-sent-event streaming, and `GET /v1/models`. `curl`, the `openai` Python package, and existing chat clients work unchanged.
@@ -329,7 +329,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-18] GitHub Pages Showcase Deployment
 - **Milestone**: Final (Dec 6)
-- **Status**: Review (deployed Nov 16)
+- **Status**: Done (deployed Nov 16)
 - **Priority**: `must` | **Area**: `docs`
 - **Description**: Host TASK-30's 2D view at https://aiforgames2026.github.io/DistributedMoEEngine/, replaying recorded chat sessions and RC runs (TASK-16), each labeled as a recording of the real engine. The 3D inspector and the guided mission may stay as a secondary tab. Static assets only: HTML, JS, optional Wasm, and trace data; the public site never connects to an engine. Changed Nov 13: the 2D view replaces the WebGL inspector as the main page.
 - **Acceptance Criteria**: Done when the public URL loads the 2D view with at least one recorded chat session in current Chrome, Firefox, and Safari without any binary download or install prompt, a CI check fails the deploy if the bundle contains `.exe`, `.dmg`, `.pkg`, `.msi`, or shell installer files, a Content-Security-Policy is set, and initial load is under 5 MB.
@@ -362,7 +362,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-27] Compact KV Cache Formats
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 16, ahead of v1)
+- **Status**: Done (built Nov 16, ahead of v1)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 10, after DeepSeek-V4.1-Flash's KV cache work (arXiv 2609.19969) came up in class. Its 890 bytes per token come from architecture and training (shared KV across layers, sparse top-k selection, FP4 cache with quantization-aware training), none of which an existing model like OLMoE can take on without retraining. The part that carries over is storing the cache smaller: TASK-24's cache holds K and V in f32 (262,144 bytes per token for OLMoE-1B-7B), and a BF16 or FP8 (E4M3 with per-block scales) option would cut that by 2x to 4x. The cache lives on the attention rank only, so this saves memory there and changes no wire traffic.
 - **Acceptance Criteria**: Written when scheduled (Nov 16): `--kv-format bf16` and `--kv-format fp8` work on the CPU and the GPU, with saved prefixes (TASK-28) and with the NVMe tier (TASK-12), each giving exactly the output of an all-in-memory cold run of the same format. f32 stays the default and bit-identical to the committed build, at the same speed. Each format's bytes per token, its logits error and matching-token count against transformers' `generate()` on the TASK-24 prompts (OLMoE-1B-7B and Qwen3-30B-A3B), and decode speed against f32 at 32k and 128k, recorded in `bench/`.
@@ -377,7 +377,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-28] Persistent Prefix KV Cache
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 11, ahead of v1)
+- **Status**: Done (built Nov 11, ahead of v1)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 10, from the same paper, which keeps every prompt's global KV on SSD for at least 72 hours so a repeated prefix skips prefill. Save the K and V of a prompt prefix to NVMe, keyed by a hash of its tokens, and read them back through the TASK-03 `io_uring` reader when a later prompt starts with the same tokens. OLMoE has no sliding-window cache, so unlike DeepSeek's bounded replay the restored cache is exact. Shares the NVMe paging code with TASK-12 if that task is built.
 - **Acceptance Criteria**: Written when scheduled (Nov 11): a prompt that reuses a saved prefix, wholly and in part, produces exactly the same tokens and logits as a cold run, at 16k and at 128k on Qwen3-30B-A3B, with time to first token for both recorded in `bench/`.
@@ -440,8 +440,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25, TASK-29, TASK-31, TASK-32 |
 | **To Do** | (none) |
 | **In Progress** | (none) |
-| **Review** | TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
-| **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`) |
+| **Review** | (none) |
+| **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|

@@ -42,7 +42,9 @@
 //!          --memory-budget MB (a hard limit on this process's memory: the
 //!          heap refuses to grow past what the weights and GPU leave),
 //!          --spike F (with --context: the middle third of the prompt comes in
-//!          steps F times as big, reported phase by phase)
+//!          steps F times as big, reported phase by phase),
+//!          --kv-format f32|bf16|fp8 (TASK-27: how rank 0's KV cache stores
+//!          keys and values; bf16 halves it, fp8 cuts it about 3.9 times)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -149,6 +151,7 @@ const Options = struct {
     max_step: usize = Experts.default_max_tokens,
     memory_budget: u64 = 0,
     spike: usize = 0,
+    kv_format: olmoe.KvFormat = .f32,
 };
 
 /// Every allocation of this process goes through `proc_heap` (TASK-17), which
@@ -182,6 +185,7 @@ pub fn main(init: std.process.Init) !void {
             \\         --serve [IP:]PORT  --ctx N  --no-reuse  (an OpenAI-compatible server instead of --golden)
             \\         --record FILE  (rank 0 records every step for the page to replay)
             \\         --capacity C  --expert-capacity C  --max-step N  --memory-budget MB  --spike F  (TASK-17)
+            \\         --kv-format f32|bf16|fp8  (TASK-27; f32 by default)
             \\
         , .{});
         std.process.exit(2);
@@ -343,6 +347,8 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.compare = value;
         } else if (std.mem.eql(u8, arg, "--yarn")) {
             yarn_factor = try std.fmt.parseFloat(f32, value);
+        } else if (std.mem.eql(u8, arg, "--kv-format")) {
+            opts.kv_format = olmoe.KvFormat.parse(value) orelse return error.Usage;
         } else if (std.mem.eql(u8, arg, "--serve")) {
             opts.serve = value;
         } else if (std.mem.eql(u8, arg, "--record")) {
@@ -1734,7 +1740,7 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
         return error.UnknownChatTemplate;
     };
     const w = &l.weights.?;
-    var cache = try olmoe.KvCache.init(gpa, w.cfg, opts.ctx);
+    var cache = try olmoe.KvCache.initAs(gpa, w.cfg, opts.ctx, opts.kv_format);
     defer cache.deinit(gpa);
     const model_id = modelId(opts.model);
     var eng: ServeEngine = .{ .gpa = gpa, .w = w, .moe = moe, .cache = &cache };
@@ -2002,18 +2008,18 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     if (opts.kv_offload) |dir|
     {
         const path = try zPrint(&path_buf, "{s}/tf_kv_{d}.bin", .{ dir, c.getpid() });
-        tier = try kv_tier.TierCache.open(gpa, cfg, cap, .{ .max_chunk = opts.chunk, .window = opts.kv_window, .path = path });
-        cache = olmoe.KvCache.tiered(cfg, cap, tier.?.tier());
+        tier = try kv_tier.TierCache.open(gpa, cfg, cap, .{ .max_chunk = opts.chunk, .window = opts.kv_window, .path = path, .format = opts.kv_format });
+        cache = olmoe.KvCache.tiered(cfg, cap, opts.kv_format, tier.?.tier());
     }
     else
     {
-        cache = try olmoe.KvCache.init(gpa, cfg, cap);
+        cache = try olmoe.KvCache.initAs(gpa, cfg, cap, opts.kv_format);
     }
     defer cache.deinit(gpa);
-    const kv_bytes = if (tier) |t| t.memoryBytes() else (cache.k.len + cache.v.len) * @sizeOf(f32);
-    const full_bytes = cfg.layers * 2 * cap * cfg.kvDim() * @sizeOf(f32);
-    std.debug.print("{s}: context {d} tokens + {d} generated, chunks of {d}; KV cache {s}: {d:.2} GB in memory (all of it would be {d:.2} GB), GPU attention {s}\n", .{
-        name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
+    const kv_bytes = if (tier) |t| t.memoryBytes() else cache.k.len + cache.v.len;
+    const full_bytes = cfg.layers * 2 * cap * cache.row;
+    std.debug.print("{s}: context {d} tokens + {d} generated, chunks of {d}; KV cache {s}, {t}, {d} bytes per token: {d:.2} GB in memory (all of it would be {d:.2} GB), GPU attention {s}\n", .{
+        name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", opts.kv_format, cfg.layers * 2 * cache.row, @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
     });
 
     var key: ?prefix_cache.Key = null;
@@ -2178,11 +2184,19 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
             var worst: f32 = 0;
             const a: []align(1) const f32 = std.mem.bytesAsSlice(f32, want[16 + tb ..]);
             const b: []align(1) const f32 = std.mem.bytesAsSlice(f32, record[16 + tb ..]);
-            for (a, b) |x, y|
+            const ta: []align(1) const u32 = std.mem.bytesAsSlice(u32, want[16..][0..tb]);
+            var same: usize = 0;
+            while (same < out_tokens.len and ta[same] == out_tokens[same])
+            {
+                same += 1;
+            }
+            // Logits stay comparable up to and including the first differing token.
+            const vocab = a.len / out_tokens.len;
+            for (a[0 .. @min(same + 1, out_tokens.len) * vocab], b[0 .. @min(same + 1, out_tokens.len) * vocab]) |x, y|
             {
                 worst = @max(worst, @abs(x - y));
             }
-            std.debug.print("{s}: FAIL: generated tokens {s}, logits {s} (by up to {e:.2}) compared with {s}\n", .{ name, if (same_tokens) "match" else "differ", if (same_logits) "match bit for bit" else "differ", worst, path });
+            std.debug.print("{s}: FAIL: generated tokens {s} ({d} of {d} the same before the first difference), logits {s} (by up to {e:.2} through it) compared with {s}\n", .{ name, if (same_tokens) "match" else "differ", same, out_tokens.len, if (same_logits) "match bit for bit" else "differ", worst, path });
             return error.CompareFailed;
         }
         std.debug.print("{s}: PASS: all {d} generated tokens and their logits match {s} bit for bit\n", .{ name, opts.generate, path });
@@ -2204,8 +2218,8 @@ fn fingerprint(buf: []u8, opts: Options) ![]const u8
     const att = if (c.getenv("TF_ATT_KERNEL")) |v| std.mem.sliceTo(v, 0) else "0";
     const mm = if (c.getenv("TF_MM_KERNEL")) |v| std.mem.sliceTo(v, 0) else "0";
     const base = if (std.mem.lastIndexOfScalar(u8, opts.model, '/')) |i| opts.model[i + 1 ..] else opts.model;
-    return std.fmt.bufPrint(buf, "engine {s}; model {s} ({d} bytes); yarn {d}; gpu {}; TF_ATT_KERNEL {s}; TF_MM_KERNEL {s}", .{
-        build_options.engine_build, base, size, yarn_factor, opts.gpu, att, mm,
+    return std.fmt.bufPrint(buf, "engine {s}; model {s} ({d} bytes); yarn {d}; gpu {}; TF_ATT_KERNEL {s}; TF_MM_KERNEL {s}; kv {t}", .{
+        build_options.engine_build, base, size, yarn_factor, opts.gpu, att, mm, opts.kv_format,
     });
 }
 
@@ -2307,13 +2321,13 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         defer gpa.free(trace.topk);
 
         const t0 = mf.nowNs();
-        try olmoe.forward(gpa, w, moe, tokens, logits, trace);
+        try olmoe.forwardAs(gpa, w, moe, tokens, logits, trace, opts.kv_format);
         const ms = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e6;
         if (moe.ahead != null)
         {
             const plain = try gpa.alloc(f32, n * cfg.vocab);
             defer gpa.free(plain);
-            try olmoe.forward(gpa, w, withoutLookahead(moe), tokens, plain, null);
+            try olmoe.forwardAs(gpa, w, withoutLookahead(moe), tokens, plain, null, opts.kv_format);
             same_bits = same_bits and std.mem.eql(u8, std.mem.sliceAsBytes(plain), std.mem.sliceAsBytes(logits));
             compared += plain.len;
         }
@@ -2347,11 +2361,18 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
             name, p, n, ms, lerr, top1, n, hidden_err, routing_same, routing_total, if (pass) "ok" else "FAIL",
         });
     }
-    if (!ok) {
+    if (!ok and opts.kv_format != .f32)
+    {
+        std.debug.print("{s}: {t} KV cache: logits differ by up to {e:.2}; reported, not held to 1e-2\n", .{ name, opts.kv_format, worst_logit });
+    }
+    else if (!ok) {
         std.debug.print("{s}: FAIL: logits differ by up to {e:.2} (target 1e-2) or a top-1 token differs\n", .{ name, worst_logit });
         return error.ForwardMismatch;
     }
-    std.debug.print("{s}: PASS: {s} logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, modelName(cfg), worst_logit });
+    else
+    {
+        std.debug.print("{s}: PASS: {s} logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, modelName(cfg), worst_logit });
+    }
     if (moe.ahead) |la|
     {
         try reportLookahead(la, name, "prompts", same_bits, compared);
@@ -2484,7 +2505,7 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
     {
         const prompt = try goldenTokens(gpa, golden, p);
         defer gpa.free(prompt);
-        var cache = try olmoe.KvCache.init(gpa, cfg, prompt.len + opts.generate);
+        var cache = try olmoe.KvCache.initAs(gpa, cfg, prompt.len + opts.generate, opts.kv_format);
         defer cache.deinit(gpa);
         const sampler_start = sampler;
         const t0 = mf.nowNs();
@@ -2537,6 +2558,11 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
     if (!compared)
     {
         std.debug.print("{s}: generated without a check (sampling, or no generate() output in the golden file)\n", .{name});
+        return;
+    }
+    if (!ok and opts.kv_format != .f32)
+    {
+        std.debug.print("{s}: {t} KV cache: generated tokens or their logits differ from transformers' generate(); reported, not held to it\n", .{ name, opts.kv_format });
         return;
     }
     if (!ok)
@@ -2616,7 +2642,7 @@ fn runSoak(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, gold
         defer gpa.free(t);
         longest = @max(longest, t.len);
     }
-    var cache = try olmoe.KvCache.init(gpa, cfg, longest + n_new);
+    var cache = try olmoe.KvCache.initAs(gpa, cfg, longest + n_new, opts.kv_format);
     defer cache.deinit(gpa);
     const first = try gpa.alloc(u32, prompts * n_new);
     defer gpa.free(first);

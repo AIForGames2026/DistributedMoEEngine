@@ -83,6 +83,7 @@ test {
     _ = @import("safetensors.zig");
     _ = @import("loader.zig");
     _ = @import("olmoe.zig");
+    _ = @import("kv_format.zig");
     _ = @import("expert_cache.zig");
     if (@import("builtin").os.tag == .linux)
     {

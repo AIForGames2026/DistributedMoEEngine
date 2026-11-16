@@ -14,6 +14,7 @@
 const std = @import("std");
 const c = std.c;
 const olmoe = @import("olmoe.zig");
+const pool = @import("pool.zig");
 
 const Reader = opaque {};
 const ReaderOpts = extern struct { queue_depth: c_uint, block_bytes: usize, sqpoll: c_int };
@@ -32,6 +33,8 @@ pub const Options = struct {
     max_chunk: usize,
     /// The cache file; created, and removed on close.
     path: [:0]const u8,
+    /// How each position is stored (TASK-27).
+    format: olmoe.KvFormat = .f32,
 };
 
 pub const Stats = struct {
@@ -47,19 +50,20 @@ pub const Stats = struct {
 pub const TierCache = struct {
     cfg: olmoe.Config,
     opts: Options,
-    tile_floats: usize,
+    /// Bytes per position, and per tile: whole pages, so O_DIRECT can move tiles one at a time.
+    row: usize,
     tile_bytes: usize,
     sink_tiles: usize,
     ring_tiles: usize,
     max_tiles: usize,
     /// Tiles below this (from `sink_tiles` on) are in the file, the same for every layer.
     flushed: usize,
-    sinks_k: []f32,
-    sinks_v: []f32,
-    ring_k: []f32,
-    ring_v: []f32,
+    sinks_k: []u8,
+    sinks_v: []u8,
+    ring_k: []u8,
+    ring_v: []u8,
     /// Two staging buffers, each with keys then values for one layer's middle.
-    stage: []f32,
+    stage: []u8,
     dev_sinks_k: u64 = 0,
     dev_sinks_v: u64 = 0,
     dev_ring_k: u64 = 0,
@@ -89,8 +93,8 @@ pub const TierCache = struct {
             return error.OffloadNeedsGpu;
         }
         const pages = std.heap.page_allocator;
-        const kvd = cfg.kvDim();
-        const tile_floats = tile_positions * kvd;
+        const row = opts.format.rowBytes(cfg.kvDim(), cfg.kv_heads);
+        const tile_bytes = std.mem.alignForward(usize, tile_positions * row, 4096);
         const sink_tiles = (opts.sinks + tile_positions - 1) / tile_positions;
         // The window, one chunk, and partial tiles at both ends.
         const ring_tiles = (opts.window + opts.max_chunk) / tile_positions + 4;
@@ -98,15 +102,15 @@ pub const TierCache = struct {
         const middle = max_tiles -| (sink_tiles + opts.window / tile_positions);
         const self = try gpa.create(TierCache);
         errdefer gpa.destroy(self);
-        const sinks_k = try pages.alloc(f32, cfg.layers * sink_tiles * tile_floats);
+        const sinks_k = try pages.alloc(u8, cfg.layers * sink_tiles * tile_bytes);
         errdefer pages.free(sinks_k);
-        const sinks_v = try pages.alloc(f32, sinks_k.len);
+        const sinks_v = try pages.alloc(u8, sinks_k.len);
         errdefer pages.free(sinks_v);
-        const ring_k = try pages.alloc(f32, cfg.layers * ring_tiles * tile_floats);
+        const ring_k = try pages.alloc(u8, cfg.layers * ring_tiles * tile_bytes);
         errdefer pages.free(ring_k);
-        const ring_v = try pages.alloc(f32, ring_k.len);
+        const ring_v = try pages.alloc(u8, ring_k.len);
         errdefer pages.free(ring_v);
-        const stage = try pages.alloc(f32, 2 * 2 * @max(middle, 1) * tile_floats);
+        const stage = try pages.alloc(u8, 2 * 2 * @max(middle, 1) * tile_bytes);
         errdefer pages.free(stage);
 
         const fd = c.open(opts.path, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true, .DIRECT = true }, @as(c.mode_t, 0o600));
@@ -116,14 +120,14 @@ pub const TierCache = struct {
             return error.OffloadFileFailed;
         }
         errdefer _ = c.close(fd);
-        const file_bytes = cfg.layers * 2 * max_tiles * tile_floats * @sizeOf(f32);
+        const file_bytes = cfg.layers * 2 * max_tiles * tile_bytes;
         if (c.ftruncate(fd, @intCast(file_bytes)) != 0)
         {
             return error.OffloadFileFailed;
         }
         var r: ?*Reader = null;
         const ropts: ReaderOpts = .{ .queue_depth = 32, .block_bytes = 1 << 20, .sqpoll = 0 };
-        const rc = tf_reader_open(&r, opts.path, &ropts, stage.ptr, stage.len * @sizeOf(f32));
+        const rc = tf_reader_open(&r, opts.path, &ropts, stage.ptr, stage.len);
         if (rc != 0)
         {
             std.debug.print("kv offload: tf_reader_open error {d}\n", .{-rc});
@@ -132,8 +136,8 @@ pub const TierCache = struct {
         self.* = .{
             .cfg = cfg,
             .opts = opts,
-            .tile_floats = tile_floats,
-            .tile_bytes = tile_floats * @sizeOf(f32),
+            .row = row,
+            .tile_bytes = tile_bytes,
             .sink_tiles = sink_tiles,
             .ring_tiles = ring_tiles,
             .max_tiles = max_tiles,
@@ -148,11 +152,11 @@ pub const TierCache = struct {
         };
         errdefer tf_reader_close(r.?);
         const reg = olmoe.gpu_register.?;
-        self.dev_sinks_k = reg(std.mem.sliceAsBytes(sinks_k)) orelse return error.GpuMapFailed;
-        self.dev_sinks_v = reg(std.mem.sliceAsBytes(sinks_v)) orelse return error.GpuMapFailed;
-        self.dev_ring_k = reg(std.mem.sliceAsBytes(ring_k)) orelse return error.GpuMapFailed;
-        self.dev_ring_v = reg(std.mem.sliceAsBytes(ring_v)) orelse return error.GpuMapFailed;
-        self.dev_stage = reg(std.mem.sliceAsBytes(stage)) orelse return error.GpuMapFailed;
+        self.dev_sinks_k = reg(sinks_k) orelse return error.GpuMapFailed;
+        self.dev_sinks_v = reg(sinks_v) orelse return error.GpuMapFailed;
+        self.dev_ring_k = reg(ring_k) orelse return error.GpuMapFailed;
+        self.dev_ring_v = reg(ring_v) orelse return error.GpuMapFailed;
+        self.dev_stage = reg(stage) orelse return error.GpuMapFailed;
         self.thread = try std.Thread.spawn(.{}, work, .{self});
         return self;
     }
@@ -163,11 +167,11 @@ pub const TierCache = struct {
         self.thread.join();
         if (olmoe.gpu_unregister) |un|
         {
-            un(std.mem.sliceAsBytes(self.sinks_k));
-            un(std.mem.sliceAsBytes(self.sinks_v));
-            un(std.mem.sliceAsBytes(self.ring_k));
-            un(std.mem.sliceAsBytes(self.ring_v));
-            un(std.mem.sliceAsBytes(self.stage));
+            un(self.sinks_k);
+            un(self.sinks_v);
+            un(self.ring_k);
+            un(self.ring_v);
+            un(self.stage);
         }
         tf_reader_close(self.reader);
         _ = c.close(self.fd);
@@ -184,7 +188,7 @@ pub const TierCache = struct {
     /// Memory the cache holds for positions: sinks, ring, and staging.
     pub fn memoryBytes(self: *const TierCache) usize
     {
-        return (self.sinks_k.len + self.sinks_v.len + self.ring_k.len + self.ring_v.len + self.stage.len) * @sizeOf(f32);
+        return self.sinks_k.len + self.sinks_v.len + self.ring_k.len + self.ring_v.len + self.stage.len;
     }
 
     pub fn tier(self: *TierCache) olmoe.KvCache.Tier
@@ -203,32 +207,50 @@ pub const TierCache = struct {
         return ((@as(u64, layer) * 2 + kind) * self.max_tiles + tile) * self.tile_bytes;
     }
 
-    /// Where tile `ti` of `layer` lives in memory (sinks or ring), as a float offset.
+    /// Where tile `ti` of `layer` lives in memory (sinks or ring), as a byte offset.
     fn memTile(self: *const TierCache, layer: usize, ti: usize) struct { ring: bool, at: usize }
     {
         if (ti < self.sink_tiles)
         {
-            return .{ .ring = false, .at = (layer * self.sink_tiles + ti) * self.tile_floats };
+            return .{ .ring = false, .at = (layer * self.sink_tiles + ti) * self.tile_bytes };
         }
-        return .{ .ring = true, .at = (layer * self.ring_tiles + ti % self.ring_tiles) * self.tile_floats };
+        return .{ .ring = true, .at = (layer * self.ring_tiles + ti % self.ring_tiles) * self.tile_bytes };
     }
 
     fn store(ctx: *anyopaque, layer: usize, pos0: usize, n: usize, k: []const f32, v: []const f32) void
     {
         const self: *TierCache = @ptrCast(@alignCast(ctx));
+        const Rows = struct {
+            t: *TierCache,
+            pos0: usize,
+            layer: usize,
+            k: []const f32,
+            v: []const f32,
+            fn run(w: @This(), first: usize, last: usize) void
+            {
+                w.t.storeRows(w.layer, w.pos0, first, last, w.k, w.v);
+            }
+        };
+        const threads = if (n >= olmoe.parallel_tokens) olmoe.cpuThreads() else 1;
+        pool.parallelFor(threads, n, Rows{ .t = self, .pos0 = pos0, .layer = layer, .k = k, .v = v }, Rows.run);
+    }
+
+    /// Rows `first` to `last` - 1 of a store from `pos0` on.
+    fn storeRows(self: *TierCache, layer: usize, pos0: usize, first: usize, last: usize, k: []const f32, v: []const f32) void
+    {
         const kvd = self.cfg.kvDim();
-        for (0..n) |i|
+        for (first..last) |i|
         {
             const p = pos0 + i;
             const ti = p / tile_positions;
             std.debug.assert(ti >= self.flushed or ti < self.sink_tiles);
             std.debug.assert(ti < self.sink_tiles or ti - self.flushed < self.ring_tiles);
             const m = self.memTile(layer, ti);
-            const row = m.at + (p % tile_positions) * kvd;
+            const at = m.at + (p % tile_positions) * self.row;
             const dk = if (m.ring) self.ring_k else self.sinks_k;
             const dv = if (m.ring) self.ring_v else self.sinks_v;
-            @memcpy(dk[row..][0..kvd], k[i * kvd ..][0..kvd]);
-            @memcpy(dv[row..][0..kvd], v[i * kvd ..][0..kvd]);
+            self.opts.format.encodeRow(k[i * kvd ..][0..kvd], dk[at..][0..self.row], self.cfg.kv_heads);
+            self.opts.format.encodeRow(v[i * kvd ..][0..kvd], dv[at..][0..self.row], self.cfg.kv_heads);
         }
     }
 
@@ -287,19 +309,18 @@ pub const TierCache = struct {
                 self.prefetch(layer + 1);
             }
         }
-        const fb = @sizeOf(f32);
         for (0..(len + tile_positions - 1) / tile_positions) |ti|
         {
             if (ti >= self.sink_tiles and ti < self.flushed)
             {
-                const at = (ti - self.sink_tiles) * self.tile_floats;
-                out_k[ti] = self.dev_stage + (self.stageOffset(buf, 0) + at) * fb;
-                out_v[ti] = self.dev_stage + (self.stageOffset(buf, 1) + at) * fb;
+                const at = (ti - self.sink_tiles) * self.tile_bytes;
+                out_k[ti] = self.dev_stage + self.stageOffset(buf, 0) + at;
+                out_v[ti] = self.dev_stage + self.stageOffset(buf, 1) + at;
                 continue;
             }
             const m = self.memTile(layer, ti);
-            out_k[ti] = (if (m.ring) self.dev_ring_k else self.dev_sinks_k) + m.at * fb;
-            out_v[ti] = (if (m.ring) self.dev_ring_v else self.dev_sinks_v) + m.at * fb;
+            out_k[ti] = (if (m.ring) self.dev_ring_k else self.dev_sinks_k) + m.at;
+            out_v[ti] = (if (m.ring) self.dev_ring_v else self.dev_sinks_v) + m.at;
         }
     }
 
@@ -322,9 +343,9 @@ pub const TierCache = struct {
             for (self.flushed..target) |ti|
             {
                 const m = self.memTile(layer, ti);
-                for ([_][]f32{ self.ring_k, self.ring_v }, 0..) |src, kind|
+                for ([_][]u8{ self.ring_k, self.ring_v }, 0..) |src, kind|
                 {
-                    const bytes = std.mem.sliceAsBytes(src[m.at..][0..self.tile_floats]);
+                    const bytes = src[m.at..][0..self.tile_bytes];
                     var off: usize = 0;
                     while (off < bytes.len)
                     {

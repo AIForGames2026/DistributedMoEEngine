@@ -60,11 +60,13 @@ void tf_gpu_free_host(tf_gpu *g, void *host);
 /* Causal attention for n new tokens at positions pos0 to pos0 + n - 1, head
  * dim 128 (TASK-12). q and out are n x heads x 128 floats in host memory. The
  * cache is read in place through `tiles` tiles of 32 positions: tile i's keys
- * start at device address tiles_k[i], position p of the tile at p * kvd
- * floats after it, KV head h at h * 128 floats; values likewise. `splits`
- * divides the tiles among blocks (1 for prefill, more for long decode). */
+ * start at device address tiles_k[i], one row per position, KV head h at
+ * h * 128 values into the row; values likewise. `fmt` says how a row stores
+ * kvd values (TASK-27, src/kv_format.zig): 0 f32 (kvd * 4 bytes), 1 bfloat16
+ * (kvd * 2), 2 E4M3 then a power-of-two scale byte per KV head, padded to 16.
+ * `splits` divides the tiles among blocks (1 for prefill, more for long decode). */
 int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int kv_heads, int kvd, float scale,
-                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out);
+                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt);
 
 /* One layer's experts for n tokens, k calls each: expert e takes batch rows first[e]
  * on, row i is token src[i], and y[t] adds call j's row inv[t k + j] times w[t k + j]. */

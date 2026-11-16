@@ -470,6 +470,72 @@ extern "C" __global__ void tf_combine(const float *__restrict__ yb, const int *_
 #define ATT_QT 32 // query rows per block: (token, query head) pairs sharing one KV head
 #define ATT_PT 32 // cache positions per tile
 
+// How the cache stores each position (TASK-27); must match src/kv_format.zig.
+// FP8 rows end with one scale byte per KV head, padded to 16.
+#define KV_F32 0
+#define KV_BF16 1
+#define KV_FP8 2
+
+__device__ __forceinline__ int kv_row_bytes(int fmt, int kvd)
+{
+    return fmt == KV_F32 ? kvd * 4 : fmt == KV_BF16 ? kvd * 2 : kvd + ((kvd / ATT_HD + 15) & ~15);
+}
+
+// KV head h of position p in a tile: where its values start, and its scale.
+struct KvHead
+{
+    const unsigned char *p;
+    float scale;
+};
+
+__device__ __forceinline__ KvHead kv_head(unsigned long long tile, int p, int h, int fmt, int kvd)
+{
+    const unsigned char *row = (const unsigned char *)tile + (size_t)p * kv_row_bytes(fmt, kvd);
+    KvHead r;
+    r.p = row + (size_t)h * ATT_HD * (fmt == KV_F32 ? 4 : fmt == KV_BF16 ? 2 : 1);
+    // Scale byte 0 is never written, so a row past the end (zeroed memory) decodes to zeros, not NaN.
+    const unsigned sb = fmt == KV_FP8 ? row[kvd + h] : 0;
+    r.scale = fmt != KV_FP8 ? 1.0f : sb ? __int_as_float((int)(sb - 1) << 23) : 0.0f;
+    return r;
+}
+
+__device__ __forceinline__ float kv_e4m3(unsigned b)
+{
+    const unsigned e = (b >> 3) & 15, m = b & 7;
+    const float mag = e ? __uint_as_float(((e + 120) << 23) | (m << 20)) : (float)m * 0.001953125f;
+    return (b & 0x80) ? -mag : mag;
+}
+
+__device__ __forceinline__ float4 kv_get4(const KvHead &r, int d4, int fmt)
+{
+    if (fmt == KV_F32)
+    {
+        return ((const float4 *)r.p)[d4];
+    }
+    if (fmt == KV_BF16)
+    {
+        const uint2 u = ((const uint2 *)r.p)[d4];
+        return make_float4(__uint_as_float(u.x << 16), __uint_as_float(u.x & 0xffff0000u), __uint_as_float(u.y << 16),
+                           __uint_as_float(u.y & 0xffff0000u));
+    }
+    const unsigned u = ((const unsigned *)r.p)[d4];
+    return make_float4(kv_e4m3(u & 255) * r.scale, kv_e4m3((u >> 8) & 255) * r.scale, kv_e4m3((u >> 16) & 255) * r.scale,
+                       kv_e4m3(u >> 24) * r.scale);
+}
+
+__device__ __forceinline__ float kv_get1(const KvHead &r, int d, int fmt)
+{
+    if (fmt == KV_F32)
+    {
+        return ((const float *)r.p)[d];
+    }
+    if (fmt == KV_BF16)
+    {
+        return __uint_as_float((unsigned)((const unsigned short *)r.p)[d] << 16);
+    }
+    return kv_e4m3(r.p[d]) * r.scale;
+}
+
 // One block takes ATT_QT query rows of KV head blockIdx.y and the tiles of
 // split blockIdx.z, with an online softmax, and writes a partial result
 // (running max, sum, unnormalized output) that tf_attention_merge combines.
@@ -477,7 +543,8 @@ extern "C" __global__ void tf_combine(const float *__restrict__ yb, const int *_
 // tiles_k[i] + p * kvd + h * 128 floats (the same for values). Rows are
 // t * group + g for token t and query head h * group + g; token t sits at
 // position pos0 + t and sees positions 0 to pos0 + t.
-extern "C" __global__ void tf_attention(const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
+template <int fmt>
+__device__ __forceinline__ void att_first(const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
                                         const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m,
                                         float *__restrict__ part_l, float *__restrict__ part_acc, int n, int pos0,
                                         int heads, int kv_heads, int kvd, int tiles_per_split, float scale)
@@ -520,13 +587,11 @@ extern "C" __global__ void tf_attention(const float *__restrict__ q, const unsig
 
     for (int tile = first_tile; tile < end_tile; tile++) {
         __syncthreads();
-        const float *kt = (const float *)tiles_k[tile];
-        const float *vt = (const float *)tiles_v[tile];
         for (int i = tid; i < ATT_PT * ATT_HD; i += blockDim.x) {
             const int p = i / ATT_HD, d = i % ATT_HD;
             const bool ok = tile * ATT_PT + p <= block_limit;
-            ks[p][d] = ok ? kt[(size_t)p * kvd + h * ATT_HD + d] : 0.0f;
-            vs[p][d] = ok ? vt[(size_t)p * kvd + h * ATT_HD + d] : 0.0f;
+            ks[p][d] = ok ? kv_get1(kv_head(tiles_k[tile], p, h, fmt, kvd), d, fmt) : 0.0f;
+            vs[p][d] = ok ? kv_get1(kv_head(tiles_v[tile], p, h, fmt, kvd), d, fmt) : 0.0f;
         }
         __syncthreads();
         float s[4];
@@ -593,7 +658,8 @@ extern "C" __global__ void tf_attention(const float *__restrict__ q, const unsig
 #define ATT_W_LD 132
 #define ATT_W_SMEM ((2 * ATT_W_Q * ATT_W_LD + ATT_W_P * ATT_HD) * 4)
 
-extern "C" __global__ void __launch_bounds__(256) tf_attention_wide(
+template <int fmt>
+__device__ __forceinline__ void att_wide(
     const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
     const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m, float *__restrict__ part_l,
     float *__restrict__ part_acc, int n, int pos0, int heads, int kv_heads, int kvd, int tiles_per_split, float scale)
@@ -654,9 +720,8 @@ extern "C" __global__ void __launch_bounds__(256) tf_attention_wide(
             const int pos = t * ATT_PT + p % ATT_PT;
             float4 kv = make_float4(0.f, 0.f, 0.f, 0.f), vv = kv;
             if (t < end_tile && pos <= block_limit) {
-                const size_t at = (size_t)(p % ATT_PT) * kvd + h * ATT_HD;
-                kv = ((const float4 *)((const float *)tiles_k[t] + at))[d4];
-                vv = ((const float4 *)((const float *)tiles_v[t] + at))[d4];
+                kv = kv_get4(kv_head(tiles_k[t], p % ATT_PT, h, fmt, kvd), d4, fmt);
+                vv = kv_get4(kv_head(tiles_v[t], p % ATT_PT, h, fmt, kvd), d4, fmt);
             }
             *(float4 *)&ks[p][d4 * 4] = kv;
             *(float4 *)&vs[p][d4 * 4] = vv;
@@ -807,7 +872,7 @@ __device__ __forceinline__ void tc_ldm_trans(unsigned b[2], const __half *p)
     asm volatile("ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n" : "=r"(b[0]), "=r"(b[1]) : "r"(a));
 }
 
-template <int TC_Q>
+template <int TC_Q, int fmt>
 __device__ __forceinline__ void tc_attention(const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
                                              const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m,
                                              float *__restrict__ part_l, float *__restrict__ part_acc, int n, int pos0,
@@ -877,17 +942,14 @@ __device__ __forceinline__ void tc_attention(const float *__restrict__ q, const 
     for (int tile = first_tile; tile < end_tile; tile++)
     {
         __syncthreads();
-        const float *kt = (const float *)tiles_k[tile];
-        const float *vt = (const float *)tiles_v[tile];
         for (int i = tid; i < TC_P * (ATT_HD / 4); i += TC_THREADS)
         {
             const int p = i / (ATT_HD / 4), d4 = i % (ATT_HD / 4);
             float4 kv = make_float4(0.0f, 0.0f, 0.0f, 0.0f), vv = kv;
             if (tile * ATT_PT + p <= block_limit)
             {
-                const size_t at = (size_t)p * kvd + h * ATT_HD;
-                kv = ((const float4 *)(kt + at))[d4];
-                vv = ((const float4 *)(vt + at))[d4];
+                kv = kv_get4(kv_head(tiles_k[tile], p, h, fmt, kvd), d4, fmt);
+                vv = kv_get4(kv_head(tiles_v[tile], p, h, fmt, kvd), d4, fmt);
             }
             unsigned a0, a1, b0, b1;
             tc_split(kv.x, kv.y, a0, b0);
@@ -1030,28 +1092,13 @@ __device__ __forceinline__ void tc_attention(const float *__restrict__ q, const 
     }
 }
 
-// 64 query rows per block (4 warps) and 128 (8 warps, half the cache reads).
-extern "C" __global__ void __launch_bounds__(128) tf_attention_tc(
-    const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
-    const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m, float *__restrict__ part_l,
-    float *__restrict__ part_acc, int n, int pos0, int heads, int kv_heads, int kvd, int tiles_per_split, float scale)
-{
-    tc_attention<64>(q, tiles_k, tiles_v, part_m, part_l, part_acc, n, pos0, heads, kv_heads, kvd, tiles_per_split, scale);
-}
 
-extern "C" __global__ void __launch_bounds__(256) tf_attention_tc128(
-    const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
-    const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m, float *__restrict__ part_l,
-    float *__restrict__ part_acc, int n, int pos0, int heads, int kv_heads, int kvd, int tiles_per_split, float scale)
-{
-    tc_attention<128>(q, tiles_k, tiles_v, part_m, part_l, part_acc, n, pos0, heads, kv_heads, kvd, tiles_per_split, scale);
-}
 
 // Attention for at most R query rows per KV head (decode): each lane scores one
 // cached position, and the 4 warps merge in order at the end.
 #define DEC_WARPS 4
 
-template <int R>
+template <int R, int fmt>
 __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
                                               const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m,
                                               float *__restrict__ part_l, float *__restrict__ part_acc, int n, int pos0,
@@ -1095,8 +1142,6 @@ __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const
 
     for (int tile = first_tile + warp; tile < end_tile; tile += DEC_WARPS)
     {
-        const float *kt = (const float *)tiles_k[tile] + h * ATT_HD;
-        const float *vt = (const float *)tiles_v[tile] + h * ATT_HD;
         const int pos = tile * ATT_PT + lane;
         float s[R];
 #pragma unroll
@@ -1104,11 +1149,11 @@ __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const
         {
             s[r] = 0.0f;
         }
-        const float4 *kp = (const float4 *)(kt + (size_t)lane * kvd);
+        const KvHead kr = kv_head(tiles_k[tile], lane, h, fmt, kvd);
 #pragma unroll 4
         for (int d4 = 0; d4 < ATT_HD / 4; d4++)
         {
-            const float4 kv = kp[d4];
+            const float4 kv = kv_get4(kr, d4, fmt);
 #pragma unroll
             for (int r = 0; r < R; r++)
             {
@@ -1141,10 +1186,12 @@ __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const
             acc[r][2] *= alpha;
             acc[r][3] *= alpha;
         }
+        // Rows past the last position may hold anything; a zero weight times an infinity there would be NaN.
+        const int valid = min(ATT_PT, block_limit - tile * ATT_PT + 1);
 #pragma unroll 4
-        for (int p = 0; p < ATT_PT; p++)
+        for (int p = 0; p < valid; p++)
         {
-            const float4 vv = ((const float4 *)(vt + (size_t)p * kvd))[lane];
+            const float4 vv = kv_get4(kv_head(tiles_v[tile], p, h, fmt, kvd), lane, fmt);
 #pragma unroll
             for (int r = 0; r < R; r++)
             {
@@ -1198,21 +1245,44 @@ __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const
     }
 }
 
-extern "C" __global__ void __launch_bounds__(128) tf_attention_decode8(
-    const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
-    const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m, float *__restrict__ part_l,
-    float *__restrict__ part_acc, int n, int pos0, int heads, int kv_heads, int kvd, int tiles_per_split, float scale)
-{
-    dec_attention<8>(q, tiles_k, tiles_v, part_m, part_l, part_acc, n, pos0, heads, kv_heads, kvd, tiles_per_split, scale);
-}
 
-extern "C" __global__ void __launch_bounds__(128) tf_attention_decode16(
-    const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,
-    const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m, float *__restrict__ part_l,
-    float *__restrict__ part_acc, int n, int pos0, int heads, int kv_heads, int kvd, int tiles_per_split, float scale)
-{
-    dec_attention<16>(q, tiles_k, tiles_v, part_m, part_l, part_acc, n, pos0, heads, kv_heads, kvd, tiles_per_split, scale);
-}
+
+// Entry points, one set per KV cache format, so each is compiled with its loads fixed
+// (the f32 ones keep their names). Must match tf_gpu.c.
+#define ATT_ARGS                                                                                                        \
+    const float *__restrict__ q, const unsigned long long *__restrict__ tiles_k,                                         \
+        const unsigned long long *__restrict__ tiles_v, float *__restrict__ part_m, float *__restrict__ part_l,          \
+        float *__restrict__ part_acc, int n, int pos0, int heads, int kv_heads, int kvd, int tiles_per_split, float scale
+#define ATT_PASS q, tiles_k, tiles_v, part_m, part_l, part_acc, n, pos0, heads, kv_heads, kvd, tiles_per_split, scale
+#define ATT_KERNELS(F, SUFFIX)                                                                                          \
+    extern "C" __global__ void tf_attention##SUFFIX(ATT_ARGS)                                                           \
+    {                                                                                                                   \
+        att_first<F>(ATT_PASS);                                                                                         \
+    }                                                                                                                   \
+    extern "C" __global__ void __launch_bounds__(256) tf_attention_wide##SUFFIX(ATT_ARGS)                               \
+    {                                                                                                                   \
+        att_wide<F>(ATT_PASS);                                                                                          \
+    }                                                                                                                   \
+    extern "C" __global__ void __launch_bounds__(128) tf_attention_tc##SUFFIX(ATT_ARGS)                                 \
+    {                                                                                                                   \
+        tc_attention<64, F>(ATT_PASS);                                                                                  \
+    }                                                                                                                   \
+    extern "C" __global__ void __launch_bounds__(256) tf_attention_tc128##SUFFIX(ATT_ARGS)                              \
+    {                                                                                                                   \
+        tc_attention<128, F>(ATT_PASS);                                                                                 \
+    }                                                                                                                   \
+    extern "C" __global__ void __launch_bounds__(128) tf_attention_decode8##SUFFIX(ATT_ARGS)                            \
+    {                                                                                                                   \
+        dec_attention<8, F>(ATT_PASS);                                                                                  \
+    }                                                                                                                   \
+    extern "C" __global__ void __launch_bounds__(128) tf_attention_decode16##SUFFIX(ATT_ARGS)                           \
+    {                                                                                                                   \
+        dec_attention<16, F>(ATT_PASS);                                                                                 \
+    }
+
+ATT_KERNELS(KV_F32, )
+ATT_KERNELS(KV_BF16, _bf16)
+ATT_KERNELS(KV_FP8, _fp8)
 
 // Q8_0 matmul on tensor cores for many inputs. Weights go in as exact f16 integers and
 // inputs, scaled by a power of 2 per row (tf_rowscale), as high and low f16 parts.

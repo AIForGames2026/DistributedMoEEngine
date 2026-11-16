@@ -1,0 +1,14 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.87 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: context 12000 tokens + 8 generated, chunks of 2048; KV cache all in memory, bf16, 98304 bytes per token: 1.18 GB in memory (all of it would be 1.18 GB), GPU attention on
+local: prefix cache: no saved prefix shares a whole chunk with this prompt
+local: prefill 2048 of 12000 positions, 1.7 s
+local: prefill 4096 of 12000 positions, 3.5 s
+local: prefill 6144 of 12000 positions, 5.5 s
+local: prefill 8192 of 12000 positions, 7.6 s
+local: prefill 10240 of 12000 positions, 10.0 s
+local: prefill time: projections 1.4 s, QK norm and rope 0.6 s, attention 3.3 s, output 2.1 s, router 0.5 s, experts 4.1 s, LM head 0.0 s
+local: prefix cache: saved 12000 positions to 1ca4e2b2419de55f.tfpx: 1.18 GB in 0.20 s (5.79 GB/s)
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.1 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 12.238 s (981 tokens/s prefill); decode 0.033 s per token (30.05 tokens/s) over 7 steps from position 12000; resident memory 33834 MB
+local: heap: 94 allocations, 94 frees, peak 1458.9 MB, 0 bytes still allocated at exit (balanced)

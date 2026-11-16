@@ -1,0 +1,42 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.89 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory, bf16, 98304 bytes per token: 12.88 GB in memory (all of it would be 12.88 GB), GPU attention on
+local: prefill 14336 of 131040 positions, 15.2 s
+local: prefill 26624 of 131040 positions, 35.7 s
+local: prefill 40960 of 131040 positions, 68.9 s
+local: prefill 53248 of 131040 positions, 105.2 s
+local: prefill 65536 of 131040 positions, 148.5 s
+local: prefill 79872 of 131040 positions, 207.7 s
+local: prefill 92160 of 131040 positions, 266.2 s
+local: prefill 106496 of 131040 positions, 343.1 s
+local: prefill 118784 of 131040 positions, 416.6 s
+local: prefill time: projections 15.0 s, QK norm and rope 6.7 s, attention 399.2 s, output 22.9 s, router 5.0 s, experts 44.6 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 2.5 s, output 0.1 s, router 0.1 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 497.134 s (264 tokens/s prefill); decode 0.104 s per token (9.63 tokens/s) over 31 steps from position 131040; resident memory 45539 MB
+local: FAIL: generated tokens differ (0 of 32 the same before the first difference), logits differ (by up to 7.34e-1 through it) compared with /tmp/lh_kv128.bin
+local: heap: 366 allocations, 366 frees, peak 13161.5 MB, 0 bytes still allocated at exit (balanced)
+error: CompareFailed
+Command exited with non-zero status 1
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens models/qwen3-30b-a3b/repo.tokens --chunk 2048 --gpu --yarn 4 --context 131040 --generate 32 --kv-format bf16 --compare /tmp/lh_kv128.bin"
+	User time (seconds): 607.34
+	System time (seconds): 17.53
+	Percent of CPU this job got: 122%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 8:32.02
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 44592464
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 74002957
+	Voluntary context switches: 482832
+	Involuntary context switches: 7942
+	Swaps: 0
+	File system inputs: 63433520
+	File system outputs: 80
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

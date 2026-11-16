@@ -48,7 +48,8 @@ fn roundUp(x: u64) u64
 /// Where each part of a file of `positions` positions starts.
 const Layout = struct {
     positions: u64,
-    kvd: u64,
+    /// Bytes per position, keys or values alone.
+    row: u64,
     vocab: u64,
 
     fn tokens(_: Layout) u64
@@ -63,7 +64,7 @@ const Layout = struct {
 
     fn segmentBytes(self: Layout) u64
     {
-        return roundUp(self.positions * self.kvd * 4);
+        return roundUp(self.positions * self.row);
     }
 
     /// Keys (kind 0) or values (kind 1) of `layer`.
@@ -226,13 +227,13 @@ pub fn restore(key: Key, m: Match, cache: *olmoe.KvCache, logits: []f32) !Transf
     const t0 = nowNs();
     var path_buf: [600]u8 = undefined;
     const path = try zPath(&path_buf, key.dir, m.fileName());
-    const lay: Layout = .{ .positions = m.saved, .kvd = cache.d, .vocab = key.cfg.vocab };
+    const lay: Layout = .{ .positions = m.saved, .row = cache.row, .vocab = key.cfg.vocab };
     const ropts: ReaderOpts = .{ .queue_depth = 32, .block_bytes = 1 << 20, .sqpoll = 0 };
     var readers: [2]*Reader = undefined;
-    for ([_][]f32{ cache.k, cache.v }, 0..) |region, kind|
+    for ([_][]u8{ cache.k, cache.v }, 0..) |region, kind|
     {
         var r: ?*Reader = null;
-        const rc = tf_reader_open(&r, path, &ropts, region.ptr, region.len * @sizeOf(f32));
+        const rc = tf_reader_open(&r, path, &ropts, region.ptr, region.len);
         if (rc != 0)
         {
             if (kind == 1)
@@ -248,12 +249,12 @@ pub fn restore(key: Key, m: Match, cache: *olmoe.KvCache, logits: []f32) !Transf
     {
         tf_reader_close(r);
     };
-    const len = roundUp(@as(u64, m.positions) * cache.d * 4);
+    const len = roundUp(@as(u64, m.positions) * cache.row);
     for (0..key.cfg.layers) |layer|
     {
         for (0..2) |kind|
         {
-            const dst = if (kind == 0) cache.keys(layer) else cache.values(layer);
+            const dst = cache.pages(layer, kind);
             const rc = tf_reader_read(readers[kind], lay.segment(layer, kind), @intCast(len), dst.ptr, null, null, 0);
             if (rc != 0)
             {
@@ -304,7 +305,7 @@ pub fn save(key: Key, tokens: []const u32, cache: *const olmoe.KvCache, logits: 
     const name = try std.fmt.bufPrint(&out.name, "{x:0>16}{s}", .{ hasher.final(), suffix });
     out.name_len = name.len;
 
-    const lay: Layout = .{ .positions = tokens.len, .kvd = cache.d, .vocab = key.cfg.vocab };
+    const lay: Layout = .{ .positions = tokens.len, .row = cache.row, .vocab = key.cfg.vocab };
     const pages = std.heap.page_allocator;
     const head = try pages.alloc(u8, lay.segment(0, 0));
     defer pages.free(head);
@@ -342,8 +343,8 @@ pub fn save(key: Key, tokens: []const u32, cache: *const olmoe.KvCache, logits: 
     const len = lay.segmentBytes();
     for (0..key.cfg.layers) |layer|
     {
-        try pwriteAll(fd, std.mem.sliceAsBytes(cache.keys(layer))[0..len], lay.segment(layer, 0));
-        try pwriteAll(fd, std.mem.sliceAsBytes(cache.values(layer))[0..len], lay.segment(layer, 1));
+        try pwriteAll(fd, cache.pages(layer, 0)[0..len], lay.segment(layer, 0));
+        try pwriteAll(fd, cache.pages(layer, 1)[0..len], lay.segment(layer, 1));
     }
     if (c.fsync(fd) != 0)
     {
@@ -385,7 +386,7 @@ test "a prompt takes whole chunks of a saved prefix, or all of an identical one"
 }
 
 test "file layout keeps every part on page boundaries" {
-    const lay: Layout = .{ .positions = 131041, .kvd = 512, .vocab = 151936 };
+    const lay: Layout = .{ .positions = 131041, .row = 512 * 4, .vocab = 151936 };
     try std.testing.expectEqual(@as(u64, 0), lay.logits() % page);
     try std.testing.expectEqual(@as(u64, 0), lay.segment(3, 1) % page);
     try std.testing.expect(lay.segmentBytes() >= 131041 * 512 * 4);

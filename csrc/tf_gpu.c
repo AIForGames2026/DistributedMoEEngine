@@ -28,11 +28,11 @@ struct tf_gpu {
     CUcontext ctx;
     CUmodule mod;
     CUfunction q8_0_matmul;
-    CUfunction attention;
     CUfunction attention_merge;
-    CUfunction attention_wide;
     CUfunction silu_mul;
-    CUfunction mm_q8, mm_f32, mv_q8, mv_gateup, gather, combine, attention_tc, attention_tc128, attention_dec8, attention_dec16;
+    CUfunction mm_q8, mm_f32, mv_q8, mv_gateup, gather, combine;
+    /* Attention kernels, one of each per KV cache format (TASK-27): f32, bf16, fp8. */
+    CUfunction attention[3], attention_wide[3], attention_tc[3], attention_tc128[3], attention_dec8[3], attention_dec16[3];
     CUfunction tm_q8, rowscale, silu_rows;
     /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
@@ -100,9 +100,7 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
     cuDeviceGetAttribute(&g->info.integrated, CU_DEVICE_ATTRIBUTE_INTEGRATED, g->dev);
     if ((r = cuModuleLoadData(&g->mod, fatbin)) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->q8_0_matmul, g->mod, "tf_q8_0_matmul")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->attention, g->mod, "tf_attention")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->attention_merge, g->mod, "tf_attention_merge")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->attention_wide, g->mod, "tf_attention_wide")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->silu_mul, g->mod, "tf_silu_mul")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->mm_q8, g->mod, "tf_mm_q8")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->mm_f32, g->mod, "tf_mm_f32")) != CUDA_SUCCESS ||
@@ -110,21 +108,39 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
         (r = cuModuleGetFunction(&g->mv_gateup, g->mod, "tf_mv_q8_gateup")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->gather, g->mod, "tf_gather")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->combine, g->mod, "tf_combine")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->attention_tc, g->mod, "tf_attention_tc")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->attention_tc128, g->mod, "tf_attention_tc128")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->attention_dec8, g->mod, "tf_attention_decode8")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->attention_dec16, g->mod, "tf_attention_decode16")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->tm_q8, g->mod, "tf_tm_q8")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->rowscale, g->mod, "tf_rowscale")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->silu_rows, g->mod, "tf_silu_rows")) != CUDA_SUCCESS) {
         tf_gpu_close(g);
         return fail(r, "loading kernels", err, err_len);
     }
+    static const char *const suffix[3] = {"", "_bf16", "_fp8"};
+    static const char *const base[6] = {"tf_attention", "tf_attention_wide", "tf_attention_tc", "tf_attention_tc128",
+                                        "tf_attention_decode8", "tf_attention_decode16"};
+    for (int f = 0; f < 3; f++)
+    {
+        CUfunction *dst[6] = {&g->attention[f], &g->attention_wide[f], &g->attention_tc[f], &g->attention_tc128[f],
+                              &g->attention_dec8[f], &g->attention_dec16[f]};
+        for (int i = 0; i < 6; i++)
+        {
+            char name[64];
+            snprintf(name, sizeof name, "%s%s", base[i], suffix[f]);
+            if ((r = cuModuleGetFunction(dst[i], g->mod, name)) != CUDA_SUCCESS)
+            {
+                tf_gpu_close(g);
+                return fail(r, "loading attention kernels", err, err_len);
+            }
+        }
+    }
     /* The wide kernel needs more shared memory than the default 48 KB. */
     int optin = 0;
     cuDeviceGetAttribute(&optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, g->dev);
-    g->wide_ok = optin >= ATT_W_SMEM && cuFuncSetAttribute(g->attention_wide, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
-                                                          ATT_W_SMEM) == CUDA_SUCCESS;
+    g->wide_ok = optin >= ATT_W_SMEM;
+    for (int f = 0; f < 3; f++)
+    {
+        g->wide_ok = g->wide_ok && cuFuncSetAttribute(g->attention_wide[f], CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                                                      ATT_W_SMEM) == CUDA_SUCCESS;
+    }
     const char *k = getenv("TF_ATT_KERNEL");
     g->att_kernel = k ? atoi(k) : 0;
     const char *mk = getenv("TF_MM_KERNEL");
@@ -562,9 +578,9 @@ void tf_gpu_unregister(tf_gpu *g, void *host)
 }
 
 int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int kv_heads, int kvd, float scale,
-                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out)
+                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt)
 {
-    if (n <= 0 || heads <= 0 || kv_heads <= 0 || heads % kv_heads || tiles <= 0 || splits <= 0)
+    if (n <= 0 || heads <= 0 || kv_heads <= 0 || heads % kv_heads || tiles <= 0 || splits <= 0 || fmt < 0 || fmt > 2)
         return -1;
     const int rows = n * (heads / kv_heads);
     const size_t qb = (size_t)n * heads * ATT_HD * sizeof(float);
@@ -605,18 +621,18 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
     void *args[] = {&g->aq, &tk, &tv, &g->pm, &g->pl, &g->pacc, &n, &pos0, &heads, &kv_heads, &kvd, &per_split, &scale};
     if (dec)
     {
-        r = cuLaunchKernel(rows <= 8 ? g->attention_dec8 : g->attention_dec16, 1, (unsigned)kv_heads, (unsigned)splits, 128,
+        r = cuLaunchKernel(rows <= 8 ? g->attention_dec8[fmt] : g->attention_dec16[fmt], 1, (unsigned)kv_heads, (unsigned)splits, 128,
                            1, 1, 0, 0, args, NULL);
     }
     else if (tc)
     {
-        r = cuLaunchKernel(which == 4 ? g->attention_tc128 : g->attention_tc, (unsigned)((rows + tc_rows - 1) / tc_rows),
+        r = cuLaunchKernel(which == 4 ? g->attention_tc128[fmt] : g->attention_tc[fmt], (unsigned)((rows + tc_rows - 1) / tc_rows),
                            (unsigned)kv_heads, (unsigned)splits, 2 * tc_rows, 1, 1, 0, 0, args, NULL);
     }
     else
     {
         const int qt = wide ? ATT_W_Q : ATT_QT;
-        r = cuLaunchKernel(wide ? g->attention_wide : g->attention, (unsigned)((rows + qt - 1) / qt), (unsigned)kv_heads,
+        r = cuLaunchKernel(wide ? g->attention_wide[fmt] : g->attention[fmt], (unsigned)((rows + qt - 1) / qt), (unsigned)kv_heads,
                            (unsigned)splits, 256, 1, 1, wide ? ATT_W_SMEM : 0, 0, args, NULL);
     }
     if (r != CUDA_SUCCESS)

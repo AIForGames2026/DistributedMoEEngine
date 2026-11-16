@@ -1,0 +1,25 @@
+== f32
+local: generate prompt 0: 32 tokens in 5.89 s (5.4 tokens/s, prompt included)
+local:   same as transformers' generate(): 32/32 tokens, logits max err 4.20e-5 ok
+local: generate prompt 1: 32 tokens in 5.87 s (5.5 tokens/s, prompt included)
+local:   same as transformers' generate(): 32/32 tokens, logits max err 4.01e-5 ok
+local: generate prompt 2: 32 tokens in 5.98 s (5.4 tokens/s, prompt included)
+local:   same as transformers' generate(): 32/32 tokens, logits max err 3.43e-5 ok
+== bf16
+local: generate prompt 0: 32 tokens in 5.87 s (5.4 tokens/s, prompt included)
+local:   same as transformers' generate(): 32/32 tokens, logits max err 8.17e-1 FAIL
+local: generate prompt 1: 32 tokens in 5.88 s (5.4 tokens/s, prompt included)
+local:   same as transformers' generate(): 32/32 tokens, logits max err 1.31e0 FAIL
+local: generate prompt 2: 32 tokens in 6.02 s (5.3 tokens/s, prompt included)
+local:   same as transformers' generate(): 18/32 tokens, logits max err 5.31e-1 FAIL
+== fp8
+local: generate prompt 0: 32 tokens in 5.88 s (5.4 tokens/s, prompt included)
+local:   same as transformers' generate(): 32/32 tokens, logits max err 1.69e0 FAIL
+local: generate prompt 1: 32 tokens in 5.91 s (5.4 tokens/s, prompt included)
+local:   same as transformers' generate(): 29/32 tokens, logits max err 1.57e0 FAIL
+local: generate prompt 2: 32 tokens in 6.02 s (5.3 tokens/s, prompt included)
+local:   same as transformers' generate(): 0/32 tokens, logits max err 1.28e0 FAIL
+20
+Model name:                           12th Gen Intel(R) Core(TM) i7-12700K
+
+[exited with code 0]

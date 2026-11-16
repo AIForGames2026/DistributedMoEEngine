@@ -20,6 +20,8 @@ const quant = @import("quant.zig");
 const gguf = @import("gguf.zig");
 const loader = @import("loader.zig");
 const pool = @import("pool.zig");
+const kv_format = @import("kv_format.zig");
+pub const KvFormat = kv_format.KvFormat;
 
 /// The two model families the engine runs.
 pub const Arch = enum {
@@ -199,6 +201,8 @@ pub const AttentionJob = struct {
     tiles_v: []const u64,
     splits: usize,
     out: []f32,
+    /// How the tiles store each position (TASK-27).
+    format: KvFormat = .f32,
 
     pub const tile_positions = 32;
     pub const head_dim = 128;
@@ -864,12 +868,18 @@ pub fn topK(p: []const f32, k: usize, idx: []u32, val: []f32) void {
 
 /// Keys (after QK norm and rotary) and values for every position seen so
 /// far, per layer, so each new token attends to them without recomputing.
+/// Each position is one row of `row` bytes in `format` (TASK-27).
 pub const KvCache = struct {
     cap: usize,
     d: usize,
+    kv_heads: usize,
+    format: KvFormat = .f32,
+    row: usize,
+    /// Bytes from one layer's first position to the next layer's: whole pages, for O_DIRECT.
+    layer_bytes: usize = 0,
     len: usize = 0,
-    k: []f32,
-    v: []f32,
+    k: []u8,
+    v: []u8,
     /// Device addresses of `k` and `v` when a GPU reads them in place, else 0.
     dev_k: u64 = 0,
     dev_v: u64 = 0,
@@ -889,38 +899,46 @@ pub const KvCache = struct {
         end: *const fn (ctx: *anyopaque, len: usize) anyerror!void,
     };
 
-    /// A cache that keeps its positions through `tier`, with room for `cap`.
-    pub fn tiered(cfg: Config, cap: usize, tier: Tier) KvCache
+    /// A cache that keeps its positions through `tier`, in `format`, with room for `cap`.
+    pub fn tiered(cfg: Config, cap: usize, format: KvFormat, tier: Tier) KvCache
     {
-        return .{ .cap = cap, .d = cfg.kvDim(), .k = &.{}, .v = &.{}, .tier = tier };
+        return .{ .cap = cap, .d = cfg.kvDim(), .kv_heads = cfg.kv_heads, .format = format, .row = format.rowBytes(cfg.kvDim(), cfg.kv_heads), .k = &.{}, .v = &.{}, .tier = tier };
     }
 
-    /// Room for `cap` positions in every layer, from `big_allocator`.
-    /// Page-aligned, so a GPU can map it; `a` is unused and kept for callers.
+    /// Room for `cap` positions in every layer, in f32.
     pub fn init(a: std.mem.Allocator, cfg: Config, cap: usize) !KvCache
+    {
+        return initAs(a, cfg, cap, .f32);
+    }
+
+    /// Room for `cap` positions in every layer, in `format`, from `big_allocator`.
+    /// Page-aligned, so a GPU can map it; `a` is unused and kept for callers.
+    pub fn initAs(a: std.mem.Allocator, cfg: Config, cap: usize, format: KvFormat) !KvCache
     {
         _ = a;
         const d = cfg.kvDim();
+        const row = format.rowBytes(d, cfg.kv_heads);
         // Positions rounded up to whole tiles, so the GPU never reads past the end.
         const room = (cap + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions * AttentionJob.tile_positions;
-        const k = try allocPages(cfg.layers * room * d);
+        const layer_bytes = std.mem.alignForward(usize, room * row, std.heap.page_size_max);
+        const k = try allocPages(cfg.layers * layer_bytes);
         errdefer freePages(k);
-        const v = try allocPages(cfg.layers * room * d);
-        var self: KvCache = .{ .cap = room, .d = d, .k = k, .v = v };
+        const v = try allocPages(cfg.layers * layer_bytes);
+        var self: KvCache = .{ .cap = room, .d = d, .kv_heads = cfg.kv_heads, .format = format, .row = row, .layer_bytes = layer_bytes, .k = k, .v = v };
         if (gpu_register) |reg|
         {
             if (cfg.head_dim == AttentionJob.head_dim)
             {
-                if (reg(std.mem.sliceAsBytes(k))) |dk|
+                if (reg(k)) |dk|
                 {
-                    if (reg(std.mem.sliceAsBytes(v))) |dv|
+                    if (reg(v)) |dv|
                     {
                         self.dev_k = dk;
                         self.dev_v = dv;
                     }
                     else
                     {
-                        gpu_unregister.?(std.mem.sliceAsBytes(k));
+                        gpu_unregister.?(k);
                     }
                 }
             }
@@ -940,8 +958,8 @@ pub const KvCache = struct {
         {
             if (gpu_unregister) |un|
             {
-                un(std.mem.sliceAsBytes(self.k));
-                un(std.mem.sliceAsBytes(self.v));
+                un(self.k);
+                un(self.v);
             }
         }
         freePages(self.k);
@@ -951,26 +969,25 @@ pub const KvCache = struct {
 
     const page_align = std.mem.Alignment.fromByteUnits(std.heap.page_size_max);
 
-    fn allocPages(n: usize) ![]f32
+    fn allocPages(n: usize) ![]u8
     {
-        const bytes = big_allocator.rawAlloc(n * @sizeOf(f32), page_align, @returnAddress()) orelse return error.OutOfMemory;
-        return @as([*]f32, @ptrCast(@alignCast(bytes)))[0..n];
+        const bytes = big_allocator.rawAlloc(n, page_align, @returnAddress()) orelse return error.OutOfMemory;
+        return bytes[0..n];
     }
 
-    fn freePages(s: []f32) void
+    fn freePages(s: []u8) void
     {
-        big_allocator.rawFree(std.mem.sliceAsBytes(s), page_align, @returnAddress());
+        big_allocator.rawFree(s, page_align, @returnAddress());
     }
 
     /// Device addresses of each tile of `layer` covering positions 0 to `len` - 1.
     pub fn tiles(self: KvCache, layer: usize, len: usize, out_k: []u64, out_v: []u64) void
     {
-        const tile_bytes = AttentionJob.tile_positions * self.d * @sizeOf(f32);
-        const layer_bytes = self.cap * self.d * @sizeOf(f32);
+        const tile_bytes = AttentionJob.tile_positions * self.row;
         for (0..(len + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions) |i|
         {
-            out_k[i] = self.dev_k + layer * layer_bytes + i * tile_bytes;
-            out_v[i] = self.dev_v + layer * layer_bytes + i * tile_bytes;
+            out_k[i] = self.dev_k + layer * self.layer_bytes + i * tile_bytes;
+            out_v[i] = self.dev_v + layer * self.layer_bytes + i * tile_bytes;
         }
     }
 
@@ -981,18 +998,63 @@ pub const KvCache = struct {
         {
             return t.store(t.ctx, layer, pos0, n, k, v);
         }
-        @memcpy(self.keys(layer)[pos0 * self.d ..][0 .. n * self.d], k[0 .. n * self.d]);
-        @memcpy(self.values(layer)[pos0 * self.d ..][0 .. n * self.d], v[0 .. n * self.d]);
+        const dk = self.keys(layer)[pos0 * self.row ..];
+        const dv = self.values(layer)[pos0 * self.row ..];
+        if (self.format == .f32)
+        {
+            @memcpy(dk[0 .. n * self.row], std.mem.sliceAsBytes(k[0 .. n * self.d]));
+            @memcpy(dv[0 .. n * self.row], std.mem.sliceAsBytes(v[0 .. n * self.d]));
+            return;
+        }
+        const Rows = struct {
+            c: *const KvCache,
+            k: []const f32,
+            v: []const f32,
+            dk: []u8,
+            dv: []u8,
+            fn run(w: @This(), first: usize, end: usize) void
+            {
+                const c = w.c;
+                for (first..end) |i|
+                {
+                    c.format.encodeRow(w.k[i * c.d ..][0..c.d], w.dk[i * c.row ..][0..c.row], c.kv_heads);
+                    c.format.encodeRow(w.v[i * c.d ..][0..c.d], w.dv[i * c.row ..][0..c.row], c.kv_heads);
+                }
+            }
+        };
+        // Rows are encoded independently, so a long prefill chunk spreads them over threads.
+        const threads = if (n >= parallel_tokens) cpuThreads() else 1;
+        pool.parallelFor(threads, n, Rows{ .c = self, .k = k, .v = v, .dk = dk, .dv = dv }, Rows.run);
     }
 
-    pub fn keys(self: KvCache, layer: usize) []f32
+    /// One layer's keys, `row` bytes per position.
+    pub fn keys(self: KvCache, layer: usize) []u8
     {
-        return self.k[layer * self.cap * self.d ..][0 .. self.cap * self.d];
+        return self.k[layer * self.layer_bytes ..][0 .. self.cap * self.row];
     }
 
-    pub fn values(self: KvCache, layer: usize) []f32
+    pub fn values(self: KvCache, layer: usize) []u8
     {
-        return self.v[layer * self.cap * self.d ..][0 .. self.cap * self.d];
+        return self.v[layer * self.layer_bytes ..][0 .. self.cap * self.row];
+    }
+
+    /// One layer's keys (kind 0) or values (1) with the padding after them: page-aligned and whole pages.
+    pub fn pages(self: KvCache, layer: usize, kind: usize) []u8
+    {
+        return (if (kind == 0) self.k else self.v)[layer * self.layer_bytes ..][0..self.layer_bytes];
+    }
+
+    /// One layer's keys as floats, for an f32 cache.
+    pub fn keysF32(self: KvCache, layer: usize) []f32
+    {
+        std.debug.assert(self.format == .f32);
+        return @alignCast(std.mem.bytesAsSlice(f32, self.keys(layer)));
+    }
+
+    pub fn valuesF32(self: KvCache, layer: usize) []f32
+    {
+        std.debug.assert(self.format == .f32);
+        return @alignCast(std.mem.bytesAsSlice(f32, self.values(layer)));
     }
 };
 
@@ -1000,7 +1062,13 @@ pub const KvCache = struct {
 /// position's logits (n x vocab).
 pub fn forward(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, tokens: []const u32, logits: []f32, trace: ?Trace) !void
 {
-    var cache = try KvCache.init(gpa, w.cfg, tokens.len);
+    return forwardAs(gpa, w, moe, tokens, logits, trace, .f32);
+}
+
+/// `forward` with the KV cache in `format` (TASK-27).
+pub fn forwardAs(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, tokens: []const u32, logits: []f32, trace: ?Trace, format: KvFormat) !void
+{
+    var cache = try KvCache.initAs(gpa, w.cfg, tokens.len, format);
     defer cache.deinit(gpa);
     try step(gpa, w, moe, &cache, tokens, logits, trace);
 }
@@ -1050,6 +1118,8 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const tiles_k = try a.alloc(u64, tile_count);
     const tiles_v = try a.alloc(u64, tile_count);
     const scratch = try a.alloc(f32, @max(@max(d, qd), cfg.d_ff));
+    const kh = try a.alloc(f32, cfg.head_dim);
+    const vh = try a.alloc(f32, cfg.head_dim);
     const probs = try a.alloc(f32, n * cfg.experts);
     const idx = try a.alloc(u32, n * k);
     const wts = try a.alloc(f32, n * k);
@@ -1107,8 +1177,6 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         pool.parallelFor(threads, n, TokenLoops.QkRope{ .cfg = cfg, .rope = &rope, .q = q, .k = kn, .q_norm = l.q_norm, .k_norm = l.k_norm, .cs = rope_cs, .sn = rope_sn }, TokenLoops.QkRope.run);
         cache.store(li, pos0, n, kn, vn);
         Profile.lap(&profile.qk_rope, &pt);
-        const kc = cache.k;
-        const vc = cache.v;
         var on_gpu = false;
         if (gpu_attention != null and (cache.dev_k != 0 or cache.tier != null))
         {
@@ -1133,14 +1201,17 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                 .tiles_v = tiles_v[0..count],
                 .splits = AttentionJob.splitsFor(n, cfg.heads, cfg.kv_heads, count),
                 .out = att,
+                .format = cache.format,
             });
         }
         if (!on_gpu and cache.tier != null)
         {
             return error.OffloadNeedsGpu;
         }
-        const layer_k = if (on_gpu) kc else cache.keys(li);
-        const layer_v = if (on_gpu) vc else cache.values(li);
+        // A compact cache decodes each position's head into `kh` and `vh` as it is read.
+        const plain = cache.format == .f32;
+        const layer_k = if (on_gpu or !plain) &[_]f32{} else cache.keysF32(li);
+        const layer_v = if (on_gpu or !plain) &[_]f32{} else cache.valuesF32(li);
         for (0..n) |t|
         {
             if (on_gpu)
@@ -1156,7 +1227,11 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                 var mx: f32 = -std.math.inf(f32);
                 for (0..last + 1) |s|
                 {
-                    scores[s] = dot(qh, layer_k[s * kvd + kv_off ..][0..cfg.head_dim]) * scale;
+                    const ks = if (plain) layer_k[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
+                        cache.format.decodeHead(cache.keys(li)[s * cache.row ..][0..cache.row], kvd, hd / group, kh);
+                        break :blk kh;
+                    };
+                    scores[s] = dot(qh, ks) * scale;
                     mx = @max(mx, scores[s]);
                 }
                 var sum: f32 = 0;
@@ -1170,7 +1245,11 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                 for (0..last + 1) |s|
                 {
                     const p = scores[s] / sum;
-                    for (out, layer_v[s * kvd + kv_off ..][0..cfg.head_dim]) |*o, vv|
+                    const vs = if (plain) layer_v[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
+                        cache.format.decodeHead(cache.values(li)[s * cache.row ..][0..cache.row], kvd, hd / group, vh);
+                        break :blk vh;
+                    };
+                    for (out, vs) |*o, vv|
                     {
                         o.* += p * vv;
                     }
@@ -2073,6 +2152,74 @@ test "cached generation matches a full recompute and transformers' generate() on
         for (step_logits, full[(ids.len - 1) * cfg.vocab ..]) |got, exp|
         {
             try std.testing.expectApproxEqAbs(exp, got, 1e-5);
+        }
+    }
+}
+
+test "compact KV caches stay close to f32, and cached steps match a full pass in the same format" {
+    const gpa = std.testing.allocator;
+    const Case = struct { file: []const u8, yarn: bool };
+    const cases = [_]Case{ .{ .file = @embedFile("olmoe_tiny.gguf"), .yarn = false }, .{ .file = @embedFile("qwen3_tiny.gguf"), .yarn = true } };
+    for (cases) |cs|
+    {
+        var h = try gguf.parse(gpa, cs.file, cs.file.len);
+        defer h.deinit(gpa);
+        const base = try Config.fromGguf(h);
+        const cfg = if (cs.yarn) base.withYarn(4, 16) else base;
+        var m = try loader.Model.fromGguf(gpa, h);
+        defer m.deinit(gpa);
+        var whole = [_]loader.Range{.{ .offset = 0, .len = cs.file.len }};
+        var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, cs.file.len);
+        defer plan.deinit(gpa);
+        var w = try Weights.init(gpa, h, cfg, plan, cs.file);
+        defer w.deinit();
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        var owned: [8]bool = @splat(true);
+        var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, cs.file);
+        defer local.deinit();
+
+        const n = 40;
+        var tokens: [n]u32 = undefined;
+        for (&tokens, 0..) |*t, i|
+        {
+            t.* = @intCast((i * 7919 + 13) % cfg.vocab);
+        }
+        const ref = try gpa.alloc(f32, n * cfg.vocab);
+        defer gpa.free(ref);
+        try forward(gpa, &w, local.moe(), &tokens, ref, null);
+        var peak: f32 = 0;
+        for (ref) |x|
+        {
+            peak = @max(peak, @abs(x));
+        }
+        for ([_]KvFormat{ .bf16, .fp8 }) |fmt|
+        {
+            const got = try gpa.alloc(f32, n * cfg.vocab);
+            defer gpa.free(got);
+            try forwardAs(gpa, &w, local.moe(), &tokens, got, null, fmt);
+            var worst: f32 = 0;
+            for (got, ref) |a, b|
+            {
+                worst = @max(worst, @abs(a - b));
+            }
+            // Close to f32, and not equal to it: the cache really holds the compact values.
+            const bound: f32 = if (fmt == .bf16) 0.02 else 0.1;
+            try std.testing.expect(worst > 0 and worst <= bound * peak);
+
+            // One token at a time through a cache of the same format gives the full pass's logits.
+            var cache = try KvCache.initAs(gpa, cfg, n, fmt);
+            defer cache.deinit(gpa);
+            const one = try gpa.alloc(f32, cfg.vocab);
+            defer gpa.free(one);
+            for (0..n) |t|
+            {
+                try step(gpa, &w, local.moe(), &cache, tokens[t .. t + 1], one, null);
+                for (one, got[t * cfg.vocab ..][0..cfg.vocab]) |a, b|
+                {
+                    try std.testing.expectApproxEqAbs(b, a, 1e-4);
+                }
+            }
         }
     }
 }

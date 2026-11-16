@@ -1,0 +1,17 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.86 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: context 32640 tokens + 32 generated, chunks of 2048; KV cache all in memory, fp8, 50688 bytes per token: 1.66 GB in memory (all of it would be 1.66 GB), GPU attention on
+local: prefill 4096 of 32640 positions, 3.5 s
+local: prefill 8192 of 32640 positions, 7.7 s
+local: prefill 10240 of 32640 positions, 10.0 s
+local: prefill 14336 of 32640 positions, 15.5 s
+local: prefill 16384 of 32640 positions, 18.5 s
+local: prefill 20480 of 32640 positions, 25.2 s
+local: prefill 24576 of 32640 positions, 32.9 s
+local: prefill 26624 of 32640 positions, 37.0 s
+local: prefill 30720 of 32640 positions, 45.8 s
+local: prefill time: projections 3.7 s, QK norm and rope 1.7 s, attention 26.0 s, output 5.6 s, router 1.2 s, experts 11.0 s, LM head 0.0 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.4 s, output 0.1 s, router 0.1 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 50.169 s (651 tokens/s prefill); decode 0.038 s per token (26.57 tokens/s) over 31 steps from position 32640; resident memory 34315 MB
+local: saved 32 tokens and their logits to /tmp/lh_t.bin
+local: heap: 220 allocations, 220 frees, peak 1937.1 MB, 0 bytes still allocated at exit (balanced)

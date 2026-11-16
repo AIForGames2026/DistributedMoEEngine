@@ -1,18 +1,20 @@
 //! Attention kernel benchmark (TASK-12). Linux, `zig build attbench -Dgpu=true`.
 //!
-//!   attbench [--heads H] [--kv-heads K] [--n N] [--pos P[,P...]] [--reps R] [--alloc map|host]
+//!   attbench [--heads H] [--kv-heads K] [--n N] [--pos P[,P...]] [--reps R] [--alloc map|host] [--format f32|bf16|fp8]
 //!   attbench --mm [--alloc map|host] [--reps R]
 //!
 //! Times each attention kernel on random data for N new tokens after P cached
-//! positions, and reports how far each output is from the wide kernel's. `--mm`
+//! positions, and reports how far each output is from the wide kernel's. `--format`
+//! stores the cache compactly (TASK-27). `--mm`
 //! times the matmul kernels instead. `--alloc host` puts data in pinned memory.
 const std = @import("std");
 const c = std.c;
+const KvFormat = @import("kv_format.zig").KvFormat;
 
 const Handle = opaque {};
 extern fn tf_gpu_open(out: *?*Handle, fatbin: *const anyopaque, err: [*]u8, err_len: usize) c_int;
 extern fn tf_gpu_map(g: *Handle, host: *anyopaque, len: usize, dev: *u64) c_int;
-extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32) c_int;
+extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int) c_int;
 extern fn tf_gpu_set_attention_kernel(g: *Handle, which: c_int) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
 extern fn tf_gpu_matmul(g: *Handle, w: u64, format: c_int, x: [*]const f32, n: c_int, rows: c_int, cols: c_int, y: [*]f32) c_int;
@@ -38,6 +40,7 @@ pub fn main(init: std.process.Init) !void
     var pos_text: []const u8 = "0,16384,65536,129024";
     var pinned = false;
     var mm = false;
+    var format: KvFormat = .f32;
     while (it.next()) |arg|
     {
         if (std.mem.eql(u8, arg, "--mm"))
@@ -69,6 +72,10 @@ pub fn main(init: std.process.Init) !void
         else if (std.mem.eql(u8, arg, "--alloc"))
         {
             pinned = std.mem.eql(u8, v, "host");
+        }
+        else if (std.mem.eql(u8, arg, "--format"))
+        {
+            format = KvFormat.parse(v) orelse return error.Usage;
         }
         else
         {
@@ -103,8 +110,9 @@ pub fn main(init: std.process.Init) !void
     const cap = (max_pos + n + tile - 1) / tile * tile;
     var dk: u64 = 0;
     var dv: u64 = 0;
-    const k = try deviceBuffer(g.?, pinned, cap * kvd, &dk);
-    const v = try deviceBuffer(g.?, pinned, cap * kvd, &dv);
+    const row = format.rowBytes(kvd, kv_heads);
+    const k = try deviceBuffer(g.?, pinned, cap * row / 4, &dk);
+    const v = try deviceBuffer(g.?, pinned, cap * row / 4, &dv);
     const q = try pages.alloc(f32, n * heads * hd);
     defer pages.free(q);
     var out: [kernels][]f32 = undefined;
@@ -118,11 +126,22 @@ pub fn main(init: std.process.Init) !void
     };
     var rng: std.Random.DefaultPrng = .init(7);
     const r = rng.random();
-    for ([_][]f32{ k, v, q }) |buf|
+    for (q) |*x|
     {
-        for (buf) |*x|
+        x.* = r.float(f32) * 2 - 1;
+    }
+    const src = try pages.alloc(f32, kvd);
+    defer pages.free(src);
+    for ([_][]f32{ k, v }) |buf|
+    {
+        const bytes = std.mem.sliceAsBytes(buf);
+        for (0..cap) |p|
         {
-            x.* = r.float(f32) * 2 - 1;
+            for (src) |*x|
+            {
+                x.* = r.float(f32) * 2 - 1;
+            }
+            format.encodeRow(src, bytes[p * row ..][0..row], kv_heads);
         }
     }
     if (!pinned and (tf_gpu_map(g.?, k.ptr, k.len * 4, &dk) != 0 or tf_gpu_map(g.?, v.ptr, v.len * 4, &dv) != 0))
@@ -135,11 +154,11 @@ pub fn main(init: std.process.Init) !void
     defer pages.free(tiles_v);
     for (tiles_k, tiles_v, 0..) |*a, *b, i|
     {
-        a.* = dk + i * tile * kvd * 4;
-        b.* = dv + i * tile * kvd * 4;
+        a.* = dk + i * tile * row;
+        b.* = dv + i * tile * row;
     }
     const scale = 1.0 / @sqrt(@as(f32, hd));
-    std.debug.print("attbench: {d} query heads, {d} KV heads, {d} new tokens, {d} reps\n", .{ heads, kv_heads, n, reps });
+    std.debug.print("attbench: {d} query heads, {d} KV heads, {d} new tokens, {d} reps, {s} cache ({d} bytes per position per layer)\n", .{ heads, kv_heads, n, reps, @tagName(format), 2 * row });
     for (positions[0..count]) |pos0|
     {
         const ntiles = (pos0 + n + tile - 1) / tile;
@@ -155,7 +174,7 @@ pub fn main(init: std.process.Init) !void
             for (0..reps + 1) |_|
             {
                 const t0 = nowNs();
-                if (tf_gpu_attention(g.?, q.ptr, @intCast(n), @intCast(pos0), @intCast(heads), @intCast(kv_heads), @intCast(kvd), scale, tiles_k.ptr, tiles_v.ptr, @intCast(ntiles), @intCast(splits), out[which].ptr) != 0)
+                if (tf_gpu_attention(g.?, q.ptr, @intCast(n), @intCast(pos0), @intCast(heads), @intCast(kv_heads), @intCast(kvd), scale, tiles_k.ptr, tiles_v.ptr, @intCast(ntiles), @intCast(splits), out[which].ptr, @intFromEnum(format)) != 0)
                 {
                     return error.AttentionFailed;
                 }
@@ -165,7 +184,7 @@ pub fn main(init: std.process.Init) !void
         }
         const avg_seen = @as(f64, @floatFromInt(pos0)) + @as(f64, @floatFromInt(n + 1)) / 2;
         const flops = 4 * @as(f64, @floatFromInt(n * heads * hd)) * avg_seen;
-        const bytes = @as(f64, @floatFromInt((pos0 + n) * kvd * 4 * 2));
+        const bytes = @as(f64, @floatFromInt((pos0 + n) * row * 2));
         std.debug.print("  {d} cached:", .{pos0});
         for (names[0..used], ms[0..used], out[0..used]) |name, t, o|
         {

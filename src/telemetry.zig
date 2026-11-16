@@ -1,5 +1,6 @@
-//! Live telemetry for `--serve` (TASK-16b): which experts each engine step
-//! used, on which rank, streamed to the built-in page over a WebSocket.
+//! Telemetry (TASK-16b, TASK-16): which experts each engine step used, on
+//! which rank, streamed to the built-in page over a WebSocket and, with
+//! `--record`, written to a file the page replays.
 //!
 //! `Tap` wraps the engine's `Moe`. Only while a viewer is connected does it
 //! count each layer's expert choices and time the layer; at the end of every
@@ -7,13 +8,17 @@
 //! the engine thread never waits on (a full ring drops the step, and the
 //! viewer sees a gap in `seq`). `Broadcaster` owns the viewer sockets on its
 //! own thread, turns slots into JSON frames, and drops frames for a viewer
-//! that falls behind instead of slowing anyone down.
+//! that falls behind instead of slowing anyone down. A recording is the same
+//! frames, one per line, with the chat's notes placed among the steps.
 //!
 //! Frames (text, one JSON object each):
 //!   {"t":"hello", model, layers, experts, top_k, transport, ranks, owner, chunks, ms}
 //!   {"t":"step", seq, ms, n, step_us, layer_us, x: [layer, expert, count, ...],
 //!    engine: [rank 0 calls, rank 1 calls] (null where the engine keeps no count),
 //!    rtt_us, rtt_layers, cache: {resident, hinted, late, missed, loads} or null}
+//! Recordings add `recorded` (Unix seconds) to the hello, notes from the
+//! server (`chat`, `text`, `done`), each with `after`, the seq of the step
+//! before it, and a closing {"t":"end", after, steps, dropped, ms}.
 const std = @import("std");
 const olmoe = @import("olmoe.zig");
 
@@ -70,6 +75,8 @@ pub const Feed = struct {
     head: std.atomic.Value(u64) align(64) = .init(0),
     tail: std.atomic.Value(u64) align(64) = .init(0),
     viewers: std.atomic.Value(u32) align(64) = .init(0),
+    /// Steps lost to a full ring.
+    dropped: std.atomic.Value(u64) = .init(0),
 
     pub fn init(gpa: std.mem.Allocator, layers: usize, experts: usize, slots: usize) !Feed
     {
@@ -139,7 +146,24 @@ pub const Tap = struct {
 
     pub fn moe(self: *Tap) olmoe.Moe
     {
-        return .{ .ctx = self, .run = run, .ahead = self.inner.ahead, .prefetch = if (self.inner.prefetch != null) prefetch else null };
+        return .{ .ctx = self, .run = run, .ahead = self.inner.ahead, .prefetch = if (self.inner.prefetch != null) prefetch else null, .mark = mark };
+    }
+
+    fn mark(ctx: *anyopaque, begin: bool, tokens: usize) void
+    {
+        const self: *Tap = @ptrCast(@alignCast(ctx));
+        if (begin)
+        {
+            self.beginStep();
+        }
+        else
+        {
+            self.endStep(tokens);
+        }
+        if (self.inner.mark) |m|
+        {
+            m(self.inner.ctx, begin, tokens);
+        }
     }
 
     fn run(ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, w: []const f32, out: []f32) anyerror!void
@@ -165,7 +189,7 @@ pub const Tap = struct {
         return self.inner.prefetch.?(self.inner.ctx, layer, experts);
     }
 
-    /// Call before each engine step.
+    /// Called as each engine step begins.
     pub fn beginStep(self: *Tap) void
     {
         self.active = self.feed.viewers.load(.monotonic) > 0;
@@ -178,7 +202,7 @@ pub const Tap = struct {
         self.step_t0 = self.clock();
     }
 
-    /// Call after each engine step of `tokens` tokens; publishes it if it was counted.
+    /// Called after each engine step of `tokens` tokens; publishes it if it was counted.
     pub fn endStep(self: *Tap, tokens: usize) void
     {
         if (!self.active)
@@ -192,6 +216,7 @@ pub const Tap = struct {
         const h = f.head.load(.monotonic);
         if (h - f.tail.load(.acquire) >= f.slots.len)
         {
+            _ = f.dropped.fetchAdd(1, .monotonic);
             return;
         }
         const s = &f.slots[h % f.slots.len];
@@ -299,7 +324,7 @@ pub fn parseFrame(buf: []u8) error{BadFrame}!?InFrame
     return .{ .opcode = buf[0] & 0x0F, .payload = payload, .len = at + 4 + @as(usize, @intCast(n)) };
 }
 
-pub fn writeHello(gpa: std.mem.Allocator, out: *std.ArrayList(u8), topo: Topology, layers: usize, experts: usize, top_k: usize, now_ns: u64) !void
+pub fn writeHello(gpa: std.mem.Allocator, out: *std.ArrayList(u8), topo: Topology, layers: usize, experts: usize, top_k: usize, now_ns: u64, recorded: ?i64) !void
 {
     const openai = @import("openai.zig");
     try out.appendSlice(gpa, "{\"t\":\"hello\",\"schema\":\"tensorfold.live\",\"version\":0,\"model\":");
@@ -320,7 +345,12 @@ pub fn writeHello(gpa: std.mem.Allocator, out: *std.ArrayList(u8), topo: Topolog
     {
         try out.print(gpa, "{s}{d}", .{ if (i == 0) "" else ",", o });
     }
-    try out.print(gpa, "],\"chunks\":{d},\"ms\":{d:.3}}}", .{ topo.chunks, ms(now_ns) });
+    try out.print(gpa, "],\"chunks\":{d},\"ms\":{d:.3}", .{ topo.chunks, ms(now_ns) });
+    if (recorded) |t|
+    {
+        try out.print(gpa, ",\"recorded\":{d}", .{t});
+    }
+    try out.append(gpa, '}');
 }
 
 pub fn writeStep(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: *const Slot, experts: usize) !void
@@ -376,7 +406,8 @@ fn us(ns: u64) f64
     return @as(f64, @floatFromInt(ns)) / 1e3;
 }
 
-/// Sends the feed to every connected viewer from its own thread. Linux.
+/// Sends the feed to every connected viewer, and to the recording if there
+/// is one, from its own thread. Linux.
 pub const Broadcaster = struct {
     gpa: std.mem.Allocator,
     feed: *Feed,
@@ -388,6 +419,25 @@ pub const Broadcaster = struct {
     viewers: std.ArrayList(Viewer) = .empty,
     json: std.ArrayList(u8) = .empty,
     frame: std.ArrayList(u8) = .empty,
+    /// Set by `record`; the recording counts as a viewer that never falls behind.
+    recording: bool = false,
+    rec_fd: std.c.fd_t = -1,
+    rec: std.ArrayList(u8) = .empty,
+    /// Notes from the engine thread, then held until the steps before them are written.
+    notes: std.ArrayList(Note) = .empty,
+    notes_lock: std.atomic.Value(bool) = .init(false),
+    held: std.ArrayList(Note) = .empty,
+    last_seq: ?u64 = null,
+    steps_written: u64 = 0,
+    stopping: std.atomic.Value(bool) = .init(false),
+    stopped: std.atomic.Value(bool) = .init(false),
+
+    const Note = struct {
+        /// How many steps had been published when it was noted.
+        head: u64,
+        /// A JSON object.
+        bytes: []u8,
+    };
 
     /// A viewer may fall this far behind before its frames are dropped.
     const max_pending = 256 << 10;
@@ -406,12 +456,73 @@ pub const Broadcaster = struct {
 
     pub fn start(self: *Broadcaster) !void
     {
+        if (self.pipe[0] >= 0)
+        {
+            return;
+        }
         if (std.c.pipe(&self.pipe) != 0)
         {
             return error.SystemResources;
         }
         const t = try std.Thread.spawn(.{}, loop, .{self});
         t.detach();
+    }
+
+    /// Writes every step to `path` from now on, starting with the hello. Call before `start`.
+    pub fn record(self: *Broadcaster, path: [:0]const u8, unix: i64) !void
+    {
+        const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
+        if (fd < 0)
+        {
+            return error.CannotRecord;
+        }
+        self.rec_fd = fd;
+        try writeHello(self.gpa, &self.rec, self.topo, self.feed.layers, self.feed.experts, self.top_k, self.clock(), unix);
+        try self.rec.append(self.gpa, '\n');
+        self.recording = true;
+        _ = self.feed.viewers.fetchAdd(1, .monotonic);
+    }
+
+    /// Adds a JSON object to the recording after the steps published so far. Engine thread only.
+    pub fn note(self: *Broadcaster, bytes: []const u8) void
+    {
+        if (!self.recording)
+        {
+            return;
+        }
+        const copy = self.gpa.dupe(u8, bytes) catch return;
+        const head = self.feed.head.load(.monotonic);
+        self.lock();
+        defer self.unlock();
+        self.notes.append(self.gpa, .{ .head = head, .bytes = copy }) catch self.gpa.free(copy);
+    }
+
+    /// Writes out what is left and closes the recording; call once the engine has stopped.
+    pub fn finish(self: *Broadcaster) void
+    {
+        if (!self.recording)
+        {
+            return;
+        }
+        self.stopping.store(true, .release);
+        while (!self.stopped.load(.acquire))
+        {
+            const ts: std.c.timespec = .{ .sec = 0, .nsec = 1_000_000 };
+            _ = std.c.nanosleep(&ts, null);
+        }
+    }
+
+    fn lock(self: *Broadcaster) void
+    {
+        while (self.notes_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null)
+        {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    fn unlock(self: *Broadcaster) void
+    {
+        self.notes_lock.store(false, .release);
     }
 
     /// Hands over a socket that has finished the WebSocket handshake.
@@ -433,6 +544,8 @@ pub const Broadcaster = struct {
                 fds.append(self.gpa, .{ .fd = v.fd, .events = std.c.POLL.IN | want_out, .revents = 0 }) catch return;
             }
             _ = std.c.poll(fds.items.ptr, @intCast(fds.items.len), 10);
+            // Read before draining, so every step the engine published before stopping is written.
+            const stop = self.recording and self.stopping.load(.acquire);
             for (fds.items[1..], self.viewers.items) |p, *v|
             {
                 if (p.revents & (std.c.POLL.IN | std.c.POLL.HUP | std.c.POLL.ERR) != 0)
@@ -449,6 +562,15 @@ pub const Broadcaster = struct {
                 }
             }
             self.drain();
+            if (self.recording)
+            {
+                self.writeRecording();
+                if (stop)
+                {
+                    self.closeRecording();
+                    self.stopped.store(true, .release);
+                }
+            }
             var i: usize = 0;
             while (i < self.viewers.items.len)
             {
@@ -477,7 +599,7 @@ pub const Broadcaster = struct {
         self.json.clearRetainingCapacity();
         var v: Viewer = .{ .fd = fd };
         _ = std.c.setsockopt(fd, std.c.SOL.SOCKET, std.c.SO.SNDBUF, std.mem.asBytes(&kernel_buffer), @sizeOf(c_int));
-        writeHello(self.gpa, &self.json, self.topo, self.feed.layers, self.feed.experts, self.top_k, self.clock()) catch return;
+        writeHello(self.gpa, &self.json, self.topo, self.feed.layers, self.feed.experts, self.top_k, self.clock(), null) catch return;
         appendFrame(self.gpa, &v.out, 0x1, self.json.items) catch return;
         self.viewers.append(self.gpa, v) catch
         {
@@ -487,15 +609,37 @@ pub const Broadcaster = struct {
         _ = self.feed.viewers.fetchAdd(1, .monotonic);
     }
 
-    /// Turns every waiting slot into a frame for each viewer with room for it.
+    /// Turns every waiting slot into a frame for each viewer with room for it, and a line of the recording.
     fn drain(self: *Broadcaster) void
     {
-        while (self.feed.peek()) |s|
+        // Notes taken after this point may belong after steps published since, so those wait for the next round.
+        const head = self.feed.head.load(.acquire);
+        if (self.recording)
         {
+            self.lock();
+            self.held.appendSlice(self.gpa, self.notes.items) catch {};
+            self.notes.clearRetainingCapacity();
+            self.unlock();
+        }
+        while (self.feed.tail.load(.monotonic) < head)
+        {
+            const at = self.feed.tail.load(.monotonic);
+            const s = self.feed.peek().?;
+            if (self.recording)
+            {
+                self.writeNotes(at);
+            }
             self.json.clearRetainingCapacity();
             self.frame.clearRetainingCapacity();
             const ok = blk: {
                 writeStep(self.gpa, &self.json, s, self.feed.experts) catch break :blk false;
+                if (self.recording)
+                {
+                    self.rec.appendSlice(self.gpa, self.json.items) catch break :blk false;
+                    self.rec.append(self.gpa, '\n') catch break :blk false;
+                    self.last_seq = s.seq;
+                    self.steps_written += 1;
+                }
                 appendFrame(self.gpa, &self.frame, 0x1, self.json.items) catch break :blk false;
                 break :blk true;
             };
@@ -513,6 +657,70 @@ pub const Broadcaster = struct {
                 v.out.appendSlice(self.gpa, self.frame.items) catch continue;
             }
         }
+        if (self.recording)
+        {
+            self.writeNotes(head);
+        }
+    }
+
+    /// Adds the held notes noted after at most `published` steps to the recording.
+    fn writeNotes(self: *Broadcaster, published: u64) void
+    {
+        var done: usize = 0;
+        for (self.held.items) |n|
+        {
+            if (n.head > published)
+            {
+                break;
+            }
+            if (self.last_seq) |s|
+            {
+                self.rec.print(self.gpa, "{{\"after\":{d},", .{s}) catch {};
+            }
+            else
+            {
+                self.rec.appendSlice(self.gpa, "{\"after\":null,") catch {};
+            }
+            self.rec.appendSlice(self.gpa, n.bytes[1..]) catch {};
+            self.rec.append(self.gpa, '\n') catch {};
+            self.gpa.free(n.bytes);
+            done += 1;
+        }
+        std.mem.copyForwards(Note, self.held.items, self.held.items[done..]);
+        self.held.items.len -= done;
+    }
+
+    fn writeRecording(self: *Broadcaster) void
+    {
+        var off: usize = 0;
+        while (off < self.rec.items.len and self.rec_fd >= 0)
+        {
+            const n = std.c.write(self.rec_fd, self.rec.items[off..].ptr, self.rec.items.len - off);
+            if (n <= 0)
+            {
+                std.debug.print("telemetry: writing the recording failed; it stops here\n", .{});
+                _ = std.c.close(self.rec_fd);
+                self.rec_fd = -1;
+                break;
+            }
+            off += @intCast(n);
+        }
+        self.rec.clearRetainingCapacity();
+    }
+
+    fn closeRecording(self: *Broadcaster) void
+    {
+        self.writeNotes(std.math.maxInt(u64));
+        self.rec.print(self.gpa, "{{\"t\":\"end\",\"after\":{?d},\"steps\":{d},\"dropped\":{d},\"ms\":{d:.3}}}\n", .{
+            self.last_seq, self.steps_written, self.feed.dropped.load(.monotonic), ms(self.clock()),
+        }) catch {};
+        self.writeRecording();
+        if (self.rec_fd >= 0)
+        {
+            _ = std.c.close(self.rec_fd);
+            self.rec_fd = -1;
+        }
+        self.recording = false;
     }
 
     fn flush(self: *Broadcaster, v: *Viewer) void
@@ -658,4 +866,71 @@ test "the tap counts a step only while someone watches" {
     try std.testing.expectEqual(@as(u64, 1), feed.peek().?.seq);
     feed.pop();
     try std.testing.expect(feed.peek() == null);
+}
+
+test "a recording places each note after the steps published before it" {
+    // The broadcaster is Linux only.
+    if (comptime @import("builtin").os.tag == .windows)
+    {
+        return error.SkipZigTest;
+    }
+    const gpa = std.testing.allocator;
+    const Fake = struct {
+        fn run(_: *anyopaque, _: usize, _: []const f32, _: usize, _: []const u32, _: []const f32, _: []f32) anyerror!void
+        {}
+        fn clock() u64
+        {
+            return 2_000_000;
+        }
+    };
+    var feed = try Feed.init(gpa, 1, 2, 8);
+    defer feed.deinit(gpa);
+    var tap = try Tap.init(gpa, .{ .ctx = &feed, .run = Fake.run }, 1, &feed, .{}, Fake.clock);
+    defer tap.deinit(gpa);
+    var bc: Broadcaster = .{
+        .gpa = gpa,
+        .feed = &feed,
+        .topo = .{ .model = "m", .transport = "local", .ranks = &.{"a"}, .owner = &.{ 0, 0 } },
+        .top_k = 1,
+        .clock = Fake.clock,
+    };
+    defer
+    {
+        bc.rec.deinit(gpa);
+        bc.json.deinit(gpa);
+        bc.frame.deinit(gpa);
+        bc.notes.deinit(gpa);
+        for (bc.held.items) |n|
+        {
+            gpa.free(n.bytes);
+        }
+        bc.held.deinit(gpa);
+    }
+    bc.recording = true;
+    feed.viewers.store(1, .monotonic);
+    const m = tap.moe();
+
+    bc.note("{\"t\":\"chat\"}");
+    for (0..2) |i|
+    {
+        m.mark.?(m.ctx, true, 1);
+        try m.run(m.ctx, 0, &.{}, 1, &.{@intCast(i)}, &.{}, &.{});
+        m.mark.?(m.ctx, false, 1);
+        bc.note("{\"t\":\"text\"}");
+    }
+    bc.drain();
+    var lines = std.mem.splitScalar(u8, bc.rec.items, '\n');
+    try std.testing.expectEqualStrings("{\"after\":null,\"t\":\"chat\"}", lines.next().?);
+    try std.testing.expect(std.mem.startsWith(u8, lines.next().?, "{\"t\":\"step\",\"seq\":0,"));
+    try std.testing.expectEqualStrings("{\"after\":0,\"t\":\"text\"}", lines.next().?);
+    try std.testing.expect(std.mem.startsWith(u8, lines.next().?, "{\"t\":\"step\",\"seq\":1,"));
+    try std.testing.expectEqualStrings("{\"after\":1,\"t\":\"text\"}", lines.next().?);
+    try std.testing.expectEqualStrings("", lines.next().?);
+
+    // A note made after a step the drain has not seen yet waits for that step.
+    bc.rec.clearRetainingCapacity();
+    try bc.held.append(gpa, .{ .head = 3, .bytes = try gpa.dupe(u8, "{\"t\":\"late\"}") });
+    bc.drain();
+    try std.testing.expectEqual(@as(usize, 1), bc.held.items.len);
+    try std.testing.expectEqual(@as(usize, 0), bc.rec.items.len);
 }

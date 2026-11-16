@@ -31,7 +31,9 @@
 //!          --serve [IP:]PORT (TASK-30: instead of the golden checks, rank 0
 //!          answers OpenAI chat completions; 127.0.0.1 unless an IP is given),
 //!          --ctx N (the server's context, default 4096), --no-reuse (every
-//!          request runs cold instead of reusing the previous one's prefix)
+//!          request runs cold instead of reusing the previous one's prefix),
+//!          --record FILE (TASK-16: rank 0 writes each step's experts, and the
+//!          server's chat, to FILE for the built-in page to replay)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -127,6 +129,7 @@ const Options = struct {
     serve: ?[]const u8 = null,
     ctx: usize = 4096,
     reuse: bool = true,
+    record: ?[]const u8 = null,
 };
 
 /// A router's view of the swarm (TASK-09): its tracker link, watching the
@@ -149,6 +152,7 @@ pub fn main(init: std.process.Init) !void {
             \\         --lookahead H  --extra E  --cache N  --pin L  --loaders N  --mispredict P
             \\         --tracker IP[:PORT]  --advertise IP  (a router with --tracker needs no --host)
             \\         --serve [IP:]PORT  --ctx N  --no-reuse  (an OpenAI-compatible server instead of --golden)
+            \\         --record FILE  (rank 0 records every step for the page to replay)
             \\
         , .{});
         std.process.exit(2);
@@ -185,12 +189,18 @@ pub fn main(init: std.process.Init) !void {
             .ranks = &.{host},
             .probe = if (box) |b| .{ .ctx = b.cache, .sample = sampleCache } else .{ .ctx = &l.local, .sample = sampleLocal },
         };
+        const tel = try openTelemetry(gpa, l.cfg, moe, opts, "local", live);
+        const run_moe = if (tel) |t| t.tap.moe() else moe;
         const result = if (opts.serve != null)
-            runServe(gpa, &l, moe, opts, "local", live)
+            runServe(gpa, &l, run_moe, opts, "local", tel.?.bc)
         else if (opts.context > 0)
-            runLong(gpa, &l.weights.?, moe, opts, "local")
+            runLong(gpa, &l.weights.?, run_moe, opts, "local")
         else
-            runGolden(gpa, &l.weights.?, moe, opts, "local");
+            runGolden(gpa, &l.weights.?, run_moe, opts, "local");
+        if (tel) |t|
+        {
+            t.close("local");
+        }
         if (box) |b|
         {
             reportCache("local", b.cache);
@@ -298,6 +308,8 @@ fn parseArgs(init: std.process.Init) !Options {
             yarn_factor = try std.fmt.parseFloat(f32, value);
         } else if (std.mem.eql(u8, arg, "--serve")) {
             opts.serve = value;
+        } else if (std.mem.eql(u8, arg, "--record")) {
+            opts.record = value;
         } else if (std.mem.eql(u8, arg, "--ctx")) {
             opts.ctx = try std.fmt.parseInt(usize, value, 10);
             if (opts.ctx < 2) return error.Usage;
@@ -1308,12 +1320,18 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .chunks = wire.chunkCount(opts.payload, cfg.d_model),
         .probe = .{ .ctx = &split, .sample = SplitMoe.sample },
     };
+    const tel = try openTelemetry(gpa, cfg, moe, opts, name, live);
+    const run_moe = if (tel) |t| t.tap.moe() else moe;
     const result = if (opts.serve != null)
-        runServe(gpa, &l, moe, opts, name, live)
+        runServe(gpa, &l, run_moe, opts, name, tel.?.bc)
     else if (opts.context > 0)
-        runLong(gpa, &l.weights.?, moe, opts, name)
+        runLong(gpa, &l.weights.?, run_moe, opts, name)
     else
-        runGolden(gpa, &l.weights.?, moe, opts, name);
+        runGolden(gpa, &l.weights.?, run_moe, opts, name);
+    if (tel) |t|
+    {
+        t.close(name);
+    }
     if (result) |_| {} else |err|
     {
         if (err == error.PeerUnhealthy)
@@ -1446,10 +1464,10 @@ fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.
 }
 
 /// `--serve [IP:]PORT` (TASK-30): answers OpenAI chat completions with this
-/// rank's weights and `moe` (local experts or a split over any transport),
-/// keeping one `--ctx` position KV cache whose shared prefix later requests
-/// reuse unless `--no-reuse`.
-fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, name: []const u8, live: Live) !void
+/// rank's weights and `moe` (local experts or a split over any transport,
+/// wrapped by the telemetry tap), keeping one `--ctx` position KV cache whose
+/// shared prefix later requests reuse unless `--no-reuse`.
+fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, name: []const u8, bc: *telemetry.Broadcaster) !void
 {
     const spec = opts.serve.?;
     const colon = std.mem.lastIndexOfScalar(u8, spec, ':');
@@ -1465,22 +1483,8 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
     const w = &l.weights.?;
     var cache = try olmoe.KvCache.init(gpa, w.cfg, opts.ctx);
     defer cache.deinit(gpa);
-    const base = if (std.mem.lastIndexOfScalar(u8, opts.model, '/')) |i| opts.model[i + 1 ..] else opts.model;
-    const model_id = if (std.mem.endsWith(u8, base, ".gguf")) base[0 .. base.len - 5] else base;
-    // Never freed: the broadcaster's thread reads them until the process exits.
-    const feed = try gpa.create(telemetry.Feed);
-    feed.* = try telemetry.Feed.init(gpa, w.cfg.layers, w.cfg.experts, 256);
-    const tap = try gpa.create(telemetry.Tap);
-    tap.* = try telemetry.Tap.init(gpa, moe, w.cfg.top_k, feed, live.probe, mf.nowNs);
-    const bc = try gpa.create(telemetry.Broadcaster);
-    bc.* = .{
-        .gpa = std.heap.c_allocator,
-        .feed = feed,
-        .topo = .{ .model = model_id, .transport = name, .ranks = live.ranks, .owner = live.owner, .chunks = live.chunks },
-        .top_k = w.cfg.top_k,
-        .clock = mf.nowNs,
-    };
-    var eng: ServeEngine = .{ .gpa = gpa, .w = w, .moe = tap.moe(), .tap = tap, .cache = &cache };
+    const model_id = modelId(opts.model);
+    var eng: ServeEngine = .{ .gpa = gpa, .w = w, .moe = moe, .cache = &cache };
     return serve.run(gpa, eng.engine(opts.ctx), &tok, format, .{
         .addr = addr,
         .port = port,
@@ -1492,6 +1496,72 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
         .page = live_page,
         .live = bc,
     });
+}
+
+/// The model's file name without its directory and `.gguf`.
+fn modelId(path: []const u8) []const u8
+{
+    const base = if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| path[i + 1 ..] else path;
+    return if (std.mem.endsWith(u8, base, ".gguf")) base[0 .. base.len - 5] else base;
+}
+
+/// The live feed (TASK-16b) and the recording (TASK-16) around rank 0's experts.
+const Telemetry = struct {
+    tap: *telemetry.Tap,
+    bc: *telemetry.Broadcaster,
+
+    /// Finishes the recording, if any, and says where it went.
+    fn close(self: Telemetry, name: []const u8) void
+    {
+        const bc = self.bc;
+        if (!bc.recording)
+        {
+            return;
+        }
+        bc.finish();
+        std.debug.print("{s}: recorded {d} steps ({d} dropped) to the trace\n", .{ name, bc.steps_written, bc.feed.dropped.load(.monotonic) });
+    }
+};
+
+/// Sets up the telemetry tap when `--serve` or `--record` asks for it, else returns null.
+fn openTelemetry(gpa: std.mem.Allocator, cfg: olmoe.Config, moe: olmoe.Moe, opts: Options, name: []const u8, live: Live) !?Telemetry
+{
+    if (opts.serve == null and opts.record == null)
+    {
+        return null;
+    }
+    // Never freed: the broadcaster's thread reads them until the process exits.
+    const feed = try gpa.create(telemetry.Feed);
+    feed.* = try telemetry.Feed.init(gpa, cfg.layers, cfg.experts, 256);
+    const tap = try gpa.create(telemetry.Tap);
+    tap.* = try telemetry.Tap.init(gpa, moe, cfg.top_k, feed, live.probe, mf.nowNs);
+    const bc = try gpa.create(telemetry.Broadcaster);
+    bc.* = .{
+        .gpa = std.heap.c_allocator,
+        .feed = feed,
+        .topo = .{ .model = modelId(opts.model), .transport = name, .ranks = live.ranks, .owner = live.owner, .chunks = live.chunks },
+        .top_k = cfg.top_k,
+        .clock = mf.nowNs,
+    };
+    if (opts.record) |path|
+    {
+        var buf: [512]u8 = undefined;
+        bc.record(try zPrint(&buf, "{s}", .{path}), unixNow()) catch |err|
+        {
+            std.debug.print("{s}: cannot write the recording {s}\n", .{ name, path });
+            return err;
+        };
+        std.debug.print("{s}: recording every step to {s}\n", .{ name, path });
+    }
+    try bc.start();
+    return .{ .tap = tap, .bc = bc };
+}
+
+fn unixNow() i64
+{
+    var ts: c.timespec = undefined;
+    _ = c.clock_gettime(c.CLOCK.REALTIME, &ts);
+    return @intCast(ts.sec);
 }
 
 /// The built-in chat page (TASK-30), embedded from `web/live.html`.
@@ -1541,7 +1611,6 @@ const ServeEngine = struct {
     gpa: std.mem.Allocator,
     w: *const olmoe.Weights,
     moe: olmoe.Moe,
-    tap: *telemetry.Tap,
     cache: *olmoe.KvCache,
 
     fn engine(self: *ServeEngine, cap: usize) completion.Engine
@@ -1558,9 +1627,7 @@ const ServeEngine = struct {
     fn step(ctx: *anyopaque, tokens: []const u32, logits: []f32) anyerror!void
     {
         const self: *ServeEngine = @ptrCast(@alignCast(ctx));
-        self.tap.beginStep();
         try olmoe.step(self.gpa, self.w, self.moe, self.cache, tokens, logits, null);
-        self.tap.endStep(tokens.len);
     }
 };
 

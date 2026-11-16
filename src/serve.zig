@@ -330,7 +330,20 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
     };
     const ids: openai.Ids = .{ .id = try std.fmt.allocPrint(a, "chatcmpl-tf{x}{d}", .{ opts.clock() & 0xffffff, count }), .created = unixTime(), .model = opts.model_id };
 
-    var out: Out = .{ .fd = fd, .a = a, .ids = ids, .stream = req.stream };
+    var out: Out = .{ .fd = fd, .a = a, .ids = ids, .stream = req.stream, .live = opts.live };
+    if (opts.live) |b|
+    {
+        var n: std.ArrayList(u8) = .empty;
+        try n.print(a, "{{\"t\":\"chat\",\"id\":{d},\"messages\":[", .{count});
+        for (req.messages, 0..) |m, i|
+        {
+            try n.print(a, "{s}{{\"role\":\"{t}\",\"content\":", .{ if (i == 0) "" else ",", m.role });
+            try openai.writeString(a, &n, m.content);
+            try n.append(a, '}');
+        }
+        try n.print(a, "],\"prompt_tokens\":{d},\"max_tokens\":{?d},\"temperature\":{d}}}", .{ prompt.items.len, req.max_tokens, req.temperature });
+        b.note(n.items);
+    }
     if (req.stream)
     {
         var head: std.ArrayList(u8) = .empty;
@@ -344,6 +357,11 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
         if (err == error.ClientGone)
         {
             std.debug.print("{s}: request {d}: the client went away after {d} tokens\n", .{ opts.name, count, generated.items.len });
+            if (opts.live) |b|
+            {
+                const n = try std.fmt.allocPrint(a, "{{\"t\":\"done\",\"id\":{d},\"finish\":\"client_gone\",\"completion_tokens\":{d}}}", .{ count, generated.items.len });
+                b.note(n);
+            }
             return err;
         }
         if (!req.stream)
@@ -371,6 +389,14 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
         try openai.writeCompletion(a, &body, ids, out.content.items, out.reasoning.items, r.finish, stats);
         try sendBody(fd, 200, "application/json", body.items);
     }
+    const decode_rate = if (stats.decode_ns > 0) @as(f64, @floatFromInt(stats.decode_steps)) / (@as(f64, @floatFromInt(stats.decode_ns)) / 1e9) else 0;
+    if (opts.live) |b|
+    {
+        const n = try std.fmt.allocPrint(a, "{{\"t\":\"done\",\"id\":{d},\"finish\":\"{t}\",\"prompt_tokens\":{d},\"cached_tokens\":{d},\"completion_tokens\":{d},\"ttft_ms\":{d:.1},\"decode_tokens_per_s\":{d:.2}}}", .{
+            count, r.finish, stats.prompt_tokens, stats.cached_tokens, stats.completion_tokens, @as(f64, @floatFromInt(stats.ttft_ns)) / 1e6, decode_rate,
+        });
+        b.note(n);
+    }
     const secs = @as(f64, @floatFromInt(opts.clock() - t0)) / 1e9;
     std.debug.print("{s}: request {d}: {d} prompt tokens ({d} reused), {d} generated in {d:.2} s, first token {d:.0} ms, {d:.1} tokens/s decoding, finish {t}\n", .{
         opts.name,
@@ -380,7 +406,7 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
         stats.completion_tokens,
         secs,
         @as(f64, @floatFromInt(stats.ttft_ns)) / 1e6,
-        if (stats.decode_ns > 0) @as(f64, @floatFromInt(stats.decode_steps)) / (@as(f64, @floatFromInt(stats.decode_ns)) / 1e9) else 0,
+        decode_rate,
         r.finish,
     });
 }
@@ -391,12 +417,25 @@ const Out = struct {
     a: std.mem.Allocator,
     ids: openai.Ids,
     stream: bool,
+    /// Where reply text is also noted when recording.
+    live: ?*telemetry.Broadcaster = null,
     content: std.ArrayList(u8) = .empty,
     reasoning: std.ArrayList(u8) = .empty,
     scratch: std.ArrayList(u8) = .empty,
 
     fn emit(ctx: *anyopaque, channel: openai.Channel, text: []const u8) anyerror!void {
         const self: *Out = @ptrCast(@alignCast(ctx));
+        if (self.live) |b|
+        {
+            if (b.recording)
+            {
+                self.scratch.clearRetainingCapacity();
+                try self.scratch.print(self.a, "{{\"t\":\"text\",\"channel\":\"{t}\",\"s\":", .{channel});
+                try openai.writeString(self.a, &self.scratch, text);
+                try self.scratch.append(self.a, '}');
+                b.note(self.scratch.items);
+            }
+        }
         if (!self.stream)
         {
             try (if (channel == .content) &self.content else &self.reasoning).appendSlice(self.a, text);

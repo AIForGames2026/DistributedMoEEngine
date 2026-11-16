@@ -497,6 +497,8 @@ pub const Moe = struct {
     /// Called with each guess (TASK-11), before `layer` starts. It may start
     /// loading those experts but must not change any result.
     prefetch: ?*const fn (ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void = null,
+    /// If set, called as each step of `tokens` tokens begins and after it ends, for telemetry.
+    mark: ?*const fn (ctx: *anyopaque, begin: bool, tokens: usize) void = null,
 };
 
 /// The lookahead predictor (TASK-11). After layer S's attention, it applies
@@ -860,6 +862,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     {
         return error.LogitsTooSmall;
     }
+    if (moe.mark) |m|
+    {
+        m(moe.ctx, true, n);
+    }
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a = arena.allocator();
@@ -1061,6 +1067,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     {
         rmsnorm(h[(n - 1) * d ..][0..d], w.out_norm, cfg.eps, x[0..d]);
         w.head.matmul(x, 1, logits, scratch);
+    }
+    if (moe.mark) |m|
+    {
+        m(moe.ctx, false, n);
     }
 }
 

@@ -74,6 +74,16 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .stat .s { font-size: 12px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .good { color: var(--ok); }
 .warn { color: var(--bad); }
+.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); margin-left: 0; font-weight: 500; padding: 5px 12px; }
+.ghost:hover { background: var(--cell); }
+header .tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+label.ghost { border-radius: 8px; cursor: pointer; font-size: 13px; }
+#player { display: flex; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel); font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+#player input[type=range] { flex: 1; min-width: 140px; }
+#player select { padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+#clock { font-variant-numeric: tabular-nums; min-width: 120px; text-align: right; }
+.msg.note { color: var(--muted); font-size: 13px; }
+body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px; }
 @media (max-width: 800px) {
   main { grid-template-columns: 1fr; grid-template-rows: minmax(300px, 1fr) minmax(360px, 1fr); }
   #chat { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -85,6 +95,10 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   <h1>TensorFold Live</h1>
   <span class="meta"><span id="dot" class="dot"></span><span id="conn">connecting to the engine</span></span>
   <span class="meta" id="model"></span>
+  <span class="tools">
+    <button id="golive" class="ghost" type="button" hidden>Back to live</button>
+    <label class="ghost">Replay a recording<input type="file" id="file" accept=".jsonl,.gz,.json,.txt" hidden></label>
+  </span>
 </header>
 <main>
   <section id="chat">
@@ -101,6 +115,15 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   </section>
   <section id="view">
     <div id="stage"><canvas id="canvas"></canvas></div>
+    <div id="player" hidden>
+      <button id="play" class="ghost" type="button">Pause</button>
+      <select id="speed" aria-label="replay speed">
+        <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
+        <option value="2">2×</option><option value="4">4×</option><option value="10">10×</option>
+      </select>
+      <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="replay position">
+      <span id="clock">0.0 / 0.0 s</span>
+    </div>
     <div id="stats"></div>
   </section>
 </main>
@@ -113,6 +136,9 @@ const color = (name) => css.getPropertyValue(name).trim();
 // Everything the diagram knows, reset on each new connection.
 let topo = null;
 let live = null;
+// The recording being replayed, if any (TASK-16).
+let rp = null;
+let ws = null;
 
 function freshState(h) {
   const ranks = h.ranks.length;
@@ -141,7 +167,8 @@ function freshState(h) {
 }
 
 function connect() {
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/telemetry");
+  if (rp) return;
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/telemetry");
   ws.onmessage = (ev) => {
     let f;
     try { f = JSON.parse(ev.data); } catch { if (live) live.rejected++; return; }
@@ -150,7 +177,7 @@ function connect() {
     if (f.t === "step") return onStep(f);
   };
   ws.onopen = () => setConn(true);
-  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+  ws.onclose = () => { if (rp) return; setConn(false); setTimeout(connect, 1000); };
 }
 
 function setConn(on) {
@@ -179,15 +206,19 @@ function validStep(f) {
     Array.isArray(f.x) && f.x.length % 3 === 0 && Array.isArray(f.engine) && Array.isArray(f.layer_us);
 }
 
-function onStep(f) {
-  if (!topo || !validStep(f)) { if (live) live.rejected++; return; }
-  const L = topo.layers, E = topo.experts, k = topo.top_k;
-  const ranks = topo.ranks.length;
-  const byRank = new Array(ranks).fill(0);
+function stepInRange(f, h) {
   for (let i = 0; i < f.x.length; i += 3) {
     const l = f.x[i], e = f.x[i + 1], c = f.x[i + 2];
-    if (!(l >= 0 && l < L && e >= 0 && e < E && c > 0)) { live.rejected++; return; }
+    if (!(Number.isInteger(l) && l >= 0 && l < h.layers && Number.isInteger(e) && e >= 0 && e < h.experts && c > 0)) return false;
   }
+  return f.engine.length === 2;
+}
+
+// `rateNow` is the clock for rates: real time when live, the recording's time when replaying.
+function onStep(f, rateNow = performance.now()) {
+  if (!topo || !validStep(f) || !stepInRange(f, topo)) { if (live) live.rejected++; return; }
+  const ranks = topo.ranks.length;
+  const byRank = new Array(ranks).fill(0);
   if (live.lastSeq >= 0 && f.seq !== live.lastSeq + 1) {
     live.dropped += f.seq - live.lastSeq - 1;
     live.gapAfterFirst = true;
@@ -226,7 +257,7 @@ function onStep(f) {
   }
   if (ranks > 1 && byRank[1] > 0) {
     const now = performance.now();
-    live.linkCalls.push({ t: now, calls: byRank[1] });
+    live.linkCalls.push({ t: rateNow, calls: byRank[1] });
     const dots = Math.min(byRank[1], f.n > 1 ? 24 : 8);
     for (let i = 0; i < dots; i++) live.packets.push({ t0: now + i * 12, lane: Math.random() });
   }
@@ -247,15 +278,18 @@ function draw(now) {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  if (rp) advanceReplay(dt);
   if (!topo) {
     ctx.fillStyle = color("--muted");
     ctx.font = "14px system-ui, sans-serif";
-    ctx.fillText("Waiting for the engine's live feed...", 20, 30);
+    ctx.fillText(rp === null ? "Waiting for the engine's live feed..." : "", 20, 30);
     requestAnimationFrame(draw);
     return;
   }
   const ranks = topo.ranks.length;
-  const decay = Math.exp(-dt / 0.35);
+  // Replays fade at the speed they play, and hold still while paused.
+  const speed = rp ? (rp.playing ? rp.speed : 0) : 1;
+  const decay = Math.exp(-dt * speed / 0.35);
   for (const h of live.heat) for (let i = 0; i < h.length; i++) h[i] *= decay;
 
   const pad = 20, gap = ranks > 1 ? Math.max(90, W * 0.12) : 0;
@@ -311,11 +345,11 @@ function draw(now) {
       ctx.restore();
     }
   }
-  if (ranks > 1) drawLink(boxes[0], boxes[1], stacked, now);
+  if (ranks > 1) drawLink(boxes[0], boxes[1], stacked, now, rp ? rp.clock : now);
   requestAnimationFrame(draw);
 }
 
-function drawLink(a, b, stacked, now) {
+function drawLink(a, b, stacked, now, rateNow) {
   const x0 = stacked ? a.x + a.w / 2 : a.grid.ox + a.grid.gw + 6;
   const y0 = stacked ? a.grid.oy + a.grid.gh + 6 : a.grid.oy + a.grid.gh / 2;
   const x1 = stacked ? x0 : b.grid.ox - 6;
@@ -343,7 +377,7 @@ function drawLink(a, b, stacked, now) {
     ctx.arc(x, y, 2.5, 0, Math.PI * 2);
     ctx.fill();
   }
-  live.linkCalls = live.linkCalls.filter((c) => now - c.t < 1000);
+  live.linkCalls = live.linkCalls.filter((c) => rateNow - c.t < 1000);
   const callsPerS = live.linkCalls.reduce((s, c) => s + c.calls, 0);
   const pk = callsPerS * topo.chunks * 2;
   const r0 = live.rtt[0], r1 = live.rtt[live.rtt.length - 1];
@@ -384,8 +418,16 @@ function renderStats() {
     out.push(stat("expert cache (rank 0)", calls ? `${(100 * hits / calls).toFixed(1)}% hits` : "no calls yet",
       `${(c.missed - c0.missed).toLocaleString()} misses, ${(c.late - c0.late).toLocaleString()} late, ${(c.loads - c0.loads).toLocaleString()} loads`));
   }
-  out.push(stat("live feed", `${live.frames.toLocaleString()} frames`,
-    `${live.dropped} dropped · ${live.rejected} rejected · ${Math.max(0, live.delay).toFixed(0)} ms behind`, live.dropped || live.rejected ? "warn" : ""));
+  if (rp) {
+    out.push(stat("recording", `${live.frames.toLocaleString()} of ${rp.steps.toLocaleString()} steps`,
+      `${live.dropped} dropped while recording · ${rp.rejected + live.rejected} lines rejected${rp.truncated ? " · file ends mid-line" : ""}`,
+      live.dropped || rp.rejected || live.rejected ? "warn" : ""));
+    $("clock").textContent = `${(rp.clock / 1000).toFixed(1)} / ${(rp.duration / 1000).toFixed(1)} s`;
+    if (!rp.dragging) $("scrub").value = rp.duration ? Math.round(1000 * rp.clock / rp.duration) : 0;
+  } else {
+    out.push(stat("live feed", `${live.frames.toLocaleString()} frames`,
+      `${live.dropped} dropped · ${live.rejected} rejected · ${Math.max(0, live.delay).toFixed(0)} ms behind`, live.dropped || live.rejected ? "warn" : ""));
+  }
   $("stats").innerHTML = out.join("");
 }
 
@@ -403,9 +445,8 @@ function addMsg(role, text) {
   return el;
 }
 
-async function send(text) {
-  history.push({ role: "user", content: text });
-  addMsg("user", text);
+// An assistant reply that fills in as text arrives, with its reasoning folded apart.
+function makeReply() {
   const el = addMsg("assistant", "");
   const think = document.createElement("details");
   think.className = "think";
@@ -418,7 +459,34 @@ async function send(text) {
   const foot = document.createElement("div");
   foot.className = "foot";
   el.appendChild(foot);
-  let content = "", reasoning = "", extra = null, finish = null;
+  const r = {
+    el, body, foot, content: "", reasoning: "",
+    add(channel, text) {
+      if (channel === "reasoning") {
+        r.reasoning += text;
+        if (!think.parentNode) el.insertBefore(think, body);
+        thinkText.textContent = r.reasoning;
+      } else {
+        r.content += text;
+        body.textContent = r.content;
+        if (think.parentNode && think.open && r.content.trim()) think.open = false;
+      }
+      $("log").scrollTop = $("log").scrollHeight;
+    },
+    footer(s, finish) {
+      foot.textContent = `${s.completion_tokens ?? "?"} tokens · first token ${Number(s.ttft_ms).toFixed(0)} ms · ${Number(s.decode_tokens_per_s).toFixed(1)} tokens/s` +
+        (s.cached_tokens ? ` · ${s.cached_tokens} prompt tokens reused` : "") + (finish && finish !== "stop" ? ` · stopped: ${finish}` : "");
+    },
+  };
+  return r;
+}
+
+async function send(text) {
+  history.push({ role: "user", content: text });
+  addMsg("user", text);
+  const reply = makeReply();
+  const { el, body, foot } = reply;
+  let extra = null, finish = null;
   busy = new AbortController();
   setBusy(true);
   const req = {
@@ -453,36 +521,24 @@ async function send(text) {
         if (chunk.error) throw new Error(chunk.error.message);
         const ch = chunk.choices?.[0];
         if (ch) {
-          if (ch.delta?.reasoning_content) {
-            reasoning += ch.delta.reasoning_content;
-            if (!think.parentNode) el.insertBefore(think, body);
-            thinkText.textContent = reasoning;
-          }
-          if (ch.delta?.content) {
-            content += ch.delta.content;
-            body.textContent = content;
-            if (think.parentNode && think.open && content.trim()) think.open = false;
-          }
+          if (ch.delta?.reasoning_content) reply.add("reasoning", ch.delta.reasoning_content);
+          if (ch.delta?.content) reply.add("content", ch.delta.content);
           if (ch.finish_reason) finish = ch.finish_reason;
         }
-        if (chunk.tensorfold) extra = { ...chunk.tensorfold, usage: chunk.usage };
-        $("log").scrollTop = $("log").scrollHeight;
+        if (chunk.tensorfold) extra = { ...chunk.tensorfold, completion_tokens: chunk.usage?.completion_tokens };
       }
     }
+    const { content, reasoning } = reply;
     history.push({ role: "assistant", content, ...(reasoning ? { reasoning_content: reasoning } : {}) });
-    if (extra) {
-      const u = extra.usage || {};
-      foot.textContent = `${u.completion_tokens ?? "?"} tokens · first token ${extra.ttft_ms.toFixed(0)} ms · ${extra.decode_tokens_per_s.toFixed(1)} tokens/s` +
-        (extra.cached_tokens ? ` · ${extra.cached_tokens} prompt tokens reused` : "") + (finish && finish !== "stop" ? ` · stopped: ${finish}` : "");
-    }
+    if (extra) reply.footer(extra, finish);
   } catch (e) {
     if (e.name === "AbortError") {
-      history.push({ role: "assistant", content });
+      history.push({ role: "assistant", content: reply.content });
       foot.textContent = "stopped";
     } else {
       history.pop();
       el.classList.add("error");
-      body.textContent = (content ? content + "\n" : "") + "Error: " + e.message;
+      body.textContent = (reply.content ? reply.content + "\n" : "") + "Error: " + e.message;
     }
   } finally {
     busy = null;
@@ -510,7 +566,185 @@ $("input").addEventListener("keydown", (ev) => {
   }
 });
 
-connect();
+// Replay (TASK-16): a recording is the live feed's frames, one per line, with the chat's notes among them.
+async function readText(blob) {
+  const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+  if (head[0] === 0x1f && head[1] === 0x8b) {
+    return await new Response(blob.stream().pipeThrough(new DecompressionStream("gzip"))).text();
+  }
+  return await blob.text();
+}
+
+function parseTrace(text) {
+  const lines = text.split("\n");
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  if (!lines.length) throw new Error("the file is empty");
+  let hello;
+  try { hello = JSON.parse(lines[0]); } catch { throw new Error("its first line is not JSON"); }
+  if (!hello || hello.t !== "hello" || !validHello(hello)) throw new Error("it does not start with a TensorFold hello line");
+  const items = [];
+  let rejected = 0, truncated = false, steps = 0;
+  for (let i = 1; i < lines.length; i++) {
+    let v;
+    try { v = JSON.parse(lines[i]); } catch {
+      if (i === lines.length - 1) truncated = true; else rejected++;
+      continue;
+    }
+    if (!v || typeof v !== "object") { rejected++; continue; }
+    if (v.t === "step") {
+      if (!validStep(v) || !stepInRange(v, hello) || !(typeof v.step_us === "number" && v.step_us >= 0)) { rejected++; continue; }
+      steps++;
+      items.push({ step: true, v });
+    } else if (["chat", "text", "done", "end"].includes(v.t)) {
+      if (v.t === "chat" && !(Array.isArray(v.messages) && v.messages.every((m) => m && typeof m.content === "string"))) { rejected++; continue; }
+      if (v.t === "text" && typeof v.s !== "string") { rejected++; continue; }
+      items.push({ step: false, v });
+    }
+  }
+  if (!steps) throw new Error("it holds no engine steps");
+  // Recording time, with idle stretches between requests cut to a second.
+  let t = 0, prevEnd = null;
+  for (const it of items) {
+    if (!it.step) continue;
+    const dur = it.v.step_us / 1000, start = it.v.ms - dur;
+    const gap = prevEnd === null ? 0 : start - prevEnd;
+    it.start = (prevEnd === null ? 0 : t) + (gap > 1500 ? 1000 : Math.max(0, gap));
+    it.t = it.start + dur;
+    t = it.t;
+    prevEnd = it.v.ms;
+  }
+  // A request appears as its prefill starts; other notes right after the step before them.
+  let next = t;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].step) next = items[i].start;
+    else if (items[i].v.t === "chat") items[i].t = next;
+  }
+  let last = 0;
+  for (const it of items) {
+    if (it.t === undefined) it.t = last;
+    last = it.t = Math.max(it.t, last);
+  }
+  return { hello, items, steps, rejected, truncated, duration: last, chats: items.some((it) => it.v.t === "chat") };
+}
+
+async function loadTrace(name, blob) {
+  let trace;
+  try {
+    trace = parseTrace(await readText(blob));
+  } catch (e) {
+    showProblem(`${name} is not a TensorFold recording: ${e.message}.`);
+    return;
+  }
+  startReplay(name, trace);
+}
+
+function showProblem(text) {
+  $("empty")?.remove();
+  const el = addMsg("note error", text);
+  el.classList.add("error");
+}
+
+function startReplay(name, trace) {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  rp = { ...trace, name, i: 0, clock: 0, speed: parseFloat($("speed").value) || 1, playing: true, dragging: false, reply: null, shown: 0 };
+  topo = trace.hello;
+  $("dot").classList.remove("on");
+  const when = trace.hello.recorded ? ` on ${new Date(trace.hello.recorded * 1000).toLocaleString()}` : "";
+  $("conn").textContent = `replaying ${name}, recorded${when}`;
+  $("model").textContent = `${topo.model} · ${topo.layers} layers × ${topo.experts} experts, top ${topo.top_k} · ${topo.transport}`;
+  $("form").hidden = true;
+  $("player").hidden = false;
+  $("golive").hidden = !/^https?:$/.test(location.protocol) || new URLSearchParams(location.search).has("trace");
+  seekReplay(0);
+  $("play").textContent = "Pause";
+}
+
+function resetReplayChat() {
+  $("log").innerHTML = "";
+  rp.reply = null;
+  rp.shown = 0;
+  if (!rp.chats) addMsg("note", `This recording has no chat: ${rp.steps.toLocaleString()} engine steps of a ${topo.transport} run.`);
+}
+
+function applyItem(it) {
+  if (it.step) return onStep(it.v, it.t);
+  const n = it.v;
+  if (n.t === "chat") {
+    // Each request carries the whole conversation; show what is new.
+    for (const m of n.messages.slice(rp.shown)) {
+      if (m.role === "assistant") addMsg("assistant", m.content);
+      else addMsg("user", (m.role === "system" ? "System: " : "") + m.content);
+    }
+    rp.shown = n.messages.length + 1;
+    rp.reply = makeReply();
+  } else if (n.t === "text" && rp.reply) {
+    rp.reply.add(n.channel === "reasoning" ? "reasoning" : "content", n.s);
+  } else if (n.t === "done" && rp.reply) {
+    if (n.finish === "client_gone") rp.reply.foot.textContent = "the client stopped this reply";
+    else rp.reply.footer(n, n.finish);
+    rp.reply = null;
+  }
+}
+
+function seekReplay(t) {
+  live = freshState(topo);
+  resetReplayChat();
+  rp.i = 0;
+  rp.clock = Math.max(0, Math.min(t, rp.duration));
+  while (rp.i < rp.items.length && rp.items[rp.i].t <= rp.clock) applyItem(rp.items[rp.i++]);
+  for (const h of live.heat) h.fill(0);
+  live.packets = [];
+}
+
+function advanceReplay(dt) {
+  if (!rp.playing || rp.dragging) return;
+  rp.clock += dt * 1000 * rp.speed;
+  while (rp.i < rp.items.length && rp.items[rp.i].t <= rp.clock) applyItem(rp.items[rp.i++]);
+  if (rp.clock >= rp.duration) {
+    rp.clock = rp.duration;
+    rp.playing = false;
+    $("play").textContent = "Replay";
+  }
+}
+
+$("play").addEventListener("click", () => {
+  if (!rp) return;
+  if (!rp.playing && rp.clock >= rp.duration) seekReplay(0);
+  rp.playing = !rp.playing;
+  $("play").textContent = rp.playing ? "Pause" : "Play";
+});
+$("speed").addEventListener("change", () => { if (rp) rp.speed = parseFloat($("speed").value) || 1; });
+$("scrub").addEventListener("input", () => {
+  if (!rp) return;
+  rp.dragging = true;
+  seekReplay(rp.duration * $("scrub").value / 1000);
+  renderStats();
+});
+$("scrub").addEventListener("change", () => { if (rp) rp.dragging = false; });
+$("file").addEventListener("change", () => {
+  const f = $("file").files[0];
+  if (f) loadTrace(f.name, f);
+  $("file").value = "";
+});
+$("golive").addEventListener("click", () => { location.href = location.pathname; });
+addEventListener("dragover", (ev) => { ev.preventDefault(); document.body.classList.add("dragging"); });
+addEventListener("dragleave", (ev) => { if (!ev.relatedTarget) document.body.classList.remove("dragging"); });
+addEventListener("drop", (ev) => {
+  ev.preventDefault();
+  document.body.classList.remove("dragging");
+  const f = ev.dataTransfer?.files?.[0];
+  if (f) loadTrace(f.name, f);
+});
+
+const traceUrl = new URLSearchParams(location.search).get("trace");
+if (traceUrl) {
+  fetch(traceUrl).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.blob();
+  }).then((b) => loadTrace(traceUrl.split("/").pop(), b)).catch((e) => showProblem(`Could not load ${traceUrl}: ${e.message}.`));
+} else if (/^https?:$/.test(location.protocol)) {
+  connect();
+}
 requestAnimationFrame(draw);
 setInterval(renderStats, 250);
 </script>

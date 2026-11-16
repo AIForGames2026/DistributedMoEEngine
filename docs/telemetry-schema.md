@@ -1,6 +1,8 @@
 # Telemetry Trace Schema v0
 
-Status: **v0, PoC** (TASK-04). The WebGL inspector plays these traces; the engine starts emitting them in TASK-16. Until then, traces come from the synthetic generator in [`web/src/trace.js`](../web/src/trace.js), whose timing uses the measured hardware numbers in `bench/`.
+Status: **v0, PoC** (TASK-04). The WebGL inspector plays these traces, which come from the synthetic generator in [`web/src/trace.js`](../web/src/trace.js), whose timing uses the measured hardware numbers in `bench/`.
+
+The engine does not write this format. What it records (TASK-16) and streams live (TASK-16b) is the per-step feed described in [Live feed and recordings](#live-feed-and-recordings-tensorfoldlive-v0) below, which the 2D view in `web/live.html` plays. Per-packet events like `"D"` and `"C"` would be one event per token, layer and expert: about 786,000 for a single 2,048-token Qwen3 prefill chunk.
 
 A trace is one JSON document. Events are compact positional arrays, because a single forward pass of a real model produces tens of thousands of them.
 
@@ -68,3 +70,18 @@ Readers must ignore event kinds they do not know, so later versions can add kind
 | `"F"` | Counted (NVMe traffic) |
 
 Playback maps trace time to screen time so that the median layer takes about 1.5 seconds at 1x speed, since real layers last microseconds. Packet flights are drawn for at least 250 ms so they stay visible.
+
+## Live feed and recordings (`tensorfold.live` v0)
+
+Written by `src/telemetry.zig`. The live feed at `/telemetry` (TASK-16b) sends each object as a WebSocket text frame. A recording (`olmoe ... --record FILE`, TASK-16) holds the same objects, one per line, and may be gzipped. Times (`ms`) are milliseconds on the engine machine's monotonic clock, so only differences between them mean anything.
+
+| Line | Fields |
+|---|---|
+| `hello` (first) | `schema` (`"tensorfold.live"`), `version` (`0`), `model`, `layers`, `experts`, `top_k`, `transport`, `ranks` (one name per engine process), `owner` (for each expert, the rank holding it in every layer), `chunks` (packets per remote expert call each way, 0 if nothing is remote), `ms`; recordings add `recorded` (Unix seconds) |
+| `step` | `seq` (counts up from 0; a gap means steps were dropped), `ms` (when the step ended), `n` (tokens: a prefill chunk, or 1 when decoding), `step_us`, `layer_us` (one per layer), `x` (flat triples `layer, expert, count` for every expert that ran), `engine` (expert calls the engine itself has counted so far, by rank, or `null` where it keeps no count), `rtt_us` and `rtt_layers` (time from first dispatch to last combine, summed over the layers with remote calls so far), `cache` (`{resident, hinted, late, missed, loads}` so far, or `null` without `--cache`) |
+| `chat` (recordings from `--serve`) | `after`, `id`, `messages` (`{role, content}`, the whole conversation the client sent), `prompt_tokens`, `max_tokens`, `temperature` |
+| `text` | `after`, `channel` (`"content"` or `"reasoning"`), `s` (reply text that became visible after step `after`) |
+| `done` | `after`, `id`, `finish` (`"stop"`, `"length"`, or `"client_gone"`), and the reply's `prompt_tokens`, `cached_tokens`, `completion_tokens`, `ttft_ms`, `decode_tokens_per_s` |
+| `end` (last, when the run finished on its own) | `after`, `steps` (lines written), `dropped` (steps lost to a full ring), `ms` |
+
+`after` is the `seq` of the step written just before the line, or `null` before the first. Readers must ignore unknown line types and fields; changing an existing field's meaning requires a new `version`. The page checks a `step`'s experts against the hello's shape and rejects lines that do not fit, counting them instead of drawing them.

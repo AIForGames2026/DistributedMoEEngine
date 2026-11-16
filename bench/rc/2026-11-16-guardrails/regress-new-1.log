@@ -1,0 +1,21 @@
+load: 32 of 64 experts, 3.42 GB in 1.38 s, expert CRC32C OK
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 1.43 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.42 GB in 0.09 s)
+expert: serving, resident memory 3544 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+rdma: context 512 tokens + 256 generated, chunks of 64; KV cache all in memory: 0.20 GB in memory (all of it would be 0.20 GB), GPU attention on
+rdma: prefill 64 of 512 positions, 1.2 s
+rdma: prefill 128 of 512 positions, 2.3 s
+rdma: prefill 192 of 512 positions, 3.5 s
+rdma: prefill 256 of 512 positions, 4.6 s
+rdma: prefill 320 of 512 positions, 5.8 s
+rdma: prefill 384 of 512 positions, 6.9 s
+rdma: prefill 448 of 512 positions, 8.1 s
+rdma: prefill time: projections 0.1 s, QK norm and rope 0.1 s, attention 0.0 s, output 0.2 s, router 0.1 s, experts 8.7 s, LM head 0.0 s
+rdma: decode time: projections 0.5 s, QK norm and rope 0.0 s, attention 0.4 s, output 0.2 s, router 0.1 s, experts 5.9 s, LM head 0.2 s
+rdma: time to first token 9.283 s (55 tokens/s prefill); decode 0.028 s per token (35.19 tokens/s) over 255 steps from position 512; resident memory 4328 MB
+rdma: PASS: all 256 generated tokens and their logits match /tmp/lh_ref.bin bit for bit
+rdma: 47400 expert calls sent to rank 1, 50776 run locally; payload f32
+expert: ran 47400 expert FFNs for rank 0, 264 us each on average (max 1307 us), 12.54 s in all; resident memory 3547 MB
+expert: heap: 36 allocations, 36 frees, peak 13.1 MB, 0 bytes still allocated at exit (balanced)
+rdma: heap: 840 allocations, 840 frees, peak 370.2 MB, 0 bytes still allocated at exit (balanced)

@@ -24,6 +24,17 @@ extern fn tf_gpu_unregister(g: *Handle, host: *anyopaque) void;
 extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32) c_int;
 extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
+extern fn tf_gpu_device_bytes() usize;
+
+/// Device memory held outside the resident set that still comes out of
+/// system memory: all of it on an integrated GPU (GB10), none on a discrete one.
+pub fn systemBytes() u64
+{
+    const h = handle orelse return 0;
+    var info: Info = undefined;
+    tf_gpu_get_info(h, &info);
+    return if (info.integrated != 0) tf_gpu_device_bytes() else 0;
+}
 
 const fatbin align(64) = @embedFile("kernels.fatbin").*;
 

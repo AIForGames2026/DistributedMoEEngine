@@ -140,6 +140,13 @@ void tf_gpu_get_info(const tf_gpu *g, tf_gpu_info *info)
     *info = g->info;
 }
 
+static size_t device_bytes;
+
+size_t tf_gpu_device_bytes(void)
+{
+    return device_bytes;
+}
+
 int tf_gpu_map(tf_gpu *g, void *host, size_t len, uint64_t *dev)
 {
     CUresult r;
@@ -164,6 +171,7 @@ int tf_gpu_map(tf_gpu *g, void *host, size_t len, uint64_t *dev)
         cuMemFree(p);
         return -(int)r;
     }
+    device_bytes += len;
     g->copied[g->n_copied++] = p;
     *dev = (uint64_t)p;
     return 0;
@@ -175,11 +183,15 @@ static CUresult grow(CUdeviceptr *p, size_t *have, size_t want)
         return CUDA_SUCCESS;
     if (*p)
         cuMemFree(*p);
+    device_bytes -= *have;
     *p = 0;
     *have = 0;
     CUresult r = cuMemAlloc(p, want);
     if (r == CUDA_SUCCESS)
+    {
         *have = want;
+        device_bytes += want;
+    }
     return r;
 }
 

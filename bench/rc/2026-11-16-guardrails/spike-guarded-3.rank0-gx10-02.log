@@ -1,0 +1,26 @@
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 0.75 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+rdma: capacity: 320 expert calls per layer here; rank 1 grants 320
+rdma: memory budget 7000 MB: 4028 MB held at startup (weights, GPU buffers, runtime), so the heap may grow by 2942 MB
+rdma: context 4032 tokens + 32 generated, chunks of 64; KV cache all in memory: 1.07 GB in memory (all of it would be 1.07 GB), GPU attention on
+rdma: prefill 448 of 4032 positions, 3.6 s
+rdma: prefill 832 of 4032 positions, 6.5 s
+rdma: prefill 1216 of 4032 positions, 9.5 s
+rdma: prefill 1728 of 4032 positions, 11.8 s
+rdma: prefill 2112 of 4032 positions, 13.0 s
+rdma: prefill 2496 of 4032 positions, 14.2 s
+rdma: prefill 2880 of 4032 positions, 16.3 s
+rdma: prefill 3264 of 4032 positions, 19.2 s
+rdma: prefill 3648 of 4032 positions, 22.1 s
+rdma: before the spike: 21 steps of up to 64 tokens, 1344 tokens in 10.48 s (128 tokens/s), longest step 550.8 ms; capacity dropped 308 of 172032 calls (0.179%); longest wait on rank 1 1.01 ms (in step 1), 1513 sends waited for ring slots; memory at most 5146 MB
+rdma: during the spike: 7 steps of up to 192 tokens, 1344 tokens in 4.34 s (310 tokens/s), longest step 660.7 ms; capacity dropped 100352 of 172032 calls (58.333%); longest wait on rank 1 0.33 ms (in step 1), 784 sends waited for ring slots; memory at most 5169 MB
+rdma: after the spike: 21 steps of up to 64 tokens, 1344 tokens in 10.36 s (130 tokens/s), longest step 516.3 ms; capacity dropped 386 of 172032 calls (0.224%); longest wait on rank 1 0.41 ms (in step 12), 1552 sends waited for ring slots; memory at most 5169 MB
+rdma: prefill time: projections 0.7 s, QK norm and rope 0.4 s, attention 0.3 s, output 0.8 s, router 0.5 s, experts 21.9 s, LM head 0.0 s
+rdma: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.0 s, experts 0.2 s, LM head 0.0 s
+rdma: time to first token 25.175 s (160 tokens/s prefill); decode 0.016 s per token (61.25 tokens/s) over 31 steps from position 4032; resident memory 5157 MB
+rdma: 203244 expert calls sent to rank 1, 215774 run locally; payload f32
+rdma: capacity over 64-token steps: calls per layer at most 320 here and 320 on rank 1, per expert no limit; dropped 101046 of 520064 calls (19.430%) in 176 layer passes
+rdma: longest wait on rank 1 with nothing moving 1.01 ms; 3849 sends waited for rank 1 to grant ring slots
+rdma: heap: 289 allocations, 289 frees, peak 1116.0 MB, 0 bytes still allocated at exit (balanced)
+rdma: memory budget 7000 MB: at most 5171 MB resident plus GPU in 82 checks, 0 over budget; 0 allocations refused; peak resident 5156 MB
+rc=0

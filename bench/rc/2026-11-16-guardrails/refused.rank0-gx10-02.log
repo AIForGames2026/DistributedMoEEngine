@@ -1,0 +1,11 @@
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 0.72 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+rdma: capacity: 320 expert calls per layer here; rank 1 grants 320
+rdma: memory budget 4500 MB: 4027 MB held at startup (weights, GPU buffers, runtime), so the heap may grow by 442 MB
+rdma: 0 expert calls sent to rank 1, 0 run locally; payload f32
+rdma: capacity over 64-token steps: calls per layer at most 320 here and 320 on rank 1, per expert no limit; dropped 0 of 0 calls (0.000%) in 0 layer passes
+rdma: longest wait on rank 1 with nothing moving 0.00 ms; 0 sends waited for rank 1 to grant ring slots
+rdma: heap: 43 allocations, 43 frees, peak 31.0 MB, 0 bytes still allocated at exit (balanced)
+rdma: memory budget 4500 MB: at most 4058 MB resident plus GPU in 2 checks, 0 over budget; 1 allocations refused; peak resident 4058 MB
+error: OutOfMemory
+rc=1

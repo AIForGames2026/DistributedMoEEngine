@@ -25,6 +25,10 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len);
 
 void tf_gpu_get_info(const tf_gpu *g, tf_gpu_info *info);
 
+/* Bytes of device memory this process holds for weight copies and working
+ * buffers. On an integrated GPU they come out of system memory. */
+size_t tf_gpu_device_bytes(void);
+
 /* Makes host memory [host, host + len) readable by kernels and returns its
  * device address. An integrated GPU reads it in place (registered, no copy);
  * a discrete GPU gets a copy in device memory. Call once per region. */

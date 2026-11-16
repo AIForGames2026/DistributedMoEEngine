@@ -66,6 +66,7 @@ fn fill(buf: []f32, seed: u32) void {
 
 test {
     _ = @import("arena.zig");
+    _ = @import("budget.zig");
     _ = @import("wire.zig");
     _ = @import("transport.zig");
     _ = @import("tfref.zig");

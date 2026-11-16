@@ -1,0 +1,22 @@
+load: non-expert weights and 32 of 64 experts, 3.94 GB in 0.75 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.94 GB in 0.10 s)
+rdma: context 4032 tokens + 32 generated, chunks of 64; KV cache all in memory: 1.07 GB in memory (all of it would be 1.07 GB), GPU attention on
+rdma: prefill 448 of 4032 positions, 3.4 s
+rdma: prefill 832 of 4032 positions, 6.3 s
+rdma: prefill 1216 of 4032 positions, 9.3 s
+rdma: prefill 1728 of 4032 positions, 13.6 s
+rdma: prefill 2112 of 4032 positions, 16.9 s
+rdma: prefill 2496 of 4032 positions, 20.2 s
+rdma: prefill 2880 of 4032 positions, 23.3 s
+rdma: prefill 3264 of 4032 positions, 26.2 s
+rdma: prefill 3648 of 4032 positions, 29.2 s
+rdma: before the spike: 21 steps of up to 64 tokens, 1344 tokens in 10.27 s (131 tokens/s), longest step 512.6 ms; capacity dropped 0 of 0 calls (0.000%); longest wait on rank 1 1.00 ms (in step 1), 1523 sends waited for ring slots; memory at most 5145 MB
+rdma: during the spike: 7 steps of up to 192 tokens, 1344 tokens in 11.52 s (117 tokens/s), longest step 1671.2 ms; capacity dropped 0 of 0 calls (0.000%); longest wait on rank 1 0.32 ms (in step 2), 2244 sends waited for ring slots; memory at most 5169 MB
+rdma: after the spike: 21 steps of up to 64 tokens, 1344 tokens in 10.50 s (128 tokens/s), longest step 527.8 ms; capacity dropped 0 of 0 calls (0.000%); longest wait on rank 1 0.41 ms (in step 3), 1547 sends waited for ring slots; memory at most 5169 MB
+rdma: prefill time: projections 0.7 s, QK norm and rope 0.4 s, attention 0.3 s, output 0.8 s, router 0.5 s, experts 29.1 s, LM head 0.0 s
+rdma: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.0 s, router 0.0 s, experts 0.2 s, LM head 0.0 s
+rdma: time to first token 32.292 s (125 tokens/s prefill); decode 0.017 s per token (60.07 tokens/s) over 31 steps from position 4032; resident memory 5156 MB
+rdma: 250772 expert calls sent to rank 1, 269292 run locally; payload f32
+rdma: longest wait on rank 1 with nothing moving 1.00 ms; 5314 sends waited for rank 1 to grant ring slots
+rdma: heap: 289 allocations, 289 frees, peak 1116.0 MB, 0 bytes still allocated at exit (balanced)
+rc=0

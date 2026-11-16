@@ -499,6 +499,156 @@ pub const Moe = struct {
     prefetch: ?*const fn (ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void = null,
     /// If set, called as each step of `tokens` tokens begins and after it ends, for telemetry.
     mark: ?*const fn (ctx: *anyopaque, begin: bool, tokens: usize) void = null,
+    /// If set, caps each expert's calls per layer (TASK-17); `run` skips calls marked `Capacity.skip`.
+    capacity: ?*Capacity = null,
+};
+
+/// Capacity (TASK-17): the most calls each process, and optionally each expert, takes per layer in one step.
+/// Calls past a limit with the lowest gate weights are dropped, so their tokens keep only the residual path.
+pub const Capacity = struct {
+    /// Calls per layer each rank takes (`rank_limit[r]`), and each expert.
+    rank_limit: [max_ranks]u32 = @splat(none),
+    expert_limit: u32 = none,
+    /// Which rank owns each expert; without it every call is rank 0's.
+    owner: ?[]const u8 = null,
+    /// (token, expert) calls routed and dropped, and layer passes that dropped any.
+    routed: u64 = 0,
+    dropped: u64 = 0,
+    layers_over: u64 = 0,
+
+    pub const max_ranks = 2;
+    pub const none = std.math.maxInt(u32);
+    /// Marks a dropped call in `idx`.
+    pub const skip = std.math.maxInt(u32);
+
+    /// `factor` times an even share of `nominal` tokens' calls over `share`
+    /// of the experts, rounded up; never below 1.
+    pub fn limitFor(factor: f32, nominal: usize, cfg: Config, share: usize) u32
+    {
+        const even = @as(f32, @floatFromInt(nominal * cfg.top_k * share)) / @as(f32, @floatFromInt(cfg.experts));
+        return @max(1, @as(u32, @intFromFloat(@min(@ceil(factor * even), 4e9))));
+    }
+
+    /// Limits for each rank (`rank_factor`) and each expert (`expert_factor`), 0 for none.
+    pub fn init(cfg: Config, nominal: usize, rank_factor: f32, expert_factor: f32, owner: ?[]const u8) Capacity
+    {
+        var self: Capacity = .{ .owner = owner };
+        if (expert_factor > 0)
+        {
+            self.expert_limit = limitFor(expert_factor, nominal, cfg, 1);
+        }
+        if (rank_factor > 0)
+        {
+            for (&self.rank_limit, 0..) |*l, r|
+            {
+                var owned: usize = 0;
+                for (0..cfg.experts) |e|
+                {
+                    owned += @intFromBool(if (owner) |o| o[e] == r else r == 0);
+                }
+                if (owned > 0)
+                {
+                    l.* = limitFor(rank_factor, nominal, cfg, owned);
+                }
+            }
+        }
+        return self;
+    }
+
+    fn rankOf(self: *const Capacity, e: u32) usize
+    {
+        return if (self.owner) |o| o[e] else 0;
+    }
+
+    /// Drops calls past each expert's limit, then each rank's, keeping the highest gate weights.
+    /// `count` holds one entry per expert, `list` one per call.
+    pub fn apply(self: *Capacity, idx: []u32, wts: []f32, calls: usize, count: []u32, list: []u32) void
+    {
+        @memset(count, 0);
+        var per_rank: [max_ranks]u32 = @splat(0);
+        var over = false;
+        for (idx[0..calls]) |e|
+        {
+            if (e == skip)
+            {
+                continue;
+            }
+            count[e] += 1;
+            self.routed += 1;
+            over = over or count[e] > self.expert_limit;
+            const r = self.rankOf(e);
+            per_rank[r] += 1;
+            over = over or per_rank[r] > self.rank_limit[r];
+        }
+        if (!over)
+        {
+            return;
+        }
+        self.layers_over += 1;
+        for (count, 0..) |cnt, e|
+        {
+            if (cnt > self.expert_limit)
+            {
+                const ctx: Pick = .{ .cap = self, .expert = @intCast(e) };
+                per_rank[self.rankOf(@intCast(e))] -= self.dropOver(idx, wts, calls, list, ctx, self.expert_limit);
+            }
+        }
+        for (per_rank, 0..) |cnt, r|
+        {
+            if (cnt > self.rank_limit[r])
+            {
+                _ = self.dropOver(idx, wts, calls, list, .{ .cap = self, .rank = r }, self.rank_limit[r]);
+            }
+        }
+    }
+
+    /// Which calls a limit covers: one expert's, or one rank's.
+    const Pick = struct {
+        cap: *const Capacity,
+        expert: ?u32 = null,
+        rank: usize = 0,
+
+        fn has(self: Pick, e: u32) bool
+        {
+            if (e == skip)
+            {
+                return false;
+            }
+            return if (self.expert) |x| e == x else self.cap.rankOf(e) == self.rank;
+        }
+    };
+
+    /// Keeps the `limit` highest-weight calls `pick` covers; returns how many it dropped.
+    fn dropOver(self: *Capacity, idx: []u32, wts: []f32, calls: usize, list: []u32, pick: Pick, limit: u32) u32
+    {
+        var m: usize = 0;
+        for (idx[0..calls], 0..) |x, s|
+        {
+            if (pick.has(x))
+            {
+                list[m] = @intCast(s);
+                m += 1;
+            }
+        }
+        if (m <= limit)
+        {
+            return 0;
+        }
+        const byWeight = struct {
+            fn lt(w: []const f32, a: u32, b: u32) bool
+            {
+                return w[a] > w[b] or (w[a] == w[b] and a < b);
+            }
+        }.lt;
+        std.mem.sort(u32, list[0..m], wts, byWeight);
+        for (list[limit..m]) |s|
+        {
+            idx[s] = skip;
+            wts[s] = 0;
+        }
+        self.dropped += m - limit;
+        return @intCast(m - limit);
+    }
 };
 
 /// The lookahead predictor (TASK-11). After layer S's attention, it applies
@@ -745,18 +895,17 @@ pub const KvCache = struct {
         return .{ .cap = cap, .d = cfg.kvDim(), .k = &.{}, .v = &.{}, .tier = tier };
     }
 
-    /// Room for `cap` positions in every layer. Page-aligned, so a GPU can
-    /// map it; `a` is unused and kept for callers.
+    /// Room for `cap` positions in every layer, from `big_allocator`.
+    /// Page-aligned, so a GPU can map it; `a` is unused and kept for callers.
     pub fn init(a: std.mem.Allocator, cfg: Config, cap: usize) !KvCache
     {
         _ = a;
-        const pages = std.heap.page_allocator;
         const d = cfg.kvDim();
         // Positions rounded up to whole tiles, so the GPU never reads past the end.
         const room = (cap + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions * AttentionJob.tile_positions;
-        const k = try pages.alloc(f32, cfg.layers * room * d);
-        errdefer pages.free(k);
-        const v = try pages.alloc(f32, cfg.layers * room * d);
+        const k = try allocPages(cfg.layers * room * d);
+        errdefer freePages(k);
+        const v = try allocPages(cfg.layers * room * d);
         var self: KvCache = .{ .cap = room, .d = d, .k = k, .v = v };
         if (gpu_register) |reg|
         {
@@ -795,9 +944,22 @@ pub const KvCache = struct {
                 un(std.mem.sliceAsBytes(self.v));
             }
         }
-        std.heap.page_allocator.free(self.k);
-        std.heap.page_allocator.free(self.v);
+        freePages(self.k);
+        freePages(self.v);
         self.* = undefined;
+    }
+
+    const page_align = std.mem.Alignment.fromByteUnits(std.heap.page_size_max);
+
+    fn allocPages(n: usize) ![]f32
+    {
+        const bytes = big_allocator.rawAlloc(n * @sizeOf(f32), page_align, @returnAddress()) orelse return error.OutOfMemory;
+        return @as([*]f32, @ptrCast(@alignCast(bytes)))[0..n];
+    }
+
+    fn freePages(s: []f32) void
+    {
+        big_allocator.rawFree(std.mem.sliceAsBytes(s), page_align, @returnAddress());
     }
 
     /// Device addresses of each tile of `layer` covering positions 0 to `len` - 1.
@@ -899,6 +1061,8 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const guess_val = try a.alloc(f32, kx);
     const votes = try a.alloc(u32, if (la != null) cfg.experts else 0);
     const wanted_list = try a.alloc(u32, votes.len);
+    const cap_count = try a.alloc(u32, if (moe.capacity != null) cfg.experts else 0);
+    const cap_list = try a.alloc(u32, if (moe.capacity != null) n * k else 0);
 
     for (tokens, 0..) |tok, t|
     {
@@ -1035,6 +1199,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         {
             scoreGuesses(p, guess, idx, li, n, k, kx, horizon, cfg.layers);
         }
+        if (moe.capacity) |cap|
+        {
+            cap.apply(idx, wts, n * k, cap_count, cap_list);
+        }
         Profile.lap(&profile.router, &pt);
         @memset(tmp, 0);
         try moe.run(moe.ctx, li, x, n, idx, wts, tmp[0 .. n * d]);
@@ -1068,11 +1236,22 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         rmsnorm(h[(n - 1) * d ..][0..d], w.out_norm, cfg.eps, x[0..d]);
         w.head.matmul(x, 1, logits, scratch);
     }
+    if (after_step) |f|
+    {
+        f();
+    }
     if (moe.mark) |m|
     {
         m(moe.ctx, false, n);
     }
 }
+
+/// Called at the end of every step when set (TASK-17: the memory budget's check).
+pub var after_step: ?*const fn () void = null;
+
+/// Where the KV cache and batched expert space come from; the engine points
+/// it at its budgeted heap (TASK-17).
+pub var big_allocator: std.mem.Allocator = std.heap.page_allocator;
 
 /// From this many tokens on, `step` splits its loops over tokens across threads.
 pub var parallel_tokens: usize = 64;
@@ -1488,7 +1667,7 @@ pub const LocalExperts = struct {
     {
         if (self.batch.len > 0)
         {
-            std.heap.page_allocator.free(self.batch);
+            big_allocator.free(self.batch);
         }
         self.batch = &.{};
     }
@@ -1503,6 +1682,10 @@ pub const LocalExperts = struct {
         }
         for (0..n) |t| {
             for (0..k) |j| {
+                if (idx[t * k + j] == Capacity.skip)
+                {
+                    continue;
+                }
                 const e = self.get(layer, idx[t * k + j]) orelse return error.ExpertNotLocal;
                 e.forward(x[t * d ..][0..d], self.out, self.scratch);
                 self.calls += 1;
@@ -1532,23 +1715,29 @@ pub const LocalExperts = struct {
         {
             if (self.batch.len > 0)
             {
-                std.heap.page_allocator.free(self.batch);
+                big_allocator.free(self.batch);
             }
             self.batch = &.{};
-            self.batch = try std.heap.page_allocator.alloc(f32, need);
+            self.batch = try big_allocator.alloc(f32, need);
         }
         const order: []u32 = @ptrCast(self.batch[0..calls]);
         const inv: []u32 = @ptrCast(self.batch[calls..][0..calls]);
         const sum = self.batch[2 * calls ..][0 .. n * d];
-        // Calls grouped by expert, each group in call order.
+        // Calls grouped by expert, each group in call order; dropped calls get no row.
         var count: [max_group + 1]u32 = @splat(0);
+        var rows: usize = 0;
         for (idx[0..calls]) |e|
         {
+            if (e == Capacity.skip)
+            {
+                continue;
+            }
             if (e >= ne)
             {
                 return error.BadExpert;
             }
             count[e + 1] += 1;
+            rows += 1;
         }
         for (1..ne + 1) |e|
         {
@@ -1558,10 +1747,17 @@ pub const LocalExperts = struct {
         @memcpy(fill[0..ne], count[0..ne]);
         for (idx[0..calls], 0..) |e, c|
         {
+            if (e == Capacity.skip)
+            {
+                // Weight 0 on row 0 adds nothing on the GPU path.
+                inv[c] = 0;
+                continue;
+            }
             order[fill[e]] = @intCast(c);
             inv[c] = fill[e];
             fill[e] += 1;
         }
+        const kept = order[0..rows];
         var used: [max_group]Expert = undefined;
         var starts: [max_group + 1]u32 = undefined;
         var groups: usize = 0;
@@ -1575,7 +1771,11 @@ pub const LocalExperts = struct {
             starts[groups] = count[e];
             groups += 1;
         }
-        starts[groups] = @intCast(calls);
+        starts[groups] = @intCast(rows);
+        if (rows == 0)
+        {
+            return;
+        }
         for (0..groups) |g|
         {
             self.calls += starts[g + 1] - starts[g];
@@ -1583,11 +1783,11 @@ pub const LocalExperts = struct {
         if (gpu_experts) |run|
         {
             // Batch row i is token order[i] / k: reuse `order` once it holds tokens.
-            for (order) |*c|
+            for (kept) |*c|
             {
                 c.* /= @intCast(k);
             }
-            if (run(.{ .experts = used[0..groups], .first = starts[0 .. groups + 1], .src = order, .inv = inv, .w = w[0..calls], .x = x[0 .. n * d], .n = n, .k = k, .y = sum }))
+            if (run(.{ .experts = used[0..groups], .first = starts[0 .. groups + 1], .src = kept, .inv = inv, .w = w[0..calls], .x = x[0 .. n * d], .n = n, .k = k, .y = sum }))
             {
                 for (out[0 .. n * d], sum) |*o, v|
                 {
@@ -1597,17 +1797,20 @@ pub const LocalExperts = struct {
             }
             for (inv, 0..) |r, c|
             {
-                order[r] = @intCast(c);
+                if (idx[c] != Capacity.skip)
+                {
+                    order[r] = @intCast(c);
+                }
             }
         }
         // Without a GPU the batch has room for the CPU path; after a GPU failure it is borrowed.
         const cpu_need = 3 * calls * d + 2 * calls * f;
-        const borrowed = if (self.batch.len < small + cpu_need) try std.heap.page_allocator.alloc(f32, cpu_need) else @as([]f32, &.{});
+        const borrowed = if (self.batch.len < small + cpu_need) try big_allocator.alloc(f32, cpu_need) else @as([]f32, &.{});
         defer
         {
             if (borrowed.len > 0)
             {
-                std.heap.page_allocator.free(borrowed);
+                big_allocator.free(borrowed);
             }
         }
         const rest = if (borrowed.len > 0) borrowed else self.batch[small..];
@@ -1616,7 +1819,7 @@ pub const LocalExperts = struct {
         const ub = rest[calls * d + calls * f ..][0 .. calls * f];
         const yb = rest[calls * d + 2 * calls * f ..][0 .. calls * d];
         const contrib = rest[2 * calls * d + 2 * calls * f ..][0 .. calls * d];
-        for (order, 0..) |c, i|
+        for (kept, 0..) |c, i|
         {
             @memcpy(xb[i * d ..][0..d], x[(c / k) * d ..][0..d]);
         }
@@ -1632,7 +1835,7 @@ pub const LocalExperts = struct {
             }
             ex.down.matmul(gb, cnt, yb[first * d ..], self.scratch);
         }
-        for (order, 0..) |c, i|
+        for (kept, 0..) |c, i|
         {
             @memcpy(contrib[c * d ..][0..d], yb[i * d ..][0..d]);
         }
@@ -1641,6 +1844,10 @@ pub const LocalExperts = struct {
             for (0..k) |j|
             {
                 const c = t * k + j;
+                if (idx[c] == Capacity.skip)
+                {
+                    continue;
+                }
                 for (out[t * d ..][0..d], contrib[c * d ..][0..d]) |*o, y|
                 {
                     o.* += w[c] * y;
@@ -1652,6 +1859,118 @@ pub const LocalExperts = struct {
 
 test {
     _ = pool;
+}
+
+test "capacity keeps each expert's highest-weight calls and drops the rest" {
+    // Two choices per token over 4 experts; expert 1 is chosen by all five tokens.
+    var idx = [_]u32{ 1, 0, 1, 2, 1, 3, 1, 0, 1, 2 };
+    var wts = [_]f32{ 0.5, 0.1, 0.9, 0.1, 0.2, 0.1, 0.9, 0.1, 0.7, 0.3 };
+    var count: [4]u32 = undefined;
+    var list: [10]u32 = undefined;
+    var cap: Capacity = .{ .expert_limit = 2 };
+    cap.apply(&idx, &wts, idx.len, &count, &list);
+    // Kept: 0.9 at call 2 and the tied 0.9 at call 6 (the earlier token first).
+    const want = [_]u32{ Capacity.skip, 0, 1, 2, Capacity.skip, 3, 1, 0, Capacity.skip, 2 };
+    try std.testing.expectEqualSlices(u32, &want, &idx);
+    try std.testing.expectEqual(@as(f32, 0), wts[0]);
+    try std.testing.expectEqual(@as(u64, 3), cap.dropped);
+    try std.testing.expectEqual(@as(u64, 10), cap.routed);
+    try std.testing.expectEqual(@as(u64, 1), cap.layers_over);
+    // Applying again changes nothing: the kept calls already fit.
+    cap.apply(&idx, &wts, idx.len, &count, &list);
+    try std.testing.expectEqual(@as(u64, 3), cap.dropped);
+    try std.testing.expectEqualSlices(u32, &want, &idx);
+    const cfg: Config = .{ .arch = .olmoe, .layers = 1, .d_model = 1, .d_ff = 1, .heads = 1, .kv_heads = 1, .head_dim = 1, .experts = 64, .top_k = 8, .vocab = 1, .eps = 0, .rope_theta = 0 };
+    try std.testing.expectEqual(@as(u32, 10), Capacity.limitFor(1.25, 64, cfg, 1));
+    try std.testing.expectEqual(@as(u32, 1), Capacity.limitFor(1.25, 1, cfg, 1));
+    // Half the experts each: 1.25 x 64 tokens x 8 choices / 2.
+    var owner: [64]u8 = undefined;
+    for (&owner, 0..) |*o, e|
+    {
+        o.* = @intFromBool(e >= 32);
+    }
+    const split = Capacity.init(cfg, 64, 1.25, 0, &owner);
+    try std.testing.expectEqual(@as(u32, 320), split.rank_limit[0]);
+    try std.testing.expectEqual(@as(u32, 320), split.rank_limit[1]);
+    try std.testing.expectEqual(Capacity.none, split.expert_limit);
+    try std.testing.expectEqual(@as(u32, 640), Capacity.init(cfg, 64, 1.25, 0, null).rank_limit[0]);
+}
+
+test "capacity per rank keeps each rank's highest-weight calls" {
+    // Four experts, 0 and 1 on rank 0, 2 and 3 on rank 1; two choices per token.
+    const owner = [_]u8{ 0, 0, 1, 1 };
+    var idx = [_]u32{ 2, 0, 3, 1, 2, 3, 2, 0 };
+    var wts = [_]f32{ 0.6, 0.4, 0.7, 0.3, 0.5, 0.5, 0.9, 0.1 };
+    var count: [4]u32 = undefined;
+    var list: [8]u32 = undefined;
+    var cap: Capacity = .{ .owner = &owner, .rank_limit = .{ Capacity.none, 3 } };
+    cap.apply(&idx, &wts, idx.len, &count, &list);
+    // Rank 1 had 5 calls (weights 0.6, 0.7, 0.5, 0.5, 0.9): it keeps 0.9, 0.7, 0.6.
+    const want = [_]u32{ 2, 0, 3, 1, Capacity.skip, Capacity.skip, 2, 0 };
+    try std.testing.expectEqualSlices(u32, &want, &idx);
+    try std.testing.expectEqual(@as(u64, 2), cap.dropped);
+    // An expert limit first, then the rank's: expert 2 keeps one call, so rank 1 fits.
+    var idx2 = [_]u32{ 2, 0, 3, 1, 2, 3, 2, 0 };
+    var wts2 = [_]f32{ 0.6, 0.4, 0.7, 0.3, 0.5, 0.5, 0.9, 0.1 };
+    var both: Capacity = .{ .owner = &owner, .rank_limit = .{ Capacity.none, 3 }, .expert_limit = 1 };
+    both.apply(&idx2, &wts2, idx2.len, &count, &list);
+    const want2 = [_]u32{ Capacity.skip, 0, 3, 1, Capacity.skip, Capacity.skip, 2, Capacity.skip };
+    try std.testing.expectEqualSlices(u32, &want2, &idx2);
+    try std.testing.expectEqual(@as(u64, 4), both.dropped);
+}
+
+test "capacity: unchanged output when nothing is dropped, finite output when calls are" {
+    const gpa = std.testing.allocator;
+    const file = @embedFile("olmoe_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [8]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+    defer local.deinit();
+    // 6 tokens run calls one at a time; 24 run them batched.
+    for ([_]usize{ 6, 24 }) |n|
+    {
+        const tokens = try gpa.alloc(u32, n);
+        defer gpa.free(tokens);
+        for (tokens, 0..) |*t, i|
+        {
+            t.* = @intCast((i * 37 + 5) % cfg.vocab);
+        }
+        const plain = try gpa.alloc(f32, n * cfg.vocab);
+        defer gpa.free(plain);
+        const roomy = try gpa.alloc(f32, n * cfg.vocab);
+        defer gpa.free(roomy);
+        const tight = try gpa.alloc(f32, n * cfg.vocab);
+        defer gpa.free(tight);
+        try forward(gpa, &w, local.moe(), tokens, plain, null);
+        var big: Capacity = .{ .expert_limit = @intCast(n) };
+        var with = local.moe();
+        with.capacity = &big;
+        try forward(gpa, &w, with, tokens, roomy, null);
+        try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(plain), std.mem.sliceAsBytes(roomy));
+        try std.testing.expectEqual(@as(u64, 0), big.dropped);
+        const calls_before = local.calls;
+        var small: Capacity = .{ .expert_limit = 1 };
+        with.capacity = &small;
+        try forward(gpa, &w, with, tokens, tight, null);
+        try std.testing.expect(small.dropped > 0);
+        try std.testing.expectEqual(small.routed - small.dropped, local.calls - calls_before);
+        for (tight) |v|
+        {
+            try std.testing.expect(std.math.isFinite(v));
+        }
+        try std.testing.expect(!std.mem.eql(u8, std.mem.sliceAsBytes(plain), std.mem.sliceAsBytes(tight)));
+    }
 }
 
 test "tiny OLMoE matches transformers (tools/ref/ref_olmoe.py --tiny)" {

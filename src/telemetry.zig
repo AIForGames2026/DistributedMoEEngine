@@ -146,7 +146,7 @@ pub const Tap = struct {
 
     pub fn moe(self: *Tap) olmoe.Moe
     {
-        return .{ .ctx = self, .run = run, .ahead = self.inner.ahead, .prefetch = if (self.inner.prefetch != null) prefetch else null, .mark = mark };
+        return .{ .ctx = self, .run = run, .ahead = self.inner.ahead, .prefetch = if (self.inner.prefetch != null) prefetch else null, .mark = mark, .capacity = self.inner.capacity };
     }
 
     fn mark(ctx: *anyopaque, begin: bool, tokens: usize) void
@@ -179,7 +179,10 @@ pub const Tap = struct {
         const row = self.counts[layer * self.feed.experts ..][0..self.feed.experts];
         for (idx[0 .. n * self.top_k]) |e|
         {
-            row[e] += 1;
+            if (e != olmoe.Capacity.skip)
+            {
+                row[e] += 1;
+            }
         }
     }
 

@@ -63,10 +63,15 @@ pub const Endpoint = struct {
     inbox: Inbox = .{},
     /// The peer has sent its goodbye and will send nothing more.
     peer_done: bool = false,
+    /// Expert calls per layer the peer has granted (TASK-17): null until its
+    /// grant arrives, 0 for no limit.
+    peer_capacity: ?u16 = null,
     stats: Stats = .{},
 
-    /// Control immediates carry their message in the slot field.
+    /// Control immediates carry their message in the slot field when `gen8`
+    /// is 0; with `gen8` 1 the slot field is a capacity grant.
     const control_bye = 1;
+    const control_grant = 1;
 
     const Inbox = struct {
         buf: [256]u32 = undefined,
@@ -185,11 +190,41 @@ pub const Endpoint = struct {
                     self.inbox.len += 1;
                 },
                 .control => {
-                    if (imm.slot != control_bye or self.peer_done) return error.ProtocolError;
+                    if (imm.gen8 == control_grant)
+                    {
+                        self.peer_capacity = imm.slot;
+                        continue;
+                    }
+                    if (imm.gen8 != 0 or imm.slot != control_bye or self.peer_done)
+                    {
+                        return error.ProtocolError;
+                    }
                     self.peer_done = true;
                 },
             }
         }
+    }
+
+    /// Tells the peer how many expert calls per layer it may send (0: no limit).
+    pub fn grantCapacity(self: *Endpoint, calls: u16) Error!void
+    {
+        const imm: wire.Imm = .{ .slot = calls, .kind = .control, .gen8 = control_grant, .src_rank = self.rank };
+        try self.backend.vtable.post_imm(self.backend.ptr, imm.encode());
+    }
+
+    /// Waits for the peer's capacity grant.
+    pub fn awaitCapacity(self: *Endpoint) Error!u16
+    {
+        while (self.peer_capacity == null)
+        {
+            try self.pump();
+            if (self.peer_done)
+            {
+                return error.ConnectionClosed;
+            }
+            std.atomic.spinLoopHint();
+        }
+        return self.peer_capacity.?;
     }
 
     /// Returns any held credits and tells the peer we are done sending.
@@ -315,6 +350,22 @@ test "goodbye handshake completes on both sides" {
     defer pair.deinit();
     var a = Endpoint.init(pair.side(0).backend(), 0, 4);
     var b = Endpoint.init(pair.side(1).backend(), 1, 4);
+    try a.sendBye();
+    try b.sendBye();
+    try a.awaitBye();
+    try b.awaitBye();
+    try std.testing.expect(a.peer_done and b.peer_done);
+}
+
+test "a capacity grant reaches the peer and leaves the goodbye working" {
+    var pair = try shm.Pair.create(4);
+    defer pair.deinit();
+    var a = Endpoint.init(pair.side(0).backend(), 0, 4);
+    var b = Endpoint.init(pair.side(1).backend(), 1, 4);
+    try std.testing.expectEqual(@as(?u16, null), a.peer_capacity);
+    try b.grantCapacity(320);
+    try std.testing.expectEqual(@as(u16, 320), try a.awaitCapacity());
+    try std.testing.expect(!a.peer_done);
     try a.sendBye();
     try b.sendBye();
     try a.awaitBye();

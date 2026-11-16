@@ -33,7 +33,16 @@
 //!          --ctx N (the server's context, default 4096), --no-reuse (every
 //!          request runs cold instead of reusing the previous one's prefix),
 //!          --record FILE (TASK-16: rank 0 writes each step's experts, and the
-//!          server's chat, to FILE for the built-in page to replay)
+//!          server's chat, to FILE for the built-in page to replay),
+//!          --capacity C (TASK-17: each process takes at most C times its even
+//!          share of a --chunk step's expert calls per layer, rank 1 granting
+//!          its limit to rank 0; calls past it are dropped and counted),
+//!          --expert-capacity C (the same for each expert), --max-step N (the
+//!          most tokens one step may bring to the split, default 64),
+//!          --memory-budget MB (a hard limit on this process's memory: the
+//!          heap refuses to grow past what the weights and GPU leave),
+//!          --spike F (with --context: the middle third of the prompt comes in
+//!          steps F times as big, reported phase by phase)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -73,6 +82,7 @@ const chat = @import("chat.zig");
 const completion = @import("completion.zig");
 const serve = @import("serve.zig");
 const telemetry = @import("telemetry.zig");
+const budget = @import("budget.zig");
 const gpu =if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
@@ -84,6 +94,10 @@ const gpu =if (build_options.gpu) @import("gpu.zig") else struct {
         return false;
     }
     fn stop() void {}
+    fn systemBytes() u64
+    {
+        return 0;
+    }
 };
 
 const max_experts = 1024;
@@ -130,7 +144,18 @@ const Options = struct {
     ctx: usize = 4096,
     reuse: bool = true,
     record: ?[]const u8 = null,
+    capacity: f32 = 0,
+    expert_capacity: f32 = 0,
+    max_step: usize = Experts.default_max_tokens,
+    memory_budget: u64 = 0,
+    spike: usize = 0,
 };
+
+/// Every allocation of this process goes through `proc_heap` (TASK-17), which
+/// counts what is live and enforces `--memory-budget` once it is armed.
+var proc_heap: budget.Heap = undefined;
+var heap_label: []const u8 = "olmoe";
+var memory: ?budget.Memory = null;
 
 /// A router's view of the swarm (TASK-09): its tracker link, watching the
 /// expert process it connected to, and the ownership that process announced.
@@ -141,7 +166,10 @@ const Swarm = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    const gpa = init.gpa;
+    proc_heap = .init(init.gpa);
+    defer reportHeap();
+    const gpa = proc_heap.allocator();
+    olmoe.big_allocator = gpa;
     const opts = parseArgs(init) catch {
         std.debug.print(
             \\usage: olmoe local|shm|rdma MODEL --golden G.tfref [options]
@@ -153,6 +181,7 @@ pub fn main(init: std.process.Init) !void {
             \\         --tracker IP[:PORT]  --advertise IP  (a router with --tracker needs no --host)
             \\         --serve [IP:]PORT  --ctx N  --no-reuse  (an OpenAI-compatible server instead of --golden)
             \\         --record FILE  (rank 0 records every step for the page to replay)
+            \\         --capacity C  --expert-capacity C  --max-step N  --memory-budget MB  --spike F  (TASK-17)
             \\
         , .{});
         std.process.exit(2);
@@ -165,7 +194,8 @@ pub fn main(init: std.process.Init) !void {
         var l = try Loaded.init(gpa, opts.model, &all, true, opts.cache == 0);
         defer l.deinit(gpa);
         if (opts.gpu) try gpu.map(l.weightRegion());
-        var experts: Experts = .{ .local = &l.local };
+        heap_label = "local";
+        var experts: Experts = .{ .local = &l.local, .max_tokens = opts.max_step };
         try experts.alloc(gpa);
         defer experts.free(gpa);
         const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &all, "local") else null;
@@ -181,6 +211,12 @@ pub fn main(init: std.process.Init) !void {
         {
             moe.ahead = &la;
         }
+        var cap = olmoe.Capacity.init(l.cfg, opts.chunk, opts.capacity, opts.expert_capacity, null);
+        if (opts.capacity > 0 or opts.expert_capacity > 0)
+        {
+            moe.capacity = &cap;
+        }
+        try armBudget(opts, "local");
         var host_buf: [64]u8 = undefined;
         const host = hostName(&host_buf);
         const nobody: [max_experts]u8 = @splat(0);
@@ -205,6 +241,7 @@ pub fn main(init: std.process.Init) !void {
         {
             reportCache("local", b.cache);
         }
+        reportGuards(opts, "local", moe.capacity, null);
         return result;
     }
     const is_rdma = std.mem.startsWith(u8, mode, "rdma");
@@ -310,6 +347,36 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.serve = value;
         } else if (std.mem.eql(u8, arg, "--record")) {
             opts.record = value;
+        } else if (std.mem.eql(u8, arg, "--capacity")) {
+            opts.capacity = try std.fmt.parseFloat(f32, value);
+            if (!(opts.capacity > 0))
+            {
+                return error.Usage;
+            }
+        } else if (std.mem.eql(u8, arg, "--expert-capacity")) {
+            opts.expert_capacity = try std.fmt.parseFloat(f32, value);
+            if (!(opts.expert_capacity > 0))
+            {
+                return error.Usage;
+            }
+        } else if (std.mem.eql(u8, arg, "--max-step")) {
+            opts.max_step = try std.fmt.parseInt(usize, value, 10);
+            if (opts.max_step == 0)
+            {
+                return error.Usage;
+            }
+        } else if (std.mem.eql(u8, arg, "--memory-budget")) {
+            opts.memory_budget = (try std.fmt.parseInt(u64, value, 10)) * 1_000_000;
+            if (opts.memory_budget == 0)
+            {
+                return error.Usage;
+            }
+        } else if (std.mem.eql(u8, arg, "--spike")) {
+            opts.spike = try std.fmt.parseInt(usize, value, 10);
+            if (opts.spike < 2)
+            {
+                return error.Usage;
+            }
         } else if (std.mem.eql(u8, arg, "--ctx")) {
             opts.ctx = try std.fmt.parseInt(usize, value, 10);
             if (opts.ctx < 2) return error.Usage;
@@ -539,15 +606,17 @@ const Experts = struct {
     /// Calls whose expert is still loading, by (token, choice) index.
     pending: []u32 = &.{},
     pending_want: []Want = &.{},
+    /// The most tokens one step may bring (`--max-step`).
+    max_tokens: usize = default_max_tokens,
 
-    const max_tokens = 64;
+    const default_max_tokens = 64;
 
     fn alloc(self: *Experts, gpa: std.mem.Allocator) !void
     {
         const cfg = self.local.cfg;
-        self.contrib = try gpa.alloc(f32, max_tokens * cfg.top_k * cfg.d_model);
-        self.pending = try gpa.alloc(u32, max_tokens * cfg.top_k);
-        self.pending_want = try gpa.alloc(Want, max_tokens * cfg.top_k);
+        self.contrib = try gpa.alloc(f32, self.max_tokens * cfg.top_k * cfg.d_model);
+        self.pending = try gpa.alloc(u32, self.max_tokens * cfg.top_k);
+        self.pending_want = try gpa.alloc(Want, self.max_tokens * cfg.top_k);
     }
 
     fn free(self: *Experts, gpa: std.mem.Allocator) void
@@ -636,6 +705,10 @@ const Experts = struct {
         var waiting: usize = 0;
         for (0..n * k) |s|
         {
+            if (idx[s] == olmoe.Capacity.skip)
+            {
+                continue;
+            }
             if (owner) |o|
             {
                 if (o[idx[s]] != 0)
@@ -706,7 +779,7 @@ const Experts = struct {
         const self: *Experts = @ptrCast(@alignCast(ctx));
         const d = self.local.cfg.d_model;
         const k = self.local.cfg.top_k;
-        if (n > max_tokens)
+        if (n > self.max_tokens)
         {
             return error.TooManyTokens;
         }
@@ -718,6 +791,10 @@ const Experts = struct {
             for (0..k) |j|
             {
                 const s = t * k + j;
+                if (idx[s] == olmoe.Capacity.skip)
+                {
+                    continue;
+                }
                 for (out[t * d ..][0..d], self.contrib[s * d ..][0..d]) |*o, y|
                 {
                     o.* += w[s] * y;
@@ -865,6 +942,12 @@ const SplitMoe = struct {
     rtt_ns: u64 = 0,
     /// The tracker link watching rank 1 (TASK-09), if there is one.
     health: ?*tracker.Client = null,
+    /// The longest the router waited on rank 1 with nothing sent or received
+    /// (TASK-17), and the sends that waited for rank 1 to grant ring slots.
+    stall_max_ns: u64 = 0,
+    credit_waits: u64 = 0,
+    /// The longest such wait since the spike test last cleared it.
+    stall_recent_ns: u64 = 0,
 
     fn moe(self: *SplitMoe) olmoe.Moe {
         return .{ .ctx = self, .run = run };
@@ -962,21 +1045,35 @@ const SplitMoe = struct {
         // Packets, not expert calls: each call is `chunks` packets each way.
         var sent: usize = 0;
         var got: usize = 0;
+        // When the current wait on rank 1 began, or 0 when not waiting.
+        var waiting: u64 = 0;
         // Dispatch every remote (token, choice); drain combines whenever the
         // peer has no free slot, so neither side waits on the other forever.
         for (0..n * k) |s| {
             const e = idx[s];
-            if (self.owner[e] == 0) continue;
+            if (e == olmoe.Capacity.skip or self.owner[e] == 0)
+            {
+                continue;
+            }
             for (0..chunks) |ch| {
                 self.pkt.header = .{ .token_id = s, .generation = 0, .src_rank = 0, .layer = @intCast(layer), .expert = @intCast(e), .flags = 0, .gate_weight = w[s], .payload_len = 0 };
                 try wire.encodeChunk(self.pkt, self.enc, x[(s / k) * d ..][0..d], ch);
+                var blocked = false;
                 while (true) {
                     self.ep.trySend(self.pkt, .dispatch) catch |err| switch (err) {
                         error.WouldBlock => {
+                            if (!blocked)
+                            {
+                                blocked = true;
+                                self.credit_waits += 1;
+                            }
+                            var any = false;
                             while (try self.ep.tryRecv()) |r| {
                                 try self.take(r, layer, idx, n);
                                 got += 1;
+                                any = true;
                             }
+                            waiting = self.waited(waiting, any);
                             try self.ep.flushCredits();
                             try self.checkPeer();
                             continue;
@@ -985,6 +1082,7 @@ const SplitMoe = struct {
                     };
                     break;
                 }
+                waiting = self.waited(waiting, true);
                 sent += 1;
             }
             self.remote += 1;
@@ -994,12 +1092,14 @@ const SplitMoe = struct {
         while (got < sent) {
             const r = (try self.ep.tryRecv()) orelse
             {
+                waiting = self.waited(waiting, false);
                 try self.checkPeer();
                 std.atomic.spinLoopHint();
                 continue;
             };
             try self.take(r, layer, idx, n);
             got += 1;
+            waiting = self.waited(waiting, true);
         }
         try self.ep.flushCredits();
         if (sent > 0)
@@ -1011,9 +1111,30 @@ const SplitMoe = struct {
         for (0..n) |t| {
             for (0..k) |j| {
                 const s = t * k + j;
+                if (idx[s] == olmoe.Capacity.skip)
+                {
+                    continue;
+                }
                 for (out[t * d ..][0..d], self.contrib[s * d ..][0..d]) |*o, y| o.* += w[s] * y;
             }
         }
+    }
+
+    /// Tracks waits on rank 1: starts one when nothing moved, and on progress
+    /// records how long it lasted. Returns the new start (0 when not waiting).
+    fn waited(self: *SplitMoe, since: u64, progressed: bool) u64
+    {
+        if (!progressed)
+        {
+            return if (since == 0) mf.nowNs() else since;
+        }
+        if (since != 0)
+        {
+            const gap = mf.nowNs() - since;
+            self.stall_max_ns = @max(self.stall_max_ns, gap);
+            self.stall_recent_ns = @max(self.stall_recent_ns, gap);
+        }
+        return 0;
     }
 };
 
@@ -1108,6 +1229,7 @@ const Parked = struct {
 /// Time rank 1 spent inside expert FFNs (TASK-22), and the slowest one.
 var ffn_ns: u64 = 0;
 var ffn_max_ns: u64 = 0;
+var answered: u64 = 0;
 
 /// Runs one call and sends its result back in as many chunks as it came in.
 fn answer(ep: *transport.Endpoint, experts: *Experts, held: ExpertCache.Held, hdr: wire.Header, x: []const f32, y: []f32, out: *wire.Packet) !void
@@ -1118,6 +1240,11 @@ fn answer(ep: *transport.Endpoint, experts: *Experts, held: ExpertCache.Held, hd
     ffn_ns += took;
     ffn_max_ns = @max(ffn_max_ns, took);
     experts.put(held);
+    answered += 1;
+    if (answered % 256 == 0)
+    {
+        checkMemory();
+    }
     const enc = wire.encodingOf(hdr);
     for (0..wire.chunkCount(enc, experts.local.cfg.d_model)) |ch|
     {
@@ -1133,21 +1260,21 @@ fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool)
     const local = experts.local;
     const cfg = local.cfg;
     const d = cfg.d_model;
-    const park_cap = Experts.max_tokens * cfg.top_k;
-    const parked = try std.heap.page_allocator.alloc(Parked, park_cap);
-    defer std.heap.page_allocator.free(parked);
-    const parked_x = try std.heap.page_allocator.alloc(f32, park_cap * d);
-    defer std.heap.page_allocator.free(parked_x);
+    const park_cap = Experts.default_max_tokens * cfg.top_k;
+    const parked = try olmoe.big_allocator.alloc(Parked, park_cap);
+    defer olmoe.big_allocator.free(parked);
+    const parked_x = try olmoe.big_allocator.alloc(f32, park_cap * d);
+    defer olmoe.big_allocator.free(parked_x);
     var n_parked: usize = 0;
     var set_aside: u64 = 0;
-    var hint_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var hint_arena: std.heap.ArenaAllocator = .init(olmoe.big_allocator);
     defer hint_arena.deinit();
     var hints = try HintLog.init(hint_arena.allocator(), cfg.layers, cfg.experts);
-    const x = try std.heap.page_allocator.alloc(f32, 2 * d);
-    defer std.heap.page_allocator.free(x);
+    const x = try olmoe.big_allocator.alloc(f32, 2 * d);
+    defer olmoe.big_allocator.free(x);
     const y = x[d..];
-    const out = try std.heap.page_allocator.create(wire.Packet);
-    defer std.heap.page_allocator.destroy(out);
+    const out = try olmoe.big_allocator.create(wire.Packet);
+    defer olmoe.big_allocator.destroy(out);
     out.* = std.mem.zeroes(wire.Packet);
     var served: u64 = 0;
     std.debug.print("expert: serving, resident memory {d:.0} MB\n", .{mb(rssBytes())});
@@ -1265,10 +1392,11 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         try gpu.map(l.weightRegion());
     }
     const weights_hash = if (opts.minutes > 0) std.hash.Wyhash.hash(0, l.weightRegion()) else 0;
-    var experts: Experts = .{ .local = &l.local };
+    var experts: Experts = .{ .local = &l.local, .max_tokens = opts.max_step };
     try experts.alloc(gpa);
     defer experts.free(gpa);
     const label = if (rank == 1) "expert" else name;
+    heap_label = label;
     defer if (opts.minutes > 0) reportWeights(label, weights_hash, l.weightRegion());
     const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &owned, label) else null;
     defer if (box) |b| b.close(gpa);
@@ -1278,6 +1406,19 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     }
     if (rank == 1)
     {
+        try armBudget(opts, label);
+        var owned_count: usize = 0;
+        for (owned[0..l.cfg.experts]) |o|
+        {
+            owned_count += @intFromBool(o);
+        }
+        // Rank 0 waits for this grant when it limits calls (TASK-17); 0 means no limit.
+        const grant: u16 = if (opts.capacity > 0) @intCast(@min(olmoe.Capacity.limitFor(opts.capacity, opts.chunk, l.cfg, owned_count), std.math.maxInt(u16))) else 0;
+        try ep.grantCapacity(grant);
+        if (grant > 0)
+        {
+            std.debug.print("expert: granting rank 0 {d} expert calls per layer\n", .{grant});
+        }
         const served = serveExperts(ep, &experts, &owned);
         if (box) |b|
         {
@@ -1297,7 +1438,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .experts = &experts,
         .owner = owner[0..cfg.experts],
         .enc = opts.payload,
-        .contrib = try gpa.alloc(f32, 64 * cfg.top_k * cfg.d_model),
+        .contrib = try gpa.alloc(f32, opts.max_step * cfg.top_k * cfg.d_model),
         .pkt = pkt,
         .health = if (opts.swarm) |sw| sw.client else null,
     };
@@ -1309,6 +1450,21 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         moe.ahead = &la;
         moe.prefetch = SplitMoe.prefetch;
     }
+    var cap = olmoe.Capacity.init(cfg, opts.chunk, opts.capacity, opts.expert_capacity, owner[0..cfg.experts]);
+    if (opts.capacity > 0)
+    {
+        // Rank 1's limit is whatever it grants.
+        const grant = try ep.awaitCapacity();
+        cap.rank_limit[1] = if (grant == 0) olmoe.Capacity.none else grant;
+        std.debug.print("{s}: capacity: {d} expert calls per layer here; rank 1 grants {d}{s}\n", .{ name, cap.rank_limit[0], grant, if (grant == 0) " (no limit)" else "" });
+    }
+    if (opts.capacity > 0 or opts.expert_capacity > 0)
+    {
+        moe.capacity = &cap;
+    }
+    split_probe = &split;
+    defer split_probe = null;
+    try armBudget(opts, name);
     var host_buf: [64]u8 = undefined;
     const host = hostName(&host_buf);
     // Rank 1's machine: its tracker entry, this one when forked, else the address dialed.
@@ -1350,7 +1506,102 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     {
         reportCache(name, b.cache);
     }
+    reportGuards(opts, name, moe.capacity, &split);
     return result;
+}
+
+/// Rank 0's split, for the spike test's per-phase stall figures.
+var split_probe: ?*SplitMoe = null;
+
+/// `--memory-budget MB` (TASK-17): sets the heap's limit from what this
+/// process already holds, and checks memory after every engine step.
+fn armBudget(opts: Options, label: []const u8) !void
+{
+    if (opts.memory_budget == 0)
+    {
+        return;
+    }
+    memory = .{ .heap = &proc_heap, .budget = opts.memory_budget, .device = &gpu.systemBytes };
+    memory.?.arm() catch |err|
+    {
+        std.debug.print("{s}: FAIL: the memory budget is {d:.0} MB, but {d:.0} MB is already held (weights, GPU buffers, runtime)\n", .{ label, mb(opts.memory_budget), mb(memory.?.fixed) });
+        return err;
+    };
+    olmoe.after_step = checkMemory;
+    std.debug.print("{s}: memory budget {d:.0} MB: {d:.0} MB held at startup (weights, GPU buffers, runtime), so the heap may grow by {d:.0} MB\n", .{ label, mb(opts.memory_budget), mb(memory.?.fixed), mb(memory.?.headroom()) });
+}
+
+fn checkMemory() void
+{
+    if (memory) |*m|
+    {
+        m.check();
+    }
+}
+
+/// Prints the heap's balance at exit, and how close memory came to the budget.
+fn reportHeap() void
+{
+    const live = proc_heap.live.load(.monotonic);
+    std.debug.print("{s}: heap: {d} allocations, {d} frees, peak {d:.1} MB, {d} bytes still allocated at exit{s}\n", .{
+        heap_label,
+        proc_heap.allocs.load(.monotonic),
+        proc_heap.frees.load(.monotonic),
+        mb(proc_heap.peak.load(.monotonic)),
+        live,
+        if (live == 0) " (balanced)" else "",
+    });
+    if (memory) |*m|
+    {
+        m.check();
+        std.debug.print("{s}: memory budget {d:.0} MB: at most {d:.0} MB resident plus GPU in {d} checks, {d} over budget; {d} allocations refused; peak resident {d:.0} MB\n", .{
+            heap_label, mb(m.budget), mb(m.max_seen), m.checks, m.over, proc_heap.refused.load(.monotonic), mb(budget.peakResidentBytes()),
+        });
+    }
+}
+
+/// Capacity drops and, for a split, rank 0's longest wait on rank 1.
+fn reportGuards(opts: Options, name: []const u8, cap: ?*olmoe.Capacity, split: ?*SplitMoe) void
+{
+    if (opts.capacity == 0 and opts.expert_capacity == 0 and opts.memory_budget == 0 and opts.spike == 0)
+    {
+        return;
+    }
+    if (cap) |cp|
+    {
+        var bufs: [3][32]u8 = undefined;
+        std.debug.print("{s}: capacity over {d}-token steps: calls per layer at most {s} here and {s} on rank 1, per expert {s}; dropped {d} of {d} calls ({d:.3}%) in {d} layer passes\n", .{
+            name,
+            opts.chunk,
+            limitText(&bufs[0], cp.rank_limit[0]),
+            if (split == null) "none" else limitText(&bufs[1], cp.rank_limit[1]),
+            limitText(&bufs[2], cp.expert_limit),
+            cp.dropped,
+            cp.routed,
+            pct(cp.dropped, cp.routed),
+            cp.layers_over,
+        });
+    }
+    if (split) |s|
+    {
+        std.debug.print("{s}: longest wait on rank 1 with nothing moving {d:.2} ms; {d} sends waited for rank 1 to grant ring slots\n", .{
+            name, @as(f64, @floatFromInt(s.stall_max_ns)) / 1e6, s.credit_waits,
+        });
+    }
+}
+
+fn limitText(buf: *[32]u8, limit: u32) []const u8
+{
+    if (limit == olmoe.Capacity.none)
+    {
+        return "no limit";
+    }
+    return std.fmt.bufPrint(buf, "{d}", .{limit}) catch "?";
+}
+
+fn pct(a: u64, b: u64) f64
+{
+    return 100 * @as(f64, @floatFromInt(a)) / @max(@as(f64, @floatFromInt(b)), 1);
 }
 
 /// Says why rank 0 stopped routing: what the tracker reports for rank 1.
@@ -1381,6 +1632,7 @@ fn runForked(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool) !
                 std.debug.print("expert: {t}\n", .{err});
                 c._exit(1);
             };
+            reportHeap();
             c._exit(0);
         }
         const fd = try transport.tcp.acceptOn(l.fd);
@@ -1398,6 +1650,7 @@ fn runForked(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool) !
             std.debug.print("expert: {t}\n", .{err});
             c._exit(1);
         };
+        reportHeap();
         c._exit(0);
     }
     var ep = transport.Endpoint.init(pair.side(0).backend(), 0, slots);
@@ -1606,6 +1859,87 @@ fn sampleCache(ctx: *anyopaque, out: *telemetry.Counters) void
     out.cache = cacheCounts(cache);
 }
 
+/// One phase of the spike test (TASK-17): before, during, or after the spike.
+const SpikePhase = struct {
+    steps: usize = 0,
+    tokens: usize = 0,
+    ns: u64 = 0,
+    max_step_ns: u64 = 0,
+    routed: u64 = 0,
+    dropped: u64 = 0,
+    stall_ns: u64 = 0,
+    /// Which of the phase's steps (from 1) had the longest wait.
+    stall_step: usize = 0,
+    credit_waits: u64 = 0,
+    max_memory: u64 = 0,
+
+    const Counts = struct {
+        routed: u64 = 0,
+        dropped: u64 = 0,
+        credit_waits: u64 = 0,
+    };
+
+    /// Reads the running counts.
+    fn sample(moe: olmoe.Moe) Counts
+    {
+        var out: Counts = .{};
+        if (moe.capacity) |cp|
+        {
+            out.routed = cp.routed;
+            out.dropped = cp.dropped;
+        }
+        if (split_probe) |s|
+        {
+            out.credit_waits = s.credit_waits;
+        }
+        return out;
+    }
+
+    fn add(self: *SpikePhase, before: Counts, after: Counts, tokens: usize, ns: u64) void
+    {
+        self.steps += 1;
+        self.tokens += tokens;
+        self.ns += ns;
+        self.max_step_ns = @max(self.max_step_ns, ns);
+        self.routed += after.routed - before.routed;
+        self.dropped += after.dropped - before.dropped;
+        self.credit_waits += after.credit_waits - before.credit_waits;
+        if (split_probe) |s|
+        {
+            if (s.stall_recent_ns > self.stall_ns)
+            {
+                self.stall_ns = s.stall_recent_ns;
+                self.stall_step = self.steps;
+            }
+            s.stall_recent_ns = 0;
+        }
+        self.max_memory = @max(self.max_memory, budget.residentBytes() + gpu.systemBytes());
+    }
+
+    fn report(self: SpikePhase, name: []const u8, i: usize, size: usize) void
+    {
+        const names = [_][]const u8{ "before the spike", "during the spike", "after the spike" };
+        const secs = @as(f64, @floatFromInt(self.ns)) / 1e9;
+        std.debug.print("{s}: {s}: {d} steps of up to {d} tokens, {d} tokens in {d:.2} s ({d:.0} tokens/s), longest step {d:.1} ms; capacity dropped {d} of {d} calls ({d:.3}%); longest wait on rank 1 {d:.2} ms (in step {d}), {d} sends waited for ring slots; memory at most {d:.0} MB\n", .{
+            name,
+            names[i],
+            self.steps,
+            size,
+            self.tokens,
+            secs,
+            @as(f64, @floatFromInt(self.tokens)) / @max(secs, 1e-9),
+            @as(f64, @floatFromInt(self.max_step_ns)) / 1e6,
+            self.dropped,
+            self.routed,
+            pct(self.dropped, self.routed),
+            @as(f64, @floatFromInt(self.stall_ns)) / 1e6,
+            self.stall_step,
+            self.credit_waits,
+            mb(self.max_memory),
+        });
+    }
+};
+
 /// The model behind the server's engine interface.
 const ServeEngine = struct {
     gpa: std.mem.Allocator,
@@ -1724,10 +2058,19 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
         }
     }
     var next_report: usize = n / 10;
+    var phases: [3]SpikePhase = @splat(.{});
     while (pos < n)
     {
-        const e = @min(pos + opts.chunk, n);
+        // `--spike F` (TASK-17): the middle third of the prompt arrives in steps F times as big.
+        const phase: usize = if (opts.spike == 0 or pos < n / 3) 0 else if (pos < 2 * n / 3) 1 else 2;
+        const e = @min(pos + if (phase == 1) opts.chunk * opts.spike else opts.chunk, n);
+        const before = SpikePhase.sample(moe);
+        const s0 = mf.nowNs();
         try olmoe.step(gpa, w, moe, &cache, tokens[pos..e], logits, null);
+        if (opts.spike > 0)
+        {
+            phases[phase].add(before, SpikePhase.sample(moe), e - pos, mf.nowNs() - s0);
+        }
         pos = e;
         if (pos >= next_report and pos < n)
         {
@@ -1736,6 +2079,13 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
         }
     }
     const ttft = mf.nowNs() - t0;
+    if (opts.spike > 0)
+    {
+        for (phases, 0..) |p, i|
+        {
+            p.report(name, i, if (i == 1) opts.chunk * opts.spike else opts.chunk);
+        }
+    }
     reportProfile(name, "prefill");
     olmoe.profile = .{};
     if (key) |k|

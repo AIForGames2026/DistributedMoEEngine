@@ -56,11 +56,13 @@ Sent with every RDMA `WRITE_WITH_IMM`, and carried in the frame header by the TC
 | Bits | Field | Meaning |
 |---|---|---|
 | 0 to 15 | `slot` | Slot index in the receiver's ring (up to 65,536 slots) |
-| 16 to 17 | `kind` | 0 dispatch, 1 combine, 2 credit grant (`slot` = number of slots freed), 3 control (`slot` = message; 1 = goodbye) |
+| 16 to 17 | `kind` | 0 dispatch, 1 combine, 2 credit grant (`slot` = number of slots freed), 3 control (with `gen8` 0, `slot` = message: 1 = goodbye; with `gen8` 1, `slot` = a capacity grant, below) |
 | 18 to 25 | `gen8` | Low 8 bits of the slot generation |
 | 26 to 31 | `src_rank` | Sending node (up to 64) |
 
 The two research documents proposed different immediate layouts. Both packed token, expert, and routing data into the immediate, which duplicates the header and caps experts at 256. v0 instead makes the immediate answer only "which slot just landed, from whom, and is it the generation I expect?" Everything else is read from the header. `gen8` is a quick check before the receiver touches the slot; the authoritative check is the full `generation` plus the CRC.
+
+A capacity grant (TASK-17) is how many expert calls per layer the sending process takes from its peer in one step, or 0 for no limit. An expert process sends one before it serves; a router run with `--capacity` waits for it and drops the calls past it (the lowest gate weights), counting them. The ring's slot credits still decide when each packet may be written; the grant bounds how much work a step can bring.
 
 C helpers: `TF_IMM(slot, kind, gen8, src)` and `TF_IMM_SLOT/KIND/GEN8/SRC(imm)`. Zig: `wire.Imm` (a `packed struct(u32)`).
 

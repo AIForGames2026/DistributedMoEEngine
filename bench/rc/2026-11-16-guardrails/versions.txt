@@ -1,0 +1,2 @@
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, 0.17.0, load 0.60 0.32 0.19, avail 118754 MB, gpu procs: 
+GX10-03: 7.0.0-1019-nvidia, driver 580.178.04, 0.17.0, load 0.22 0.40 0.31, avail 15273 MB, gpu procs: VLLM::EngineCore, 95738 MiB;

@@ -1,0 +1,22 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.88 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: memory budget 40000 MB: 32573 MB held at startup (weights, GPU buffers, runtime), so the heap may grow by 7394 MB
+local: context 4032 tokens + 32 generated, chunks of 64; KV cache all in memory: 0.80 GB in memory (all of it would be 0.80 GB), GPU attention on
+local: prefill 448 of 4032 positions, 2.3 s
+local: prefill 832 of 4032 positions, 4.2 s
+local: prefill 1216 of 4032 positions, 6.2 s
+local: prefill 1728 of 4032 positions, 7.5 s
+local: prefill 2112 of 4032 positions, 8.3 s
+local: prefill 2496 of 4032 positions, 9.0 s
+local: prefill 2880 of 4032 positions, 10.3 s
+local: prefill 3264 of 4032 positions, 12.4 s
+local: prefill 3648 of 4032 positions, 14.5 s
+local: before the spike: 21 steps of up to 64 tokens, 1344 tokens in 6.77 s (198 tokens/s), longest step 354.2 ms; capacity dropped 0 of 516096 calls (0.000%); longest wait on rank 1 0.00 ms, 0 sends waited for ring slots; memory at most 33437 MB
+local: during the spike: 7 steps of up to 192 tokens, 1344 tokens in 2.55 s (526 tokens/s), longest step 384.4 ms; capacity dropped 301056 of 516096 calls (58.333%); longest wait on rank 1 0.00 ms, 0 sends waited for ring slots; memory at most 33462 MB
+local: after the spike: 21 steps of up to 64 tokens, 1344 tokens in 7.12 s (189 tokens/s), longest step 379.9 ms; capacity dropped 0 of 516096 calls (0.000%); longest wait on rank 1 0.00 ms, 0 sends waited for ring slots; memory at most 33462 MB
+local: prefill time: projections 2.2 s, QK norm and rope 1.3 s, attention 0.9 s, output 3.1 s, router 2.0 s, experts 5.2 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.2 s, output 0.1 s, router 0.0 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 16.443 s (245 tokens/s prefill); decode 0.031 s per token (32.66 tokens/s) over 31 steps from position 4032; resident memory 33433 MB
+local: capacity over 64-token steps: calls per layer at most 640 here and 4294967295 on rank 1, per expert no limit; dropped 301056 of 1560192 calls (19.296%) in 336 layer passes
+local: heap: 320 allocations, 320 frees, peak 874.3 MB, 0 bytes still allocated at exit (balanced)
+local: memory budget 40000 MB: at most 33466 MB resident plus GPU in 82 checks, 0 over budget; 0 allocations refused; peak resident 33451 MB

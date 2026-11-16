@@ -1,0 +1,244 @@
+2026-11-16T05:24:28Z load 1.32 0.81 0.38 mem_used_mb 5738 avail_mb 118805 gpu 0%
+  olmoe pid,rss_kb,etime: 1422997 15240 00:00;1423002 13316 00:00;
+  gpu_procs: 
+  top cpu (user,pcpu,rss_kb,comm): admin 73.6 27436 olmoe;admin 26.3 23528 olmoe;root 2.2 232760 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:25:28Z load 1.80 1.05 0.49 mem_used_mb 13425 avail_mb 111118 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 01:00;1423002 3463584 01:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 97.9 4096020 olmoe;admin 97.5 3463584 olmoe;root 2.2 234388 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:26:28Z load 1.97 1.24 0.59 mem_used_mb 13427 avail_mb 111116 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 02:00;1423002 3463584 02:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 99.1 4096020 olmoe;admin 98.7 3463584 olmoe;root 2.2 232148 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:27:28Z load 2.09 1.42 0.70 mem_used_mb 13431 avail_mb 111113 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 03:00;1423002 3463584 03:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 99.5 4096020 olmoe;admin 99.1 3463584 olmoe;root 2.2 232392 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:28:28Z load 2.09 1.54 0.79 mem_used_mb 13438 avail_mb 111106 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 04:00;1423002 3463584 04:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 99.7 4096020 olmoe;admin 99.4 3463584 olmoe;root 2.2 233900 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:29:28Z load 2.07 1.64 0.88 mem_used_mb 13438 avail_mb 111105 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 05:00;1423002 3463584 05:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 99.8 4096020 olmoe;admin 99.5 3463584 olmoe;root 2.2 233796 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:30:28Z load 2.08 1.73 0.95 mem_used_mb 13438 avail_mb 111105 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 06:00;1423002 3463584 06:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 99.9 4096020 olmoe;admin 99.6 3463584 olmoe;root 2.2 236364 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:31:29Z load 2.03 1.78 1.02 mem_used_mb 13439 avail_mb 111105 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 07:00;1423002 3463584 07:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.6 3463584 olmoe;root 2.2 232560 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:32:29Z load 2.04 1.83 1.09 mem_used_mb 13430 avail_mb 111113 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 08:00;1423002 3463584 08:00;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.7 3463584 olmoe;root 2.2 233068 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:33:29Z load 2.01 1.87 1.15 mem_used_mb 13435 avail_mb 111108 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 09:01;1423002 3463584 09:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 100 4664 ps;admin 99.7 3463584 olmoe;root 2.2 234728 k3s-agent;
+2026-11-16T05:34:29Z load 2.00 1.89 1.21 mem_used_mb 13435 avail_mb 111109 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 10:01;1423002 3463584 10:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.7 3463584 olmoe;root 2.2 233748 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:35:29Z load 2.19 1.96 1.28 mem_used_mb 13437 avail_mb 111106 gpu 91%
+  olmoe pid,rss_kb,etime: 1422997 4096020 11:01;1423002 3463584 11:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 234756 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:36:29Z load 2.21 2.02 1.34 mem_used_mb 13436 avail_mb 111107 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 12:01;1423002 3463584 12:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 230368 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:37:29Z load 2.08 2.01 1.38 mem_used_mb 13442 avail_mb 111101 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 13:01;1423002 3463584 13:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 100 4656 ps;admin 99.8 3463584 olmoe;root 2.2 232260 k3s-agent;
+2026-11-16T05:38:29Z load 2.09 2.02 1.43 mem_used_mb 13440 avail_mb 111103 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 14:01;1423002 3463584 14:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 233404 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:39:29Z load 2.08 2.03 1.47 mem_used_mb 13444 avail_mb 111099 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 15:01;1423002 3463584 15:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 233016 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:40:29Z load 2.03 2.02 1.51 mem_used_mb 13433 avail_mb 111110 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 16:01;1423002 3463584 16:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 231336 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:41:30Z load 2.05 2.03 1.55 mem_used_mb 13433 avail_mb 111110 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 17:01;1423002 3463584 17:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 234272 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:42:30Z load 2.02 2.02 1.58 mem_used_mb 13438 avail_mb 111105 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 18:01;1423002 3463584 18:01;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 232792 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:43:30Z load 2.52 2.16 1.65 mem_used_mb 13431 avail_mb 111112 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 19:02;1423002 3463584 19:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.8 3463584 olmoe;root 2.2 234308 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:44:30Z load 2.23 2.14 1.68 mem_used_mb 13431 avail_mb 111112 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 20:02;1423002 3463584 20:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 232932 k3s-agent;root 2.0 107224 dcgm-exporter;
+2026-11-16T05:45:30Z load 2.14 2.13 1.71 mem_used_mb 13435 avail_mb 111108 gpu 89%
+  olmoe pid,rss_kb,etime: 1422997 4096020 21:02;1423002 3463584 21:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 234320 k3s-agent;root 2.0 107268 dcgm-exporter;
+2026-11-16T05:46:30Z load 2.09 2.12 1.74 mem_used_mb 13436 avail_mb 111108 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 22:02;1423002 3463584 22:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 232920 k3s-agent;root 2.0 107268 dcgm-exporter;
+2026-11-16T05:47:30Z load 2.07 2.11 1.76 mem_used_mb 13433 avail_mb 111110 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 23:02;1423002 3463584 23:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 234352 k3s-agent;root 2.0 107268 dcgm-exporter;
+2026-11-16T05:48:30Z load 2.16 2.12 1.79 mem_used_mb 13429 avail_mb 111114 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 24:02;1423002 3463584 24:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 230972 k3s-agent;root 2.0 107268 dcgm-exporter;
+2026-11-16T05:49:30Z load 2.20 2.13 1.82 mem_used_mb 13597 avail_mb 110946 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 25:02;1423002 3463584 25:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 94.4 108008 apt;root 2.2 236904 k3s-agent;
+2026-11-16T05:50:30Z load 2.70 2.29 1.89 mem_used_mb 13537 avail_mb 111006 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 26:02;1423002 3463584 26:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 7.8 16428 python3;root 2.2 235080 k3s-agent;
+2026-11-16T05:51:31Z load 2.46 2.31 1.93 mem_used_mb 13459 avail_mb 111085 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 27:02;1423002 3463584 27:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 234316 k3s-agent;root 2.0 107268 dcgm-exporter;
+2026-11-16T05:52:31Z load 2.21 2.27 1.94 mem_used_mb 13443 avail_mb 111100 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 28:02;1423002 3463584 28:02;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 231800 k3s-agent;root 2.0 107268 dcgm-exporter;
+2026-11-16T05:53:31Z load 2.18 2.25 1.96 mem_used_mb 13439 avail_mb 111105 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 29:03;1423002 3463584 29:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 231436 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T05:54:31Z load 2.39 2.29 1.99 mem_used_mb 13431 avail_mb 111112 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 30:03;1423002 3463584 30:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 233564 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T05:55:31Z load 2.28 2.28 2.01 mem_used_mb 13433 avail_mb 111110 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 31:03;1423002 3463584 31:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 229540 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T05:56:31Z load 2.10 2.23 2.00 mem_used_mb 13431 avail_mb 111112 gpu 91%
+  olmoe pid,rss_kb,etime: 1422997 4096020 32:03;1423002 3463584 32:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 232712 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T05:57:31Z load 2.12 2.20 2.01 mem_used_mb 13434 avail_mb 111110 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 33:03;1423002 3463584 33:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.2 234492 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T05:58:31Z load 2.08 2.18 2.01 mem_used_mb 13434 avail_mb 111110 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 34:03;1423002 3463584 34:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 232308 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T05:59:31Z load 2.03 2.14 2.00 mem_used_mb 13425 avail_mb 111119 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 35:03;1423002 3463584 35:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 232440 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:00:31Z load 2.01 2.11 2.00 mem_used_mb 13418 avail_mb 111125 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 36:03;1423002 3463584 36:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 235032 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:01:32Z load 2.05 2.11 2.00 mem_used_mb 13425 avail_mb 111118 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 37:03;1423002 3463584 37:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 231740 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:02:32Z load 2.06 2.10 2.00 mem_used_mb 13429 avail_mb 111114 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 38:03;1423002 3463584 38:03;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233784 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:03:32Z load 2.02 2.08 2.00 mem_used_mb 13433 avail_mb 111111 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 39:04;1423002 3463584 39:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233424 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:04:32Z load 2.00 2.06 2.00 mem_used_mb 13429 avail_mb 111115 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 40:04;1423002 3463584 40:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 234740 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:05:32Z load 2.12 2.08 2.01 mem_used_mb 13428 avail_mb 111115 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 41:04;1423002 3463584 41:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 230744 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:06:32Z load 2.04 2.06 2.00 mem_used_mb 13429 avail_mb 111114 gpu 89%
+  olmoe pid,rss_kb,etime: 1422997 4096020 42:04;1423002 3463584 42:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233560 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:07:32Z load 2.01 2.05 2.00 mem_used_mb 13433 avail_mb 111111 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 43:04;1423002 3463584 43:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233196 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:08:32Z load 2.00 2.04 2.00 mem_used_mb 13432 avail_mb 111112 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 44:04;1423002 3463584 44:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 231852 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:09:32Z load 2.00 2.03 2.00 mem_used_mb 13444 avail_mb 111100 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 45:04;1423002 3463584 45:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 235268 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:10:32Z load 2.03 2.03 2.00 mem_used_mb 13436 avail_mb 111107 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 46:04;1423002 3463584 46:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 230036 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:11:32Z load 2.20 2.07 2.01 mem_used_mb 13433 avail_mb 111110 gpu 90%
+  olmoe pid,rss_kb,etime: 1422997 4096020 47:04;1423002 3463584 47:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233768 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:12:33Z load 2.07 2.06 2.01 mem_used_mb 13429 avail_mb 111114 gpu 91%
+  olmoe pid,rss_kb,etime: 1422997 4096020 48:04;1423002 3463584 48:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 232176 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:13:33Z load 2.02 2.04 2.00 mem_used_mb 13434 avail_mb 111110 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 49:04;1423002 3463584 49:04;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 232736 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:14:33Z load 2.14 2.07 2.01 mem_used_mb 13430 avail_mb 111114 gpu 89%
+  olmoe pid,rss_kb,etime: 1422997 4096020 50:05;1423002 3463584 50:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233072 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:15:33Z load 2.10 2.07 2.01 mem_used_mb 13433 avail_mb 111110 gpu 91%
+  olmoe pid,rss_kb,etime: 1422997 4096020 51:05;1423002 3463584 51:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 234944 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:16:33Z load 2.12 2.08 2.02 mem_used_mb 13428 avail_mb 111116 gpu 86%
+  olmoe pid,rss_kb,etime: 1422997 4096020 52:05;1423002 3463584 52:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 235008 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:17:33Z load 2.04 2.06 2.01 mem_used_mb 13434 avail_mb 111110 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 53:05;1423002 3463584 53:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 234384 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:18:33Z load 2.01 2.05 2.00 mem_used_mb 13430 avail_mb 111113 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 54:05;1423002 3463584 54:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233236 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:19:33Z load 2.00 2.04 2.00 mem_used_mb 13440 avail_mb 111104 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 55:05;1423002 3463584 55:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233732 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:20:33Z load 2.06 2.04 2.00 mem_used_mb 13426 avail_mb 111117 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 56:05;1423002 3463584 56:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233080 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:21:33Z load 2.02 2.03 2.00 mem_used_mb 13437 avail_mb 111107 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 57:05;1423002 3463584 57:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233976 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:22:34Z load 2.01 2.02 2.00 mem_used_mb 13431 avail_mb 111112 gpu 87%
+  olmoe pid,rss_kb,etime: 1422997 4096020 58:05;1423002 3463584 58:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 233620 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:23:34Z load 2.00 2.02 2.00 mem_used_mb 13440 avail_mb 111103 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 59:05;1423002 3463584 59:05;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 235052 k3s-agent;root 2.0 107272 dcgm-exporter;
+2026-11-16T06:24:34Z load 2.06 2.03 2.00 mem_used_mb 13426 avail_mb 111117 gpu 88%
+  olmoe pid,rss_kb,etime: 1422997 4096020 01:00:06;1423002 3463584 01:00:06;
+  gpu_procs: 1423002, src/engine/zig-out-gen/bin/olmoe, 172 MiB;1422997, src/engine/zig-out-gen/bin/olmoe, 176 MiB;
+  top cpu (user,pcpu,rss_kb,comm): admin 100 4096020 olmoe;admin 99.9 3463584 olmoe;root 2.1 231636 k3s-agent;root 2.0 107272 dcgm-exporter;

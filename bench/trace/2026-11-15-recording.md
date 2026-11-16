@@ -54,7 +54,7 @@ For each recording, the expert calls summed from its frames, by rank, equal the 
 | Chat, Qwen3-30B-A3B on `gx10-02` with reasoning (`chat-qwen3-one-spark.jsonl.gz`) | 1,129 | 1,329 | 3 | 510,336 |
 | Soak, 3 minutes, OLMoE split over RDMA | 17,091 | 20,691 | 0 | 1,351,583 / 1,296,865 |
 
-The two chat recordings are in `bench/trace/2026-11-15/`. They came from `tools/ref/record_chat.py`, a scripted three-turn conversation at temperature 0, with up to 160 tokens per reply for OLMoE and 500 for Qwen3 with thinking on. The soak recording is not kept. TASK-15's one-hour soak will be recorded and archived with that run.
+The two chat recordings are in `bench/trace/2026-11-15/`. They came from `tools/ref/record_chat.py`, a scripted three-turn conversation at temperature 0, with up to 160 tokens per reply for OLMoE and 500 for Qwen3 with thinking on. The soak recording is not kept. TASK-15's one-hour soak was recorded on Nov 16 and is archived with that run (`bench/rc/2026-11-16-soak.md`).
 
 ## Replay
 

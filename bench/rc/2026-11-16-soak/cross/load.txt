@@ -1,0 +1,48 @@
+GX10-02 2026-11-16T06:25:42Z load 0.82 1.67 1.88 avail_mb 118816 gpu 0% olmoe_rss_kb  6176 
+desktop 2026-11-16T06:25:42Z load 0.14 0.04 0.01 avail_mb 29801 gpu 3% olmoe_rss_kb 
+    Minimum = 33ms, Maximum = 33ms, Average = 33ms
+GX10-02 2026-11-16T06:26:46Z load 1.52 1.70 1.88 avail_mb 115204 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:26:46Z load 0.42 0.14 0.04 avail_mb 25838 gpu 9% olmoe_rss_kb 4060392 
+    Minimum = 32ms, Maximum = 34ms, Average = 32ms
+GX10-02 2026-11-16T06:27:50Z load 1.21 1.57 1.82 avail_mb 115204 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:27:50Z load 0.60 0.25 0.09 avail_mb 25826 gpu 8% olmoe_rss_kb 4068392 
+    Minimum = 32ms, Maximum = 32ms, Average = 32ms
+GX10-02 2026-11-16T06:28:53Z load 0.87 1.41 1.74 avail_mb 115181 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:28:54Z load 0.66 0.35 0.14 avail_mb 25829 gpu 14% olmoe_rss_kb 4070944 
+    Minimum = 32ms, Maximum = 33ms, Average = 32ms
+GX10-02 2026-11-16T06:29:57Z load 0.71 1.26 1.67 avail_mb 115221 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:29:57Z load 0.64 0.41 0.17 avail_mb 25830 gpu 4% olmoe_rss_kb 4070872 
+    Minimum = 33ms, Maximum = 36ms, Average = 35ms
+GX10-02 2026-11-16T06:31:01Z load 0.75 1.18 1.61 avail_mb 115206 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:31:01Z load 0.80 0.51 0.22 avail_mb 25820 gpu 7% olmoe_rss_kb 4071032 
+    Minimum = 32ms, Maximum = 40ms, Average = 35ms
+GX10-02 2026-11-16T06:32:05Z load 0.59 1.05 1.54 avail_mb 115191 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:32:05Z load 0.76 0.54 0.25 avail_mb 25836 gpu 10% olmoe_rss_kb 4058896 
+    Minimum = 32ms, Maximum = 33ms, Average = 32ms
+GX10-02 2026-11-16T06:33:08Z load 0.62 0.98 1.48 avail_mb 115198 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:33:09Z load 0.78 0.59 0.29 avail_mb 25825 gpu 8% olmoe_rss_kb 4064656 
+    Minimum = 32ms, Maximum = 33ms, Average = 32ms
+GX10-02 2026-11-16T06:34:12Z load 0.66 0.91 1.42 avail_mb 115201 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:34:12Z load 0.96 0.68 0.35 avail_mb 25818 gpu 6% olmoe_rss_kb 4078896 
+    Minimum = 32ms, Maximum = 33ms, Average = 32ms
+GX10-02 2026-11-16T06:35:16Z load 0.63 0.85 1.36 avail_mb 115198 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:35:16Z load 0.81 0.68 0.37 avail_mb 25801 gpu 3% olmoe_rss_kb 4091696 
+    Minimum = 33ms, Maximum = 37ms, Average = 34ms
+GX10-02 2026-11-16T06:36:19Z load 0.83 0.86 1.32 avail_mb 115188 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:36:20Z load 0.83 0.72 0.40 avail_mb 25805 gpu 7% olmoe_rss_kb 4091696 
+    Minimum = 32ms, Maximum = 34ms, Average = 33ms
+GX10-02 2026-11-16T06:37:23Z load 0.84 0.85 1.29 avail_mb 115173 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:37:24Z load 0.88 0.76 0.44 avail_mb 25789 gpu 3% olmoe_rss_kb 4104336 
+    Minimum = 32ms, Maximum = 33ms, Average = 32ms
+GX10-02 2026-11-16T06:38:27Z load 0.78 0.84 1.25 avail_mb 115197 gpu 2% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:38:27Z load 0.79 0.75 0.46 avail_mb 25787 gpu 2% olmoe_rss_kb 4104336 
+    Minimum = 31ms, Maximum = 32ms, Average = 31ms
+GX10-02 2026-11-16T06:39:31Z load 0.83 0.84 1.22 avail_mb 115202 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:39:31Z load 0.57 0.70 0.46 avail_mb 25793 gpu 10% olmoe_rss_kb 4104336 
+    Minimum = 31ms, Maximum = 33ms, Average = 32ms
+GX10-02 2026-11-16T06:40:34Z load 0.91 0.86 1.20 avail_mb 115190 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:40:35Z load 0.65 0.70 0.47 avail_mb 25788 gpu 7% olmoe_rss_kb 4104336 
+    Minimum = 31ms, Maximum = 39ms, Average = 34ms
+GX10-02 2026-11-16T06:41:38Z load 0.99 0.89 1.18 avail_mb 115221 gpu 0% olmoe_rss_kb 3461512 
+desktop 2026-11-16T06:41:39Z load 0.69 0.70 0.49 avail_mb 25805 gpu 12% olmoe_rss_kb 4104336 
+    Minimum = 31ms, Maximum = 32ms, Average = 31ms

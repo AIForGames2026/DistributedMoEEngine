@@ -18,8 +18,8 @@ pub const Engine = struct {
     vocab: usize,
     /// Positions the cache can hold.
     cap: usize,
-    /// Drops cached positions from `len` on.
-    truncate: *const fn (ctx: *anyopaque, len: usize) void,
+    /// Drops cached positions from `len` on and returns how many it kept (a hybrid model may keep none).
+    truncate: *const fn (ctx: *anyopaque, len: usize) usize,
     /// Runs `tokens` after the cached positions, adding them; `logits` gets the last one's row.
     step: *const fn (ctx: *anyopaque, tokens: []const u32, logits: []f32) anyerror!void,
 };
@@ -81,7 +81,7 @@ pub fn run(gpa: std.mem.Allocator, engine: Engine, session: *Session, tok: *cons
         // The last prompt position must run again to give its logits.
         common = @min(common, prompt.len - 1);
     }
-    engine.truncate(engine.ctx, common);
+    common = engine.truncate(engine.ctx, common);
     session.tokens.shrinkRetainingCapacity(common);
     var pos = common;
     while (pos < prompt.len)
@@ -226,9 +226,10 @@ const Fake = struct {
     len: usize = 0,
     steps: usize = 0,
 
-    fn truncate(ctx: *anyopaque, len: usize) void {
+    fn truncate(ctx: *anyopaque, len: usize) usize {
         const self: *Fake = @ptrCast(@alignCast(ctx));
         self.len = len;
+        return len;
     }
 
     fn step(ctx: *anyopaque, tokens: []const u32, logits: []f32) anyerror!void {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Writes src/unicode_tables.zig (TASK-30): the Unicode data the tokenizer
-needs, from Python's unicodedata. Letter and number ranges for the
+needs, from Python's unicodedata. Letter, mark, and number ranges for the
 pre-tokenizer patterns, and canonical combining classes, decompositions, and
 compositions for NFC.
 
@@ -44,6 +44,7 @@ def main():
     cat = lambda cp: unicodedata.category(chr(cp))
     letters = ranges(lambda cp: cat(cp).startswith("L"))
     numbers = ranges(lambda cp: cat(cp).startswith("N"))
+    marks = ranges(lambda cp: cat(cp).startswith("M"))
 
     ccc = []
     for cp in range(MAX):
@@ -89,6 +90,7 @@ def main():
     tup = lambda r: ".{ " + ", ".join(f"0x{x:X}" for x in r) + " }"
     emit("letters", "[2]u21", letters, tup)
     emit("numbers", "[2]u21", numbers, tup)
+    emit("marks", "[2]u21", marks, tup)
     emit("combining", "[3]u21", ccc, tup)
     emit("decomp_index", "[3]u21", decomp_index, tup)
     emit("decomp_data", "u21", decomp_data, lambda r: f"0x{r:X}")

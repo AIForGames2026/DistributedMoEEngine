@@ -12,6 +12,13 @@
 //! probabilities are renormalized to sum to 1. It can also use YaRN rope
 //! scaling (`Rope`) to run past its native context.
 //!
+//! Qwen3.5-MoE (TASK-29, matching Qwen3_5MoeForCausalLM, as in Qwen3.6-35B-A3B)
+//! is a hybrid. Three of every four layers mix tokens with a Gated DeltaNet
+//! (a linear attention whose fixed-size state is updated by the delta rule,
+//! `recurrentMix`) instead of attention. The others use attention with an
+//! output gate and rotary embeddings on part of each head. Every MoE block
+//! adds a gated shared expert.
+//!
 //! Weights stay in their GGUF block format and are dequantized one row at a
 //! time. The MoE block calls experts through `Moe`, so a process can run the
 //! experts it owns and send the rest to a peer (`olmoe_run.zig`).
@@ -23,12 +30,14 @@ const pool = @import("pool.zig");
 const kv_format = @import("kv_format.zig");
 pub const KvFormat = kv_format.KvFormat;
 
-/// The two model families the engine runs.
+/// The model families the engine runs.
 pub const Arch = enum {
     /// OLMoE: QK norm over the whole projection, top-k probabilities used as is.
     olmoe,
     /// Qwen3-MoE (TASK-12): grouped KV heads, QK norm per head, top-k renormalized.
     qwen3moe,
+    /// Qwen3.5-MoE (TASK-29): Qwen3-MoE plus Gated DeltaNet layers, gated attention, and a shared expert.
+    qwen35moe,
 };
 
 pub const Config = struct {
@@ -48,10 +57,70 @@ pub const Config = struct {
     /// YaRN rope scaling (TASK-12): 0 for none, else the factor over `rope_original` positions.
     yarn: f32 = 0,
     rope_original: usize = 0,
+    /// Dimensions of each head that rotate (the first ones); 0 for all of them.
+    rope_dim: usize = 0,
+    /// Every this-many-th layer uses attention, the others a Gated DeltaNet; 0 for attention everywhere.
+    attn_interval: usize = 0,
+    /// Attention multiplies its output by a sigmoid gate that comes with the query projection.
+    attn_gate: bool = false,
+    /// The shared expert's hidden size, 0 for none.
+    shared_ff: usize = 0,
+    /// Gated DeltaNet sizes: conv width, key heads and their size, value heads and their size.
+    ssm_conv: usize = 0,
+    ssm_k_heads: usize = 0,
+    ssm_dk: usize = 0,
+    ssm_v_heads: usize = 0,
+    ssm_dv: usize = 0,
 
     pub fn qDim(self: Config) usize
     {
         return self.heads * self.head_dim;
+    }
+
+    pub fn rotaryDim(self: Config) usize
+    {
+        return if (self.rope_dim == 0) self.head_dim else self.rope_dim;
+    }
+
+    /// Whether `layer` is a Gated DeltaNet layer rather than attention.
+    pub fn recurrent(self: Config, layer: usize) bool
+    {
+        return self.attn_interval != 0 and (layer + 1) % self.attn_interval != 0;
+    }
+
+    /// Layers with attention, which are the ones the KV cache holds.
+    pub fn attnLayers(self: Config) usize
+    {
+        return if (self.attn_interval == 0) self.layers else self.layers / self.attn_interval;
+    }
+
+    /// Where attention layer `layer` sits among the attention layers.
+    pub fn attnIndex(self: Config, layer: usize) usize
+    {
+        return if (self.attn_interval == 0) layer else layer / self.attn_interval;
+    }
+
+    /// Where Gated DeltaNet layer `layer` sits among those layers.
+    pub fn recurrentIndex(self: Config, layer: usize) usize
+    {
+        return layer - layer / self.attn_interval;
+    }
+
+    pub fn recurrentLayers(self: Config) usize
+    {
+        return self.layers - self.attnLayers();
+    }
+
+    /// Channels the Gated DeltaNet's short convolution runs over: queries, keys, values.
+    pub fn convDim(self: Config) usize
+    {
+        return 2 * self.ssm_k_heads * self.ssm_dk + self.ssm_v_heads * self.ssm_dv;
+    }
+
+    /// Floats of one Gated DeltaNet layer's state: the last inputs of the convolution, then each value head's matrix.
+    pub fn stateFloats(self: Config) usize
+    {
+        return (self.ssm_conv - 1) * self.convDim() + self.ssm_v_heads * self.ssm_dk * self.ssm_dv;
     }
 
     pub fn kvDim(self: Config) usize
@@ -104,7 +173,7 @@ pub const Config = struct {
             return error.Unsupported;
         }
         const embd = h.tensor("token_embd.weight") orelse return error.MissingTensor;
-        return .{
+        var cfg: Config = .{
             .arch = arch,
             .layers = try g.int("block_count"),
             .d_model = d,
@@ -118,6 +187,24 @@ pub const Config = struct {
             .eps = g.float("attention.layer_norm_rms_epsilon", 1e-5),
             .rope_theta = g.float("rope.freq_base", 10000),
         };
+        if (arch == .qwen35moe)
+        {
+            cfg.rope_dim = g.opt("rope.dimension_count") orelse 0;
+            cfg.attn_interval = g.opt("full_attention_interval") orelse 4;
+            cfg.attn_gate = true;
+            cfg.shared_ff = try g.int("expert_shared_feed_forward_length");
+            cfg.ssm_conv = try g.int("ssm.conv_kernel");
+            cfg.ssm_dk = try g.int("ssm.state_size");
+            cfg.ssm_k_heads = try g.int("ssm.group_count");
+            cfg.ssm_v_heads = try g.int("ssm.time_step_rank");
+            const inner = try g.int("ssm.inner_size");
+            if (cfg.ssm_v_heads == 0 or inner % cfg.ssm_v_heads != 0 or cfg.ssm_v_heads % cfg.ssm_k_heads != 0 or cfg.layers % cfg.attn_interval != 0)
+            {
+                return error.Unsupported;
+            }
+            cfg.ssm_dv = inner / cfg.ssm_v_heads;
+        }
+        return cfg;
     }
 
     /// Turns on YaRN with `factor` over `original` positions (Qwen uses 4 over 32,768 for 128k).
@@ -147,6 +234,24 @@ pub var gpu_unregister: ?*const fn (buf: []u8) void = null;
 /// on its own rows of `x`, and returns true, or false to use the CPU path.
 pub var gpu_experts: ?*const fn (job: ExpertJob) bool = null;
 
+/// Set with a GPU (TASK-29): the gated delta rule of one Gated DeltaNet layer
+/// there, updating the state in place, or false to run it on the CPU.
+pub var gpu_delta_rule: ?*const fn (job: DeltaJob) bool = null;
+
+/// One Gated DeltaNet layer's delta rule over `n` tokens (`Recurrent.Rule`):
+/// `mixed` rows of convDim prepared queries, keys and values, `beta` and the
+/// decay's log per token and value head, the state's device address, and the
+/// outputs, n x value heads x dv.
+pub const DeltaJob = struct {
+    cfg: Config,
+    mixed: []const f32,
+    beta: []const f32,
+    decay: []const f32,
+    state_dev: u64,
+    core: []f32,
+    n: usize,
+};
+
 /// One layer's experts for `n` tokens with `k` calls each: batch row i is token src[i],
 /// and y[t] adds call j's batch row inv[t k + j] times w[t k + j], in order.
 pub const ExpertJob = struct {
@@ -170,6 +275,8 @@ pub const Profile = struct {
     projections: u64 = 0,
     qk_rope: u64 = 0,
     attention: u64 = 0,
+    /// Gated DeltaNet layers (TASK-29), projections included.
+    recurrent: u64 = 0,
     output: u64 = 0,
     router: u64 = 0,
     experts: u64 = 0,
@@ -203,9 +310,17 @@ pub const AttentionJob = struct {
     out: []f32,
     /// How the tiles store each position (TASK-27).
     format: KvFormat = .f32,
+    /// Values per head: `head_dim`, or 256 for Qwen3.5 (TASK-29).
+    hd: usize = head_dim,
 
     pub const tile_positions = 32;
     pub const head_dim = 128;
+
+    /// Head sizes the GPU kernels handle.
+    pub fn gpuHeadDim(hd: usize) bool
+    {
+        return hd == head_dim or hd == 256;
+    }
 
     /// How many blocks share the tiles: enough to fill the GPU when there
     /// are few query rows (decode), and a function of the shape only, so
@@ -225,6 +340,8 @@ pub const Mat = struct {
     rows: usize,
     cols: usize,
     bytes: []const u8,
+
+    pub const empty: Mat = .{ .format = .f32, .rows = 0, .cols = 0, .bytes = &.{} };
 
     pub fn rowBytes(self: Mat) usize {
         return self.cols / self.format.blockValues() * self.format.blockBytes();
@@ -370,6 +487,321 @@ fn silu(x: f32) f32 {
     return x / (1.0 + @exp(-x));
 }
 
+fn sigmoid(x: f32) f32
+{
+    return 1.0 / (1.0 + @exp(-x));
+}
+
+/// As torch's softplus: linear past 20, where exp would add nothing.
+fn softplus(x: f32) f32
+{
+    if (x > 20)
+    {
+        return x;
+    }
+    return std.math.log1p(@exp(x));
+}
+
+/// Largest value-head size `recurrentMix` handles.
+const max_head = 256;
+
+/// A Gated DeltaNet layer (TASK-29) on `n` new tokens: their normalized
+/// inputs `x` (n x d_model) become `out` (n x d_model), and `state` moves on
+/// from the cache's last position to the last new one. Matches transformers'
+/// Qwen3_5MoeGatedDeltaNet: a causal depthwise convolution with SiLU over the
+/// query, key and value projections, L2-normalized queries and keys, and per
+/// value head a matrix updated token by token by the gated delta rule, read
+/// out by the query and passed through an RMSNorm gated by SiLU(z).
+/// Buffers for `recurrentMix` and `sharedExpert`, allocated once per step and
+/// reused by every layer: GPU results copied into fresh pages each layer made
+/// those copies many times slower.
+const MixBuffers = struct {
+    qkv: []f32,
+    mixed: []f32,
+    z: []f32,
+    beta: []f32,
+    decay: []f32,
+    core: []f32,
+    g: []f32,
+    u: []f32,
+    y: []f32,
+
+    fn init(a: std.mem.Allocator, cfg: Config, n: usize) !MixBuffers
+    {
+        const rec = cfg.recurrentLayers() > 0;
+        const cd = if (rec) cfg.convDim() else 0;
+        const vh = if (rec) cfg.ssm_v_heads else 0;
+        const inner = vh * cfg.ssm_dv;
+        return .{
+            .qkv = try a.alloc(f32, n * cd),
+            .mixed = try a.alloc(f32, n * cd),
+            .z = try a.alloc(f32, n * inner),
+            .beta = try a.alloc(f32, n * vh),
+            .decay = try a.alloc(f32, n * vh),
+            .core = try a.alloc(f32, n * inner),
+            .g = try a.alloc(f32, n * cfg.shared_ff),
+            .u = try a.alloc(f32, n * cfg.shared_ff),
+            .y = try a.alloc(f32, if (cfg.shared_ff != 0) n * cfg.d_model else 0),
+        };
+    }
+};
+
+fn recurrentMix(bufs: *const MixBuffers, cfg: Config, lin: Linear, state: []f32, state_dev: u64, x: []const f32, n: usize, out: []f32, scratch: []f32) !void
+{
+    const cd = cfg.convDim();
+    const vh = cfg.ssm_v_heads;
+    const inner = vh * cfg.ssm_dv;
+    std.debug.assert(cfg.ssm_dv <= max_head);
+    const qkv = bufs.qkv[0 .. n * cd];
+    const mixed = bufs.mixed[0 .. n * cd];
+    const z = bufs.z[0 .. n * inner];
+    const beta = bufs.beta[0 .. n * vh];
+    const decay = bufs.decay[0 .. n * vh];
+    const core = bufs.core[0 .. n * inner];
+    const d = cfg.d_model;
+    const fused = if (gpu_matmuls) |f| f(&.{ lin.qkv, lin.z, lin.beta, lin.alpha }, x[0 .. n * d], n, &.{ qkv, z, beta, decay }) else false;
+    if (!fused)
+    {
+        lin.qkv.matmul(x, n, qkv, scratch);
+        lin.z.matmul(x, n, z, scratch);
+        lin.beta.matmul(x, n, beta, scratch);
+        lin.alpha.matmul(x, n, decay, scratch);
+    }
+    const conv_state = state[0 .. (cfg.ssm_conv - 1) * cd];
+    const mats = state[conv_state.len..];
+    const threads = cpuThreads();
+    const token_threads = if (n >= parallel_tokens) threads else 1;
+    pool.parallelFor(token_threads, n, Recurrent.Conv{ .cfg = cfg, .w = lin.conv, .state = conv_state, .qkv = qkv, .out = mixed }, Recurrent.Conv.run);
+    Recurrent.Conv.shift(cfg, conv_state, qkv, n);
+    pool.parallelFor(token_threads, n, Recurrent.Prepare{ .cfg = cfg, .lin = lin, .mixed = mixed, .beta = beta, .decay = decay }, Recurrent.Prepare.run);
+    // The matrices follow the convolution's inputs in the state, on the device as on the host.
+    const on_gpu = if (gpu_delta_rule) |f| state_dev != 0 and f(.{ .cfg = cfg, .mixed = mixed, .beta = beta, .decay = decay, .state_dev = state_dev + conv_state.len * @sizeOf(f32), .core = core, .n = n }) else false;
+    if (!on_gpu)
+    {
+        pool.parallelFor(threads, vh, Recurrent.Rule{ .cfg = cfg, .mats = mats, .mixed = mixed, .beta = beta, .decay = decay, .core = core, .n = n }, Recurrent.Rule.run);
+    }
+    pool.parallelFor(token_threads, n, Recurrent.Norm{ .cfg = cfg, .w = lin.norm, .core = core, .z = z }, Recurrent.Norm.run);
+    lin.out.matmul(core, n, out, scratch);
+}
+
+/// The pieces of `recurrentMix`, for `pool.parallelFor`.
+const Recurrent = struct {
+    /// Tokens `first` to `end` of the causal convolution, channels innermost so rows are read in order;
+    /// the state holds the inputs before the new ones and is moved on afterwards by `shift`.
+    const Conv = struct {
+        cfg: Config,
+        w: []const f32,
+        state: []const f32,
+        qkv: []const f32,
+        out: []f32,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const kw = self.cfg.ssm_conv;
+            const cd = self.cfg.convDim();
+            const held = kw - 1;
+            for (first..end) |t|
+            {
+                const o = self.out[t * cd ..][0..cd];
+                @memset(o, 0);
+                for (0..kw) |j|
+                {
+                    const i = t + j;
+                    const in = if (i < held) self.state[i * cd ..][0..cd] else self.qkv[(i - held) * cd ..][0..cd];
+                    for (o, in, 0..) |*e, x, c|
+                    {
+                        e.* += self.w[c * kw + j] * x;
+                    }
+                }
+                for (o) |*e|
+                {
+                    e.* = silu(e.*);
+                }
+            }
+        }
+
+        /// The new state: the last inputs of the old state followed by the `n` new tokens.
+        fn shift(cfg: Config, state: []f32, qkv: []const f32, n: usize) void
+        {
+            const cd = cfg.convDim();
+            const held = cfg.ssm_conv - 1;
+            for (0..held) |r|
+            {
+                const i = n + r;
+                const src = if (i < held) state[i * cd ..][0..cd] else qkv[(i - held) * cd ..][0..cd];
+                @memcpy(state[r * cd ..][0..cd], src);
+            }
+        }
+    };
+
+    /// Per token: L2-normalized queries (scaled by 1 / sqrt(dk)) and keys, beta as a sigmoid, and the decay's log.
+    const Prepare = struct {
+        cfg: Config,
+        lin: Linear,
+        mixed: []f32,
+        beta: []f32,
+        decay: []f32,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const cfg = self.cfg;
+            const cd = cfg.convDim();
+            const dk = cfg.ssm_dk;
+            const vh = cfg.ssm_v_heads;
+            const qscale = 1.0 / @sqrt(@as(f32, @floatFromInt(dk)));
+            for (first..end) |t|
+            {
+                const row = self.mixed[t * cd ..];
+                for (0..2 * cfg.ssm_k_heads) |hh|
+                {
+                    const v = row[hh * dk ..][0..dk];
+                    var ss: f32 = 0;
+                    for (v) |e|
+                    {
+                        ss += e * e;
+                    }
+                    var inv = 1.0 / @sqrt(ss + 1e-6);
+                    if (hh < cfg.ssm_k_heads)
+                    {
+                        inv *= qscale;
+                    }
+                    for (v) |*e|
+                    {
+                        e.* *= inv;
+                    }
+                }
+                for (0..vh) |hh|
+                {
+                    const i = t * vh + hh;
+                    self.beta[i] = sigmoid(self.beta[i]);
+                    self.decay[i] = self.lin.a[hh] * softplus(self.decay[i] + self.lin.dt_bias[hh]);
+                }
+            }
+        }
+    };
+
+    /// Value heads `first` to `end`, token by token: decay the matrix, correct it toward the value, read it out.
+    const Rule = struct {
+        cfg: Config,
+        mats: []f32,
+        mixed: []const f32,
+        beta: []const f32,
+        decay: []const f32,
+        core: []f32,
+        n: usize,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const cfg = self.cfg;
+            const cd = cfg.convDim();
+            const dk = cfg.ssm_dk;
+            const dv = cfg.ssm_dv;
+            const kh = cfg.ssm_k_heads;
+            const vh = cfg.ssm_v_heads;
+            var mem: [max_head]f32 = undefined;
+            for (first..end) |hh|
+            {
+                // Value heads are tiled: head hh reads key head hh mod kh.
+                const kq = hh % kh;
+                const m = self.mats[hh * dk * dv ..][0 .. dk * dv];
+                for (0..self.n) |t|
+                {
+                    const row = self.mixed[t * cd ..];
+                    const q = row[kq * dk ..][0..dk];
+                    const k = row[(kh + kq) * dk ..][0..dk];
+                    const v = row[2 * kh * dk + hh * dv ..][0..dv];
+                    const g = @exp(self.decay[t * vh + hh]);
+                    const b = self.beta[t * vh + hh];
+                    const kv = mem[0..dv];
+                    @memset(kv, 0);
+                    for (0..dk) |i|
+                    {
+                        const mi = m[i * dv ..][0..dv];
+                        for (mi, kv) |*e, *acc|
+                        {
+                            e.* *= g;
+                            acc.* += e.* * k[i];
+                        }
+                    }
+                    for (kv, v) |*e, vv|
+                    {
+                        e.* = (vv - e.*) * b;
+                    }
+                    const o = self.core[t * vh * dv + hh * dv ..][0..dv];
+                    @memset(o, 0);
+                    for (0..dk) |i|
+                    {
+                        const mi = m[i * dv ..][0..dv];
+                        for (mi, kv, o) |*e, delta, *acc|
+                        {
+                            e.* += k[i] * delta;
+                            acc.* += e.* * q[i];
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    /// Per token and value head: RMSNorm with its weight, times SiLU of the gate z.
+    const Norm = struct {
+        cfg: Config,
+        w: []const f32,
+        core: []f32,
+        z: []const f32,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const dv = self.cfg.ssm_dv;
+            const inner = self.cfg.ssm_v_heads * dv;
+            for (first..end) |t|
+            {
+                for (0..self.cfg.ssm_v_heads) |hh|
+                {
+                    const o = self.core[t * inner + hh * dv ..][0..dv];
+                    const zz = self.z[t * inner + hh * dv ..][0..dv];
+                    var ss: f32 = 0;
+                    for (o) |e|
+                    {
+                        ss += e * e;
+                    }
+                    const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(dv)) + self.cfg.eps);
+                    for (o, zz, self.w) |*e, g, wt|
+                    {
+                        e.* = wt * (e.* * inv) * silu(g);
+                    }
+                }
+            }
+        }
+    };
+};
+
+/// The shared expert (TASK-29) on `n` normalized inputs, scaled per token by
+/// a sigmoid of `gate_w` dotted with the input, added into `out`.
+fn sharedExpert(bufs: *const MixBuffers, se: Expert, gate_w: []const f32, x: []const f32, n: usize, out: []f32, scratch: []f32) !void
+{
+    const f = se.gate.rows;
+    const d = se.down.rows;
+    const g = bufs.g[0 .. n * f];
+    const u = bufs.u[0 .. n * f];
+    const y = bufs.y[0 .. n * d];
+    const fused = if (gpu_matmuls) |fm| fm(&.{ se.gate, se.up }, x[0 .. n * d], n, &.{ g, u }) else false;
+    if (!fused)
+    {
+        se.gate.matmul(x, n, g, scratch);
+        se.up.matmul(x, n, u, scratch);
+    }
+    for (g, u) |*e, uu|
+    {
+        e.* = silu(e.*) * uu;
+    }
+    se.down.matmul(g, n, y, scratch);
+    for (0..n) |t|
+    {
+        const s = sigmoid(dot(x[t * d ..][0..d], gate_w));
+        for (out[t * d ..][0..d], y[t * d ..][0..d]) |*o, yy|
+        {
+            o.* += s * yy;
+        }
+    }
+}
+
 /// Rotary frequencies for one head (`head_dim / 2` of them) and the factor
 /// cos and sin are scaled by, as transformers computes them: plain, or YaRN.
 pub const Rope = struct {
@@ -381,7 +813,7 @@ pub const Rope = struct {
 
     pub fn init(cfg: Config) Rope
     {
-        const dim = cfg.head_dim;
+        const dim = cfg.rotaryDim();
         var r: Rope = .{ .inv_freq = undefined, .half = dim / 2, .scale = 1 };
         const fdim: f32 = @floatFromInt(dim);
         for (0..r.half) |i|
@@ -421,7 +853,7 @@ pub const Rope = struct {
     }
 
     /// Rotates each `head_dim` slice of `x` (one token, all heads) in place:
-    /// pairs are (i, i + head_dim / 2), as in rotate_half.
+    /// pairs are (i, i + half), as in rotate_half, over the first 2 half dimensions.
     pub fn apply(self: *const Rope, x: []f32, heads: usize, head_dim: usize, pos: usize) void
     {
         var cs: [max_half]f32 = undefined;
@@ -745,14 +1177,36 @@ pub const Lookahead = struct {
 
 pub const Layer = struct {
     attn_norm: []f32,
-    q: Mat,
-    k: Mat,
-    v: Mat,
-    o: Mat,
-    q_norm: []f32,
-    k_norm: []f32,
+    /// Attention weights; empty in a Gated DeltaNet layer. With a gate, `q` gives each head's query then its gate.
+    q: Mat = Mat.empty,
+    k: Mat = Mat.empty,
+    v: Mat = Mat.empty,
+    o: Mat = Mat.empty,
+    q_norm: []f32 = &.{},
+    k_norm: []f32 = &.{},
     ffn_norm: []f32,
     router: Mat,
+    /// Set in a Gated DeltaNet layer (TASK-29).
+    lin: ?Linear = null,
+    /// The shared expert every token goes through, scaled by a sigmoid of `shared_gate` dotted with the input.
+    shared: ?Expert = null,
+    shared_gate: []f32 = &.{},
+};
+
+/// A Gated DeltaNet layer's weights, in llama.cpp's layout: value heads tiled,
+/// so value head h reads key head h mod key heads, and `a` already -exp(A_log).
+pub const Linear = struct {
+    /// Queries, keys, values (convDim rows), then the output gate, beta, and alpha projections.
+    qkv: Mat,
+    z: Mat,
+    beta: Mat,
+    alpha: Mat,
+    a: []f32,
+    dt_bias: []f32,
+    /// convDim rows of ssm_conv taps, oldest input first.
+    conv: []f32,
+    norm: []f32,
+    out: Mat,
 };
 
 /// Every weight except the experts, pointing into a region loaded by a plan
@@ -809,6 +1263,23 @@ pub const Weights = struct {
                 try quant.dequantize(m.format, m.bytes, out);
                 return out;
             }
+            /// A tensor of any shape holding `n` values, as floats.
+            fn flat(s: @This(), name: []const u8, n: usize) ![]f32 {
+                const t = try s.info(name);
+                var count: usize = 1;
+                for (t.dims[0..t.ndim]) |dim|
+                {
+                    count *= @intCast(dim);
+                }
+                if (count != n)
+                {
+                    std.log.err("{s}: dims {any}, expected {d} values", .{ name, t.dims[0..t.ndim], n });
+                    return error.BadShape;
+                }
+                const out = try s.al.alloc(f32, n);
+                try quant.dequantize(t.format, s.p.locate(s.reg, .{ .offset = t.offset, .len = t.bytes }), out);
+                return out;
+            }
         };
         const g: Get = .{ .hh = h, .p = plan, .reg = region, .al = a };
         const d = cfg.d_model;
@@ -824,19 +1295,49 @@ pub const Weights = struct {
                 }
             }.f;
             // OLMoE normalizes the whole projection; Qwen3 each head.
-            const qn = if (cfg.arch == .qwen3moe) cfg.head_dim else cfg.qDim();
-            const kn = if (cfg.arch == .qwen3moe) cfg.head_dim else cfg.kvDim();
+            const qn = if (cfg.arch == .olmoe) cfg.qDim() else cfg.head_dim;
+            const kn = if (cfg.arch == .olmoe) cfg.kvDim() else cfg.head_dim;
             l.* = .{
                 .attn_norm = try g.vec(n(&buf, i, "attn_norm"), d),
-                .q = try g.mat(n(&buf, i, "attn_q"), cfg.qDim(), d),
-                .k = try g.mat(n(&buf, i, "attn_k"), cfg.kvDim(), d),
-                .v = try g.mat(n(&buf, i, "attn_v"), cfg.kvDim(), d),
-                .o = try g.mat(n(&buf, i, "attn_output"), d, cfg.qDim()),
-                .q_norm = try g.vec(n(&buf, i, "attn_q_norm"), qn),
-                .k_norm = try g.vec(n(&buf, i, "attn_k_norm"), kn),
-                .ffn_norm = try g.vec(n(&buf, i, "ffn_norm"), d),
+                .ffn_norm = try g.vec(n(&buf, i, if (cfg.arch == .qwen35moe) "post_attention_norm" else "ffn_norm"), d),
                 .router = try g.mat(n(&buf, i, "ffn_gate_inp"), cfg.experts, d),
             };
+            if (cfg.recurrent(i))
+            {
+                var b2: [64]u8 = undefined;
+                const inner = cfg.ssm_v_heads * cfg.ssm_dv;
+                const conv = try g.flat(std.fmt.bufPrint(&b2, "blk.{d}.ssm_conv1d.weight", .{i}) catch unreachable, cfg.convDim() * cfg.ssm_conv);
+                l.lin = .{
+                    .qkv = try g.mat(n(&buf, i, "attn_qkv"), cfg.convDim(), d),
+                    .z = try g.mat(n(&buf, i, "attn_gate"), inner, d),
+                    .beta = try g.mat(n(&buf, i, "ssm_beta"), cfg.ssm_v_heads, d),
+                    .alpha = try g.mat(n(&buf, i, "ssm_alpha"), cfg.ssm_v_heads, d),
+                    .a = try g.flat(std.fmt.bufPrint(&b2, "blk.{d}.ssm_a", .{i}) catch unreachable, cfg.ssm_v_heads),
+                    .dt_bias = try g.flat(std.fmt.bufPrint(&b2, "blk.{d}.ssm_dt.bias", .{i}) catch unreachable, cfg.ssm_v_heads),
+                    .conv = conv,
+                    .norm = try g.vec(n(&buf, i, "ssm_norm"), cfg.ssm_dv),
+                    .out = try g.mat(n(&buf, i, "ssm_out"), d, inner),
+                };
+            }
+            else
+            {
+                const gate: usize = if (cfg.attn_gate) 2 else 1;
+                l.q = try g.mat(n(&buf, i, "attn_q"), gate * cfg.qDim(), d);
+                l.k = try g.mat(n(&buf, i, "attn_k"), cfg.kvDim(), d);
+                l.v = try g.mat(n(&buf, i, "attn_v"), cfg.kvDim(), d);
+                l.o = try g.mat(n(&buf, i, "attn_output"), d, cfg.qDim());
+                l.q_norm = try g.vec(n(&buf, i, "attn_q_norm"), qn);
+                l.k_norm = try g.vec(n(&buf, i, "attn_k_norm"), kn);
+            }
+            if (cfg.shared_ff != 0)
+            {
+                l.shared = .{
+                    .gate = try g.mat(n(&buf, i, "ffn_gate_shexp"), cfg.shared_ff, d),
+                    .up = try g.mat(n(&buf, i, "ffn_up_shexp"), cfg.shared_ff, d),
+                    .down = try g.mat(n(&buf, i, "ffn_down_shexp"), d, cfg.shared_ff),
+                };
+                l.shared_gate = try g.flat(n(&buf, i, "ffn_gate_inp_shexp"), d);
+            }
         }
         return self;
     }
@@ -886,6 +1387,11 @@ pub const KvCache = struct {
     dev_v: u64 = 0,
     /// Set for a cache whose cold middle lives on NVMe (TASK-12); `k` and `v` are then empty.
     tier: ?Tier = null,
+    /// Each Gated DeltaNet layer's state after `len` positions (TASK-29), `state_floats` apiece.
+    state: []f32 = &.{},
+    state_floats: usize = 0,
+    /// Device address of `state` when a GPU updates it in place, else 0.
+    dev_state: u64 = 0,
 
     /// Where a tiered cache keeps its positions (`kv_tier.zig`). Attention
     /// on it runs on the GPU only.
@@ -925,13 +1431,26 @@ pub const KvCache = struct {
             std.mem.alignForward(usize, room * row[0], std.heap.page_size_max),
             std.mem.alignForward(usize, room * row[1], std.heap.page_size_max),
         };
-        const k = try allocPages(cfg.layers * layer_bytes[0]);
+        // Only attention layers keep keys and values; a Gated DeltaNet layer keeps a fixed-size state.
+        const k = try allocPages(cfg.attnLayers() * layer_bytes[0]);
         errdefer freePages(k);
-        const v = try allocPages(cfg.layers * layer_bytes[1]);
+        const v = try allocPages(cfg.attnLayers() * layer_bytes[1]);
+        errdefer freePages(v);
         var self: KvCache = .{ .cap = room, .d = d, .kv_heads = cfg.kv_heads, .format = format, .row = row, .layer_bytes = layer_bytes, .k = k, .v = v };
+        if (cfg.recurrentLayers() > 0)
+        {
+            self.state_floats = cfg.stateFloats();
+            self.state = try big_allocator.alloc(f32, cfg.recurrentLayers() * self.state_floats);
+            @memset(self.state, 0);
+        }
+        errdefer big_allocator.free(self.state);
         if (gpu_register) |reg|
         {
-            if (cfg.head_dim == AttentionJob.head_dim)
+            if (self.state.len > 0 and gpu_delta_rule != null)
+            {
+                self.dev_state = reg(std.mem.sliceAsBytes(self.state)) orelse 0;
+            }
+            if (AttentionJob.gpuHeadDim(cfg.head_dim))
             {
                 if (reg(k)) |dk|
                 {
@@ -966,9 +1485,53 @@ pub const KvCache = struct {
                 un(self.v);
             }
         }
+        if (self.dev_state != 0)
+        {
+            if (gpu_unregister) |un|
+            {
+                un(std.mem.sliceAsBytes(self.state));
+            }
+        }
         freePages(self.k);
         freePages(self.v);
+        big_allocator.free(self.state);
         self.* = undefined;
+    }
+
+    /// Empties the cache, so the next step starts at position 0.
+    pub fn reset(self: *KvCache) void
+    {
+        self.len = 0;
+        @memset(self.state, 0);
+    }
+
+    /// Keeps the first `len` positions and returns how many it kept. A Gated
+    /// DeltaNet state cannot step back, so a hybrid model keeps all or nothing.
+    pub fn truncate(self: *KvCache, len: usize) usize
+    {
+        if (len >= self.len)
+        {
+            return self.len;
+        }
+        if (self.state.len > 0)
+        {
+            self.reset();
+            return 0;
+        }
+        self.len = len;
+        return len;
+    }
+
+    /// The state of the `index`-th Gated DeltaNet layer.
+    pub fn recurrentState(self: KvCache, index: usize) []f32
+    {
+        return self.state[index * self.state_floats ..][0..self.state_floats];
+    }
+
+    /// Its device address, or 0 without a GPU.
+    pub fn recurrentStateDev(self: KvCache, index: usize) u64
+    {
+        return if (self.dev_state == 0) 0 else self.dev_state + index * self.state_floats * @sizeOf(f32);
     }
 
     const page_align = std.mem.Alignment.fromByteUnits(std.heap.page_size_max);
@@ -1117,6 +1680,9 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const h = try a.alloc(f32, n * d);
     const x = try a.alloc(f32, n * d);
     const q = try a.alloc(f32, n * qd);
+    // With an output gate, the query projection gives each head's query then its gate.
+    const qg = try a.alloc(f32, if (cfg.attn_gate) 2 * n * qd else 0);
+    const gate = try a.alloc(f32, if (cfg.attn_gate) n * qd else 0);
     const att = try a.alloc(f32, n * qd);
     const tmp = try a.alloc(f32, n * @max(d, qd));
     // Cos and sin for each new position, shared by every layer.
@@ -1128,7 +1694,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const tile_count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
     const tiles_k = try a.alloc(u64, tile_count);
     const tiles_v = try a.alloc(u64, tile_count);
-    const scratch = try a.alloc(f32, @max(@max(d, qd), cfg.d_ff));
+    const scratch = try a.alloc(f32, @max(@max(d, qd), @max(cfg.d_ff, @max(cfg.ssm_v_heads * cfg.ssm_dv, cfg.shared_ff))));
     const kh = try a.alloc(f32, cfg.head_dim);
     const vh = try a.alloc(f32, cfg.head_dim);
     const probs = try a.alloc(f32, n * cfg.experts);
@@ -1144,6 +1710,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const wanted_list = try a.alloc(u32, votes.len);
     const cap_count = try a.alloc(u32, if (moe.capacity != null) cfg.experts else 0);
     const cap_list = try a.alloc(u32, if (moe.capacity != null) n * k else 0);
+    const mix_bufs = try MixBuffers.init(a, cfg, n);
 
     for (tokens, 0..) |tok, t|
     {
@@ -1177,98 +1744,118 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         const layer_t0 = if (la != null) nowNs() else 0;
         var pt = nowNs();
         pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.attn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
-        const fused = if (gpu_matmuls) |f| f(&.{ l.q, l.k, l.v }, x[0 .. n * d], n, &.{ q[0 .. n * qd], kn[0 .. n * kvd], vn[0 .. n * kvd] }) else false;
-        if (!fused)
+        if (l.lin) |lin|
         {
-            l.q.matmul(x, n, q, scratch);
-            l.k.matmul(x, n, kn, scratch);
-            l.v.matmul(x, n, vn, scratch);
+            const ri = cfg.recurrentIndex(li);
+            try recurrentMix(&mix_bufs, cfg, lin, cache.recurrentState(ri), cache.recurrentStateDev(ri), x, n, tmp, scratch);
+            Profile.lap(&profile.recurrent, &pt);
         }
-        Profile.lap(&profile.projections, &pt);
-        pool.parallelFor(threads, n, TokenLoops.QkRope{ .cfg = cfg, .rope = &rope, .q = q, .k = kn, .q_norm = l.q_norm, .k_norm = l.k_norm, .cs = rope_cs, .sn = rope_sn }, TokenLoops.QkRope.run);
-        cache.store(li, pos0, n, kn, vn);
-        Profile.lap(&profile.qk_rope, &pt);
-        var on_gpu = false;
-        if (gpu_attention != null and (cache.dev_k != 0 or cache.tier != null))
+        else
         {
-            if (cache.tier) |tr|
+            const ai = cfg.attnIndex(li);
+            const qp = if (cfg.attn_gate) qg else q;
+            const fused = if (gpu_matmuls) |f| f(&.{ l.q, l.k, l.v }, x[0 .. n * d], n, &.{ qp[0 .. n * l.q.rows], kn[0 .. n * kvd], vn[0 .. n * kvd] }) else false;
+            if (!fused)
             {
-                try tr.tiles(tr.ctx, li, pos0 + n, tiles_k, tiles_v);
+                l.q.matmul(x, n, qp, scratch);
+                l.k.matmul(x, n, kn, scratch);
+                l.v.matmul(x, n, vn, scratch);
             }
-            else
+            if (cfg.attn_gate)
             {
-                cache.tiles(li, pos0 + n, tiles_k, tiles_v);
+                pool.parallelFor(threads, n, TokenLoops.SplitGate{ .qg = qg, .q = q, .gate = gate, .heads = cfg.heads, .hd = cfg.head_dim }, TokenLoops.SplitGate.run);
             }
-            const count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
-            on_gpu = gpu_attention.?(.{
-                .q = q,
-                .n = n,
-                .pos0 = pos0,
-                .heads = cfg.heads,
-                .kv_heads = cfg.kv_heads,
-                .kvd = kvd,
-                .scale = scale,
-                .tiles_k = tiles_k[0..count],
-                .tiles_v = tiles_v[0..count],
-                .splits = AttentionJob.splitsFor(n, cfg.heads, cfg.kv_heads, count),
-                .out = att,
-                .format = cache.format,
-            });
-        }
-        if (!on_gpu and cache.tier != null)
-        {
-            return error.OffloadNeedsGpu;
-        }
-        // A compact cache decodes each position's head into `kh` and `vh` as it is read.
-        const plain = cache.format == .f32;
-        const layer_k = if (on_gpu or !plain) &[_]f32{} else cache.keysF32(li);
-        const layer_v = if (on_gpu or !plain) &[_]f32{} else cache.valuesF32(li);
-        for (0..n) |t|
-        {
-            if (on_gpu)
+            Profile.lap(&profile.projections, &pt);
+            pool.parallelFor(threads, n, TokenLoops.QkRope{ .cfg = cfg, .rope = &rope, .q = q, .k = kn, .q_norm = l.q_norm, .k_norm = l.k_norm, .cs = rope_cs, .sn = rope_sn }, TokenLoops.QkRope.run);
+            cache.store(ai, pos0, n, kn, vn);
+            Profile.lap(&profile.qk_rope, &pt);
+            var on_gpu = false;
+            if (gpu_attention != null and (cache.dev_k != 0 or cache.tier != null))
             {
-                break;
-            }
-            const last = pos0 + t;
-            for (0..cfg.heads) |hd|
-            {
-                const off = hd * cfg.head_dim;
-                const kv_off = hd / group * cfg.head_dim;
-                const qh = q[t * qd + off ..][0..cfg.head_dim];
-                var mx: f32 = -std.math.inf(f32);
-                for (0..last + 1) |s|
+                if (cache.tier) |tr|
                 {
-                    const ks = if (plain) layer_k[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
-                        cache.format.part(0).decodeHead(cache.keys(li)[s * cache.row[0] ..][0..cache.row[0]], kvd, hd / group, kh);
-                        break :blk kh;
-                    };
-                    scores[s] = dot(qh, ks) * scale;
-                    mx = @max(mx, scores[s]);
+                    try tr.tiles(tr.ctx, ai, pos0 + n, tiles_k, tiles_v);
                 }
-                var sum: f32 = 0;
-                for (scores[0 .. last + 1]) |*sc|
+                else
                 {
-                    sc.* = @exp(sc.* - mx);
-                    sum += sc.*;
+                    cache.tiles(ai, pos0 + n, tiles_k, tiles_v);
                 }
-                const out = att[t * qd + off ..][0..cfg.head_dim];
-                @memset(out, 0);
-                for (0..last + 1) |s|
+                const count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
+                on_gpu = gpu_attention.?(.{
+                    .q = q,
+                    .n = n,
+                    .pos0 = pos0,
+                    .heads = cfg.heads,
+                    .kv_heads = cfg.kv_heads,
+                    .kvd = kvd,
+                    .scale = scale,
+                    .tiles_k = tiles_k[0..count],
+                    .tiles_v = tiles_v[0..count],
+                    .splits = AttentionJob.splitsFor(n, cfg.heads, cfg.kv_heads, count),
+                    .out = att,
+                    .format = cache.format,
+                    .hd = cfg.head_dim,
+                });
+            }
+            if (!on_gpu and cache.tier != null)
+            {
+                return error.OffloadNeedsGpu;
+            }
+            // A compact cache decodes each position's head into `kh` and `vh` as it is read.
+            const plain = cache.format == .f32;
+            const layer_k = if (on_gpu or !plain) &[_]f32{} else cache.keysF32(ai);
+            const layer_v = if (on_gpu or !plain) &[_]f32{} else cache.valuesF32(ai);
+            for (0..n) |t|
+            {
+                if (on_gpu)
                 {
-                    const p = scores[s] / sum;
-                    const vs = if (plain) layer_v[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
-                        cache.format.part(1).decodeHead(cache.values(li)[s * cache.row[1] ..][0..cache.row[1]], kvd, hd / group, vh);
-                        break :blk vh;
-                    };
-                    for (out, vs) |*o, vv|
+                    break;
+                }
+                const last = pos0 + t;
+                for (0..cfg.heads) |hd|
+                {
+                    const off = hd * cfg.head_dim;
+                    const kv_off = hd / group * cfg.head_dim;
+                    const qh = q[t * qd + off ..][0..cfg.head_dim];
+                    var mx: f32 = -std.math.inf(f32);
+                    for (0..last + 1) |s|
                     {
-                        o.* += p * vv;
+                        const ks = if (plain) layer_k[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
+                            cache.format.part(0).decodeHead(cache.keys(ai)[s * cache.row[0] ..][0..cache.row[0]], kvd, hd / group, kh);
+                            break :blk kh;
+                        };
+                        scores[s] = dot(qh, ks) * scale;
+                        mx = @max(mx, scores[s]);
+                    }
+                    var sum: f32 = 0;
+                    for (scores[0 .. last + 1]) |*sc|
+                    {
+                        sc.* = @exp(sc.* - mx);
+                        sum += sc.*;
+                    }
+                    const out = att[t * qd + off ..][0..cfg.head_dim];
+                    @memset(out, 0);
+                    for (0..last + 1) |s|
+                    {
+                        const p = scores[s] / sum;
+                        const vs = if (plain) layer_v[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
+                            cache.format.part(1).decodeHead(cache.values(ai)[s * cache.row[1] ..][0..cache.row[1]], kvd, hd / group, vh);
+                            break :blk vh;
+                        };
+                        for (out, vs) |*o, vv|
+                        {
+                            o.* += p * vv;
+                        }
                     }
                 }
             }
+            if (cfg.attn_gate)
+            {
+                pool.parallelFor(threads, n, TokenLoops.ApplyGate{ .att = att, .gate = gate, .qd = qd }, TokenLoops.ApplyGate.run);
+            }
+            Profile.lap(&profile.attention, &pt);
+            l.o.matmul(att, n, tmp, scratch);
         }
-        Profile.lap(&profile.attention, &pt);
-        l.o.matmul(att, n, tmp, scratch);
         pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
 
         if (la) |p|
@@ -1296,6 +1883,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         Profile.lap(&profile.router, &pt);
         @memset(tmp, 0);
         try moe.run(moe.ctx, li, x, n, idx, wts, tmp[0 .. n * d]);
+        if (l.shared) |se|
+        {
+            try sharedExpert(&mix_bufs, se, l.shared_gate, x, n, tmp[0 .. n * d], scratch);
+        }
         Profile.lap(&profile.experts, &pt);
         pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
         if (la) |p|
@@ -1407,6 +1998,41 @@ const TokenLoops = struct {
         }
     };
 
+    /// Splits each head's query and gate out of the gated query projection.
+    const SplitGate = struct {
+        qg: []const f32,
+        q: []f32,
+        gate: []f32,
+        heads: usize,
+        hd: usize,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            const qd = self.heads * self.hd;
+            for (first..end) |t|
+            {
+                for (0..self.heads) |hh|
+                {
+                    const src = self.qg[t * 2 * qd + hh * 2 * self.hd ..];
+                    @memcpy(self.q[t * qd + hh * self.hd ..][0..self.hd], src[0..self.hd]);
+                    @memcpy(self.gate[t * qd + hh * self.hd ..][0..self.hd], src[self.hd..][0..self.hd]);
+                }
+            }
+        }
+    };
+
+    const ApplyGate = struct {
+        att: []f32,
+        gate: []const f32,
+        qd: usize,
+        fn run(self: @This(), first: usize, end: usize) void
+        {
+            for (self.att[first * self.qd .. end * self.qd], self.gate[first * self.qd .. end * self.qd]) |*o, g|
+            {
+                o.* *= sigmoid(g);
+            }
+        }
+    };
+
     const Add = struct {
         h: []f32,
         y: []const f32,
@@ -1448,7 +2074,7 @@ const TokenLoops = struct {
                     pv.* /= sum;
                 }
                 topK(p, k, self.idx[t * k ..][0..k], self.wts[t * k ..][0..k]);
-                if (cfg.arch == .qwen3moe)
+                if (cfg.arch != .olmoe)
                 {
                     // Qwen3 renormalizes the chosen probabilities to sum to 1.
                     const wt = self.wts[t * k ..][0..k];
@@ -1684,7 +2310,7 @@ pub fn generate(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvC
     const vocab = w.cfg.vocab;
     const row = try gpa.alloc(f32, 2 * vocab);
     defer gpa.free(row);
-    cache.len = 0;
+    cache.reset();
     try step(gpa, w, moe, cache, prompt, row[0..vocab], null);
     for (out, 0..) |*tok, i|
     {
@@ -2309,6 +2935,109 @@ test "tiny Qwen3-MoE with YaRN matches transformers (tools/ref/ref_qwen3.py --ti
         for (step_logits, want_logits) |got, exp|
         {
             try std.testing.expectApproxEqAbs(exp, got, 1e-4);
+        }
+    }
+}
+
+test "tiny Qwen3.5-MoE (Gated DeltaNet, gated attention, shared expert) matches transformers (tools/ref/ref_qwen35.py --tiny)" {
+    const tfref = @import("tfref.zig");
+    const gpa = std.testing.allocator;
+    const file = @embedFile("qwen35_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    try std.testing.expectEqual(Arch.qwen35moe, cfg.arch);
+    try std.testing.expect(cfg.recurrent(0) and cfg.recurrent(2) and !cfg.recurrent(3));
+    try std.testing.expectEqual(@as(usize, 1), cfg.attnLayers());
+    try std.testing.expectEqual(@as(usize, 8), cfg.rotaryDim());
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [8]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+    defer local.deinit();
+
+    const golden = try tfref.File.parse(@embedFile("qwen35_tiny.tfref"));
+    const prompts: usize = @intCast((try golden.get("config")).i32s()[0]);
+    for (0..prompts) |p|
+    {
+        var buf: [64]u8 = undefined;
+        const ids = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
+        const tokens = try gpa.alloc(u32, ids.len);
+        defer gpa.free(tokens);
+        for (tokens, ids) |*t, id|
+        {
+            t.* = @intCast(id);
+        }
+        const logits = try gpa.alloc(f32, ids.len * cfg.vocab);
+        defer gpa.free(logits);
+        const trace: Trace = .{ .hidden = try gpa.alloc(f32, cfg.layers * ids.len * cfg.d_model), .topk = try gpa.alloc(u32, cfg.layers * ids.len * cfg.top_k) };
+        defer gpa.free(trace.hidden);
+        defer gpa.free(trace.topk);
+        try forward(gpa, &w, local.moe(), tokens, logits, trace);
+        // Each layer's output (all but the last, which transformers reports after the final norm).
+        for (0..cfg.layers - 1) |l|
+        {
+            const hw = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.hidden", .{ p, l }))).f32s();
+            for (trace.hidden[l * ids.len * cfg.d_model ..][0 .. ids.len * cfg.d_model], hw, 0..) |a, b, i|
+            {
+                if (@abs(a - b) > 1e-4)
+                {
+                    std.debug.print("layer {d}, token {d}, value {d}: {d} against {d}\n", .{ l, i / cfg.d_model, i % cfg.d_model, a, b });
+                    return error.TestHiddenMismatch;
+                }
+            }
+        }
+        const want = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits", .{p}))).f32s();
+        for (logits, want) |a, b|
+        {
+            try std.testing.expectApproxEqAbs(b, a, 1e-4);
+        }
+        for (0..cfg.layers) |l|
+        {
+            const gi = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.topk_idx", .{ p, l }))).i32s();
+            for (trace.topk[l * ids.len * cfg.top_k ..][0 .. ids.len * cfg.top_k], gi) |got, exp|
+            {
+                try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+            }
+        }
+
+        // Generation steps one token at a time, so the Gated DeltaNet state carries across steps.
+        const want_tokens = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_tokens", .{p}))).i32s();
+        const want_logits = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_logits", .{p}))).f32s();
+        const g = want_tokens.len;
+        const all = try gpa.alloc(u32, ids.len + g);
+        defer gpa.free(all);
+        @memcpy(all[0..ids.len], tokens);
+        var cache = try KvCache.init(gpa, cfg, ids.len + g);
+        defer cache.deinit(gpa);
+        var sampler: Sampler = .{};
+        const step_logits = try gpa.alloc(f32, g * cfg.vocab);
+        defer gpa.free(step_logits);
+        try generate(gpa, &w, local.moe(), &cache, all[0..ids.len], &sampler, all[ids.len..], step_logits);
+        for (all[ids.len..], want_tokens) |got, exp|
+        {
+            try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+        }
+        for (step_logits, want_logits) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-4);
+        }
+
+        // A hybrid cache cannot step back: truncating empties it, and a rerun gives the same logits.
+        try std.testing.expectEqual(@as(usize, 0), cache.truncate(ids.len));
+        const again = try gpa.alloc(f32, cfg.vocab);
+        defer gpa.free(again);
+        try step(gpa, &w, local.moe(), &cache, tokens, again, null);
+        for (again, logits[(ids.len - 1) * cfg.vocab ..][0..cfg.vocab]) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-5);
         }
     }
 }

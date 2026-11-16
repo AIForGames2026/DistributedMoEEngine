@@ -14,6 +14,10 @@
 #define ATT_W_SMEM ((2 * 64 * 132 + 64 * ATT_HD) * 4)
 #define ATT_TC_Q 64 /* tf_attention_tc, with 2 threads per row */
 #define ATT_DEC_ROWS 16 /* tf_attention_decode16 */
+#define A2_HD 256 /* tf_attention256 (TASK-29) */
+#define A2_QT 16
+#define A2_SMEM ((A2_QT + 2 * 32) * A2_HD * 4)
+#define DR_DK 128 /* tf_delta_rule */
 #define MM_BM 128 /* tf_mm_q8 and tf_mm_f32 */
 #define MM_BN 64
 #define MV_TOK 8 /* tf_mv_q8 */
@@ -33,6 +37,9 @@ struct tf_gpu {
     CUfunction mm_q8, mm_f32, mv_q8, mv_gateup, gather, combine;
     /* Attention kernels, one of each per KV cache format (TASK-27): f32, bf16, fp8, bf16 keys with fp8 values. */
     CUfunction attention[4], attention_wide[4], attention_tc[4], attention_tc128[4], attention_dec8[4], attention_dec16[4];
+    /* 256-dim heads (TASK-29): one kernel per format and its merge; a256_ok once their shared memory is granted. */
+    CUfunction attention256[4], attention_merge256, delta_rule;
+    int a256_ok;
     CUfunction tm_q8, rowscale, silu_rows;
     /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
@@ -49,6 +56,9 @@ struct tf_gpu {
     /* Attention: queries, outputs, tile tables, and the splits' partial results. */
     CUdeviceptr aq, aout, tiles, pm, pl, pacc;
     size_t aq_bytes, aout_bytes, tiles_bytes, pm_bytes, pl_bytes, pacc_bytes;
+    /* Gated delta rule: per-token inputs and outputs. */
+    CUdeviceptr dr_in, dr_out;
+    size_t dr_in_bytes, dr_out_bytes;
     /* Experts: inputs, gate and up outputs, and results for a whole layer. */
     CUdeviceptr ex, eg, eu, ey, exg, eo, meta;
     size_t ex_bytes, eg_bytes, eu_bytes, ey_bytes, exg_bytes, eo_bytes, meta_bytes;
@@ -132,9 +142,31 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
             }
         }
     }
-    /* The wide kernel needs more shared memory than the default 48 KB. */
+    for (int f = 0; f < 4; f++)
+    {
+        char name[64];
+        snprintf(name, sizeof name, "tf_attention256%s", suffix[f]);
+        if ((r = cuModuleGetFunction(&g->attention256[f], g->mod, name)) != CUDA_SUCCESS)
+        {
+            tf_gpu_close(g);
+            return fail(r, "loading attention kernels", err, err_len);
+        }
+    }
+    if ((r = cuModuleGetFunction(&g->attention_merge256, g->mod, "tf_attention_merge256")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->delta_rule, g->mod, "tf_delta_rule")) != CUDA_SUCCESS)
+    {
+        tf_gpu_close(g);
+        return fail(r, "loading kernels", err, err_len);
+    }
+    /* The wide and 256-dim kernels need more shared memory than the default 48 KB. */
     int optin = 0;
     cuDeviceGetAttribute(&optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, g->dev);
+    g->a256_ok = optin >= A2_SMEM;
+    for (int f = 0; f < 4; f++)
+    {
+        g->a256_ok = g->a256_ok && cuFuncSetAttribute(g->attention256[f], CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                                                      A2_SMEM) == CUDA_SUCCESS;
+    }
     g->wide_ok = optin >= ATT_W_SMEM;
     for (int f = 0; f < 4; f++)
     {
@@ -578,12 +610,13 @@ void tf_gpu_unregister(tf_gpu *g, void *host)
 }
 
 int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int kv_heads, int kvd, float scale,
-                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt)
+                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt, int hd)
 {
-    if (n <= 0 || heads <= 0 || kv_heads <= 0 || heads % kv_heads || tiles <= 0 || splits <= 0 || fmt < 0 || fmt > 3)
+    if (n <= 0 || heads <= 0 || kv_heads <= 0 || heads % kv_heads || tiles <= 0 || splits <= 0 || fmt < 0 || fmt > 3 ||
+        (hd != ATT_HD && !(hd == A2_HD && g->a256_ok)))
         return -1;
     const int rows = n * (heads / kv_heads);
-    const size_t qb = (size_t)n * heads * ATT_HD * sizeof(float);
+    const size_t qb = (size_t)n * heads * hd * sizeof(float);
     const size_t tb = (size_t)tiles * sizeof(uint64_t);
     const size_t parts = (size_t)splits * kv_heads * rows;
     CUresult r;
@@ -591,7 +624,7 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
         (r = grow(&g->tiles, &g->tiles_bytes, 2 * tb)) != CUDA_SUCCESS ||
         (r = grow(&g->pm, &g->pm_bytes, parts * sizeof(float))) != CUDA_SUCCESS ||
         (r = grow(&g->pl, &g->pl_bytes, parts * sizeof(float))) != CUDA_SUCCESS ||
-        (r = grow(&g->pacc, &g->pacc_bytes, parts * ATT_HD * sizeof(float))) != CUDA_SUCCESS)
+        (r = grow(&g->pacc, &g->pacc_bytes, parts * hd * sizeof(float))) != CUDA_SUCCESS)
     {
         return -(int)r;
     }
@@ -619,7 +652,12 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
         per_split += per_split & 1;
     }
     void *args[] = {&g->aq, &tk, &tv, &g->pm, &g->pl, &g->pacc, &n, &pos0, &heads, &kv_heads, &kvd, &per_split, &scale};
-    if (dec)
+    if (hd == A2_HD)
+    {
+        r = cuLaunchKernel(g->attention256[fmt], (unsigned)((rows + A2_QT - 1) / A2_QT), (unsigned)kv_heads, (unsigned)splits,
+                           256, 1, 1, A2_SMEM, 0, args, NULL);
+    }
+    else if (dec)
     {
         r = cuLaunchKernel(rows <= 8 ? g->attention_dec8[fmt] : g->attention_dec16[fmt], 1, (unsigned)kv_heads, (unsigned)splits, 128,
                            1, 1, 0, 0, args, NULL);
@@ -640,9 +678,39 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
         return -(int)r;
     }
     void *margs[] = {&g->pm, &g->pl, &g->pacc, &g->aout, &n, &heads, &kv_heads, &splits};
-    if ((r = cuLaunchKernel(g->attention_merge, (unsigned)rows, (unsigned)kv_heads, 1, ATT_HD, 1, 1, 0, 0, margs, NULL)) !=
-            CUDA_SUCCESS ||
+    if ((r = cuLaunchKernel(hd == A2_HD ? g->attention_merge256 : g->attention_merge, (unsigned)rows, (unsigned)kv_heads, 1,
+                            (unsigned)hd, 1, 1, 0, 0, margs, NULL)) != CUDA_SUCCESS ||
         (r = xfer_out(g, out, g->aout, qb)) != CUDA_SUCCESS || (r = xfer_end(g)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    return 0;
+}
+
+int tf_gpu_delta_rule(tf_gpu *g, const float *mixed, const float *beta, const float *decay, int n, int cd, int kh, int dk,
+                      int vh, int dv, uint64_t state, float *core)
+{
+    if (n <= 0 || dk != DR_DK || kh <= 0 || vh % kh || dv <= 0 || dv > 256 || !state)
+        return -1;
+    const size_t mb = (size_t)n * cd * sizeof(float), hb = (size_t)n * vh * sizeof(float);
+    const size_t ob = (size_t)n * vh * dv * sizeof(float);
+    CUresult r;
+    if ((r = grow(&g->dr_in, &g->dr_in_bytes, align16(mb) + 2 * align16(hb))) != CUDA_SUCCESS ||
+        (r = grow(&g->dr_out, &g->dr_out_bytes, ob)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    CUdeviceptr dm = g->dr_in, db = g->dr_in + align16(mb), dd = db + align16(hb);
+    xfer_begin(g, align16(mb) + 2 * align16(hb) + align16(ob));
+    if ((r = xfer_in(g, dm, mixed, mb)) != CUDA_SUCCESS || (r = xfer_in(g, db, beta, hb)) != CUDA_SUCCESS ||
+        (r = xfer_in(g, dd, decay, hb)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    CUdeviceptr st = (CUdeviceptr)state;
+    void *args[] = {&dm, &db, &dd, &st, &g->dr_out, &n, &cd, &kh, &vh, &dv};
+    if ((r = cuLaunchKernel(g->delta_rule, (unsigned)vh, 1, 1, (unsigned)dv, 1, 1, 0, 0, args, NULL)) != CUDA_SUCCESS ||
+        (r = xfer_out(g, core, g->dr_out, ob)) != CUDA_SUCCESS || (r = xfer_end(g)) != CUDA_SUCCESS)
     {
         return -(int)r;
     }

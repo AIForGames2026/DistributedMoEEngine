@@ -1,0 +1,17 @@
+load: non-expert weights and 256 of 256 experts, 36.89 GB in 6.67 s, expert CRC32C OK
+local: prompt 0 (5 tokens, 1881 ms): logits max err 3.34e-5, top-1 5/5, hidden max err 3.82e-5, experts chosen 1600/1600 same ok
+local: prompt 1 (19 tokens, 3197 ms): logits max err 4.39e-5, top-1 19/19, hidden max err 5.35e-5, experts chosen 6080/6080 same ok
+local: prompt 2 (15 tokens, 5187 ms): logits max err 4.58e-5, top-1 15/15, hidden max err 5.34e-5, experts chosen 4800/4800 same ok
+local: PASS: Qwen3.5-MoE logits within 1e-2 of the PyTorch reference (worst 4.58e-5), every top-1 token identical
+local: generate prompt 0: 32 tokens in 16.88 s (1.9 tokens/s, prompt included)
+local:   tokens: 11751 11 264 3177 34756 364 1141 8807 3712 11 7431 11 321 25438 57902 13 27480 12484 303 279 9897 81183 919 314 279 3046 11 3055 279 181474 10629 11
+local:   same as transformers' generate(): 32/32 tokens, logits max err 5.20e-5 ok
+local: generate prompt 1: 32 tokens in 18.29 s (1.7 tokens/s, prompt included)
+local:   tokens: 73111 1393 471 220 16 8 478 73111 1393 471 220 17 8 1358 727 73111 697 6515 1393 11 20781 65787 1590 198 262 413 307 303 20781 25 198 285
+local:   same as transformers' generate(): 32/32 tokens, logits max err 3.35e-1 FAIL
+local: generate prompt 2: 32 tokens in 20.25 s (1.6 tokens/s, prompt included)
+local:   tokens: 279 1324 314 4393 4868 369 1691 8882 1056 279 2702 1324 314 4868 13 1061 5954 586 310 5281 685 279 1558 1331 1973 7459 279 52652 2695 13 271 760
+local:   same as transformers' generate(): 32/32 tokens, logits max err 4.39e-5 ok
+local: FAIL: generated tokens or their logits differ from transformers' generate()
+local: heap: 476 allocations, 476 frees, peak 291.8 MB, 0 bytes still allocated at exit (balanced)
+error: GenerateMismatch

@@ -65,9 +65,19 @@ void tf_gpu_free_host(tf_gpu *g, void *host);
  * kvd values (TASK-27, src/kv_format.zig): 0 f32 (kvd * 4 bytes), 1 bfloat16
  * (kvd * 2), 2 E4M3 then a power-of-two scale byte per KV head, padded to 16,
  * 3 keys as in 1 and values as in 2.
- * `splits` divides the tiles among blocks (1 for prefill, more for long decode). */
+ * `splits` divides the tiles among blocks (1 for prefill, more for long decode).
+ * `hd` is the head size: 128, or 256 (TASK-29) where the device allows its kernel. */
 int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int kv_heads, int kvd, float scale,
-                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt);
+                     const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt, int hd);
+
+/* The gated delta rule of a Gated DeltaNet layer (TASK-29) over n tokens, in
+ * order. mixed holds each token's cd values: kh key heads of queries
+ * (L2-normalized and scaled), kh of keys (L2-normalized), then vh value heads
+ * of dv values; value head h reads key head h mod kh. beta and decay (its
+ * log) are n x vh. state is the device address of the vh dk x dv matrices,
+ * updated in place; core gets n x vh x dv outputs. dk must be 128. */
+int tf_gpu_delta_rule(tf_gpu *g, const float *mixed, const float *beta, const float *decay, int n, int cd, int kh, int dk,
+                      int vh, int dv, uint64_t state, float *core);
 
 /* One layer's experts for n tokens, k calls each: expert e takes batch rows first[e]
  * on, row i is token src[i], and y[t] adds call j's row inv[t k + j] times w[t k + j]. */

@@ -21,7 +21,8 @@ extern fn tf_gpu_matmul(g: *Handle, w: u64, format: c_int, x: [*]const f32, n: c
 extern fn tf_gpu_matmuls(g: *Handle, count: c_int, w: [*]const u64, format: c_int, rows: [*]const c_int, x: [*]const f32, n: c_int, cols: c_int, y: [*]const [*]f32) c_int;
 extern fn tf_gpu_register(g: *Handle, host: *anyopaque, len: usize, dev: *u64) c_int;
 extern fn tf_gpu_unregister(g: *Handle, host: *anyopaque) void;
-extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int) c_int;
+extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int, hd: c_int) c_int;
+extern fn tf_gpu_delta_rule(g: *Handle, mixed: [*]const f32, beta: [*]const f32, decay: [*]const f32, n: c_int, cd: c_int, kh: c_int, dk: c_int, vh: c_int, dv: c_int, state: u64, core: [*]f32) c_int;
 extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
 extern fn tf_gpu_device_bytes() usize;
@@ -65,8 +66,32 @@ pub fn open() !void {
         olmoe.gpu_register = register;
         olmoe.gpu_unregister = unregister;
         olmoe.gpu_attention = attention;
+        olmoe.gpu_delta_rule = deltaRule;
     }
 }
+
+fn deltaRule(job: olmoe.DeltaJob) bool
+{
+    if (delta_failed)
+    {
+        return false;
+    }
+    const c = job.cfg;
+    if (c.ssm_dk != 128 or c.ssm_dv > 256)
+    {
+        return false;
+    }
+    const rc = tf_gpu_delta_rule(handle.?, job.mixed.ptr, job.beta.ptr, job.decay.ptr, @intCast(job.n), @intCast(c.convDim()), @intCast(c.ssm_k_heads), @intCast(c.ssm_dk), @intCast(c.ssm_v_heads), @intCast(c.ssm_dv), job.state_dev, job.core.ptr);
+    if (rc != 0)
+    {
+        std.log.err("gpu: delta rule failed ({d}); using the CPU from here on", .{-rc});
+        delta_failed = true;
+        return false;
+    }
+    return true;
+}
+
+var delta_failed = false;
 
 fn register(buf: []u8) ?u64
 {
@@ -91,7 +116,7 @@ fn attention(job: olmoe.AttentionJob) bool
     {
         return false;
     }
-    const rc = tf_gpu_attention(handle.?, job.q.ptr, @intCast(job.n), @intCast(job.pos0), @intCast(job.heads), @intCast(job.kv_heads), @intCast(job.kvd), job.scale, job.tiles_k.ptr, job.tiles_v.ptr, @intCast(job.tiles_k.len), @intCast(job.splits), job.out.ptr, @intFromEnum(job.format));
+    const rc = tf_gpu_attention(handle.?, job.q.ptr, @intCast(job.n), @intCast(job.pos0), @intCast(job.heads), @intCast(job.kv_heads), @intCast(job.kvd), job.scale, job.tiles_k.ptr, job.tiles_v.ptr, @intCast(job.tiles_k.len), @intCast(job.splits), job.out.ptr, @intFromEnum(job.format), @intCast(job.hd));
     if (rc != 0)
     {
         std.log.err("gpu: attention failed ({d}); using the CPU from here on", .{-rc});

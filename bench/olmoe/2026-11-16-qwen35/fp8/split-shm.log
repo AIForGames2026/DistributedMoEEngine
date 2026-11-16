@@ -1,0 +1,14 @@
+load: 128 of 256 experts, 17.11 GB in 6.48 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (17.11 GB in 0.45 s)
+expert: serving, resident memory 17256 MB
+load: non-expert weights and 128 of 256 experts, 19.78 GB in 6.91 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (19.78 GB in 0.51 s)
+shm: prompt 0 (5 tokens, 371 ms): logits max err 4.27e-1, top-1 5/5, hidden max err 1.07e-1, experts chosen 1588/1600 same FAIL
+shm: prompt 1 (19 tokens, 1231 ms): logits max err 1.17e0, top-1 19/19, hidden max err 8.56e-1, experts chosen 5910/6080 same FAIL
+shm: prompt 2 (15 tokens, 973 ms): logits max err 4.46e-1, top-1 15/15, hidden max err 1.28e-1, experts chosen 4739/4800 same FAIL
+shm: FAIL: logits differ by up to 1.17e0 (target 1e-2) or a top-1 token differs
+shm: 6119 expert calls sent to rank 1, 6361 run locally; payload fp8_e4m3
+expert: ran 6119 expert FFNs for rank 0, 231 us each on average (max 1464 us), 1.41 s in all; resident memory 17260 MB
+expert: heap: 44 allocations, 44 frees, peak 29.7 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 98 allocations, 98 frees, peak 371.8 MB, 0 bytes still allocated at exit (balanced)
+error: ForwardMismatch

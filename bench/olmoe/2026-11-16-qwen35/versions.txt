@@ -1,0 +1,6 @@
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, zig 0.17.0
+engine: v0.2.0-alpha-31-g59e8a5a-q35
+transformers: 5.23.0 2.15.0+cpu
+f189cedbe18dc524dd74014b23431081262bc9fcc57c18fec7a7a25149246570
+               total        used        free      shared  buff/cache   available
+Mem:             121           5          60           0          56         115

@@ -1,0 +1,39 @@
+load: non-expert weights and 256 of 256 experts, 36.89 GB in 6.66 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (36.89 GB in 0.97 s)
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory, f32, 40960 bytes per token: 5.37 GB in memory (all of it would be 5.37 GB), GPU attention on
+local: prefill 14336 of 131040 positions, 31.9 s
+local: prefill 26624 of 131040 positions, 80.1 s
+local: prefill 40960 of 131040 positions, 159.8 s
+local: prefill 53248 of 131040 positions, 248.4 s
+local: prefill 65536 of 131040 positions, 356.0 s
+local: prefill 79872 of 131040 positions, 505.2 s
+local: prefill 92160 of 131040 positions, 653.6 s
+local: prefill 106496 of 131040 positions, 850.4 s
+local: prefill 118784 of 131040 positions, 1041.5 s
+local: prefill time: projections 8.7 s, QK norm and rope 1.0 s, attention 1074.2 s, Gated DeltaNet 79.3 s, output 6.2 s, router 5.3 s, experts 73.7 s, LM head 0.2 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.3 s, Gated DeltaNet 0.3 s, output 0.0 s, router 0.1 s, experts 0.3 s, LM head 0.1 s
+local: time to first token 1252.721 s (105 tokens/s prefill); decode 0.073 s per token (13.72 tokens/s) over 31 steps from position 131040; resident memory 42542 MB
+local: heap: 430 allocations, 430 frees, peak 6163.3 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "src/engine/zig-out-gen/bin/olmoe local models/qwen36-35b-a3b/Qwen3.6-35B-A3B-Q8_0.gguf --tokens models/qwen36-35b-a3b/repo.tokens --chunk 2048 --gpu --context 131040 --generate 32"
+	User time (seconds): 1726.42
+	System time (seconds): 29.81
+	Percent of CPU this job got: 138%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 21:06.32
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 41958492
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 118672429
+	Voluntary context switches: 473484
+	Involuntary context switches: 44536
+	Swaps: 0
+	File system inputs: 72054984
+	File system outputs: 88
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -1,19 +1,21 @@
-//! Byte-level BPE tokenizer (TASK-30) for OLMoE-1B-7B and Qwen3-MoE, read
+//! Byte-level BPE tokenizer (TASK-30) for OLMoE-1B-7B, Qwen3-MoE and Qwen3.5-MoE, read
 //! from the model's GGUF metadata or from a Hugging Face `tokenizer.json`.
 //! Matches Hugging Face `tokenizers`: added tokens are split out first (those
 //! marked not normalized from the raw text, the rest after NFC), the remaining
 //! text is split by the model's pre-tokenizer pattern, and each piece is
 //! merged by BPE over its UTF-8 bytes.
 //!
-//! The two patterns are matched by hand instead of with a regex engine:
+//! The patterns are matched by hand instead of with a regex engine:
 //!   gpt2 (OLMoE): 's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
 //!   qwen2 (Qwen3): (?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}|
 //!                  ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
+//!   qwen35 (Qwen3.5, TASK-29): qwen2 with combining marks (\p{M}) counted
+//!                  with letters, and so left out of the punctuation runs.
 const std = @import("std");
 const gguf = @import("gguf.zig");
 const unicode = @import("unicode.zig");
 
-pub const Pattern = enum { gpt2, qwen2 };
+pub const Pattern = enum { gpt2, qwen2, qwen35 };
 
 pub const Error = error{ UnsupportedTokenizer, BadTokenizer, InvalidUtf8, OutOfMemory };
 
@@ -21,6 +23,7 @@ const Added = struct { id: u32, text: []const u8, normalized: bool };
 const Merge = struct { rank: u32, id: u32 };
 
 const qwen2_regex = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const qwen35_regex = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 
 pub const Tokenizer = struct {
     arena: std.heap.ArenaAllocator,
@@ -53,6 +56,8 @@ pub const Tokenizer = struct {
             .gpt2
         else if (std.mem.eql(u8, pre, "qwen2"))
             .qwen2
+        else if (std.mem.eql(u8, pre, "qwen35"))
+            .qwen35
         else
             return error.UnsupportedTokenizer;
 
@@ -436,6 +441,7 @@ const class_letter = 1;
 const class_number = 2;
 const class_space = 4;
 const class_newline = 8;
+const class_mark = 16;
 
 fn classOf(cp: u21) u8 {
     if (cp < 0x80)
@@ -456,6 +462,10 @@ fn classOf(cp: u21) u8 {
     if (unicode.isNumber(cp))
     {
         c |= class_number;
+    }
+    if (unicode.isMark(cp))
+    {
+        c |= class_mark;
     }
     if (unicode.isSpace(cp))
     {
@@ -486,7 +496,8 @@ fn split(gpa: std.mem.Allocator, pattern: Pattern, text: []const u8, s: *Scratch
         try s.bounds.append(gpa, s.offs.items[i]);
         const end = switch (pattern) {
             .gpt2 => matchGpt2(cps, i),
-            .qwen2 => matchQwen2(cps, i),
+            .qwen2 => matchQwen(cps, i, class_letter),
+            .qwen35 => matchQwen(cps, i, class_letter | class_mark),
         };
         std.debug.assert(end > i);
         i = end;
@@ -499,7 +510,12 @@ fn is(cps: []const u21, i: usize, class: u8) bool {
 }
 
 fn isOther(cps: []const u21, i: usize) bool {
-    return i < cps.len and classOf(cps[i]) & (class_letter | class_number | class_space) == 0;
+    return isOtherThan(cps, i, class_letter);
+}
+
+/// Neither `letters`, a number, nor white space.
+fn isOtherThan(cps: []const u21, i: usize, letters: u8) bool {
+    return i < cps.len and classOf(cps[i]) & (letters | class_number | class_space) == 0;
 }
 
 fn runOf(cps: []const u21, from: usize, class: u8) usize {
@@ -512,8 +528,12 @@ fn runOf(cps: []const u21, from: usize, class: u8) usize {
 }
 
 fn runOfOther(cps: []const u21, from: usize) usize {
+    return runOfOtherThan(cps, from, class_letter);
+}
+
+fn runOfOtherThan(cps: []const u21, from: usize, letters: u8) usize {
     var j = from;
-    while (isOther(cps, j))
+    while (isOtherThan(cps, j, letters))
     {
         j += 1;
     }
@@ -586,28 +606,29 @@ fn matchGpt2(cps: []const u21, i: usize) usize {
     return spaceRun(cps, i);
 }
 
-fn matchQwen2(cps: []const u21, i: usize) usize {
+/// The qwen2 and qwen35 patterns, which differ only in what counts as a letter (`letters`).
+fn matchQwen(cps: []const u21, i: usize, letters: u8) usize {
     if (contraction(cps, i, true)) |end|
     {
         return end;
     }
     const c = classOf(cps[i]);
-    if (c & (class_newline | class_letter | class_number) == 0 and is(cps, i + 1, class_letter))
+    if (c & (class_newline | class_letter | class_number) == 0 and is(cps, i + 1, letters))
     {
-        return runOf(cps, i + 1, class_letter);
+        return runOf(cps, i + 1, letters);
     }
-    if (c & class_letter != 0)
+    if (c & letters != 0)
     {
-        return runOf(cps, i, class_letter);
+        return runOf(cps, i, letters);
     }
     if (c & class_number != 0)
     {
         return i + 1;
     }
     const s = if (cps[i] == ' ') i + 1 else i;
-    if (isOther(cps, s))
+    if (isOtherThan(cps, s, letters))
     {
-        return runOf(cps, runOfOther(cps, s), class_newline);
+        return runOf(cps, runOfOtherThan(cps, s, letters), class_newline);
     }
     // A white space run containing a line break ends after its last break.
     const j = runOf(cps, i, class_space);
@@ -907,7 +928,8 @@ fn jsonPattern(v: std.json.Value) ?Pattern {
         .string => |s| s,
         else => return null,
     };
-    if (!std.mem.eql(u8, re, qwen2_regex) or !std.mem.eql(u8, behavior, "Isolated") or (asBool(sp.get("invert")) orelse false))
+    const which: Pattern = if (std.mem.eql(u8, re, qwen2_regex)) .qwen2 else if (std.mem.eql(u8, re, qwen35_regex)) .qwen35 else return null;
+    if (!std.mem.eql(u8, behavior, "Isolated") or (asBool(sp.get("invert")) orelse false))
     {
         return null;
     }
@@ -915,7 +937,7 @@ fn jsonPattern(v: std.json.Value) ?Pattern {
     {
         return null;
     }
-    return .qwen2;
+    return which;
 }
 
 fn expectSplit(pattern: Pattern, text: []const u8, want: []const []const u8) !void {
@@ -935,6 +957,13 @@ test "gpt2 pattern splits like Hugging Face" {
     try expectSplit(.gpt2, "Hello world's  test\n\n x", &.{ "Hello", " world", "'s", " ", " test", "\n\n", " x" });
     try expectSplit(.gpt2, "x 12345 !!\n\n", &.{ "x", " 12345", " !!", "\n\n" });
     try expectSplit(.gpt2, "It'S  ", &.{ "It", "'", "S", "  " });
+}
+
+test "qwen35 pattern keeps combining marks with letters" {
+    // U+0301 (combining acute) after a letter, and alone after punctuation.
+    try expectSplit(.qwen35, "cafe\u{301} !\u{301}x", &.{ "cafe\u{301}", " !", "\u{301}x" });
+    try expectSplit(.qwen2, "cafe\u{301} !\u{301}x", &.{ "cafe", "\u{301}", " !\u{301}", "x" });
+    try expectSplit(.qwen35, "x 12345 !!\n\n", &.{ "x", " ", "1", "2", "3", "4", "5", " !!\n\n" });
 }
 
 test "qwen2 pattern splits like Hugging Face" {

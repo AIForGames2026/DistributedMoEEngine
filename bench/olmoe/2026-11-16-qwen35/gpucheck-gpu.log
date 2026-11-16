@@ -1,0 +1,9 @@
+load: non-expert weights and 256 of 256 experts, 36.89 GB in 6.67 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (36.89 GB in 0.97 s)
+local: context 2048 tokens + 32 generated, chunks of 2048; KV cache all in memory, f32, 40960 bytes per token: 0.09 GB in memory (all of it would be 0.09 GB), GPU attention on
+local: prefill time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.3 s, Gated DeltaNet 1.2 s, output 0.1 s, router 0.1 s, experts 1.2 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.1 s, Gated DeltaNet 0.3 s, output 0.0 s, router 0.1 s, experts 0.3 s, LM head 0.1 s
+local: time to first token 3.051 s (671 tokens/s prefill); decode 0.031 s per token (32.12 tokens/s) over 31 steps from position 2048; resident memory 37242 MB
+local: FAIL: generated tokens match (32 of 32 the same before the first difference), logits differ (by up to 7.82e-2 through it) compared with /tmp/lh_q35c.bin
+local: heap: 180 allocations, 180 frees, peak 879.2 MB, 0 bytes still allocated at exit (balanced)
+error: CompareFailed

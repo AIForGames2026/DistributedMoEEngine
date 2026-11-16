@@ -488,9 +488,9 @@ __device__ __forceinline__ constexpr int kv_vf(int fmt)
     return fmt == KV_BF16_FP8 ? KV_FP8 : fmt;
 }
 
-__device__ __forceinline__ int kv_row_bytes(int fmt, int kvd)
+__device__ __forceinline__ int kv_row_bytes(int fmt, int kvd, int hd = ATT_HD)
 {
-    return fmt == KV_F32 ? kvd * 4 : fmt == KV_BF16 ? kvd * 2 : kvd + ((kvd / ATT_HD + 15) & ~15);
+    return fmt == KV_F32 ? kvd * 4 : fmt == KV_BF16 ? kvd * 2 : kvd + ((kvd / hd + 15) & ~15);
 }
 
 // KV head h of position p in a tile: where its values start, and its scale.
@@ -500,11 +500,11 @@ struct KvHead
     float scale;
 };
 
-__device__ __forceinline__ KvHead kv_head(unsigned long long tile, int p, int h, int fmt, int kvd)
+__device__ __forceinline__ KvHead kv_head(unsigned long long tile, int p, int h, int fmt, int kvd, int hd = ATT_HD)
 {
-    const unsigned char *row = (const unsigned char *)tile + (size_t)p * kv_row_bytes(fmt, kvd);
+    const unsigned char *row = (const unsigned char *)tile + (size_t)p * kv_row_bytes(fmt, kvd, hd);
     KvHead r;
-    r.p = row + (size_t)h * ATT_HD * (fmt == KV_F32 ? 4 : fmt == KV_BF16 ? 2 : 1);
+    r.p = row + (size_t)h * hd * (fmt == KV_F32 ? 4 : fmt == KV_BF16 ? 2 : 1);
     // Scale byte 0 is never written, so a row past the end (zeroed memory) decodes to zeros, not NaN.
     const unsigned sb = fmt == KV_FP8 ? row[kvd + h] : 0;
     r.scale = fmt != KV_FP8 ? 1.0f : sb ? __int_as_float((int)(sb - 1) << 23) : 0.0f;
@@ -831,10 +831,11 @@ __device__ __forceinline__ void att_wide(
 }
 
 // Combines the splits' partial results into each query head's output, in
-// split order: out[t][head][d], one block of 128 threads per (row, KV head).
-extern "C" __global__ void tf_attention_merge(const float *__restrict__ part_m, const float *__restrict__ part_l,
-                                              const float *__restrict__ part_acc, float *__restrict__ out, int n,
-                                              int heads, int kv_heads, int splits)
+// split order: out[t][head][d], one block of HD threads per (row, KV head).
+template <int HD>
+__device__ __forceinline__ void att_merge(const float *__restrict__ part_m, const float *__restrict__ part_l,
+                                          const float *__restrict__ part_acc, float *__restrict__ out, int n, int heads,
+                                          int kv_heads, int splits)
 {
     const int j = blockIdx.x, h = blockIdx.y, d = threadIdx.x;
     const int group = heads / kv_heads;
@@ -850,9 +851,23 @@ extern "C" __global__ void tf_attention_merge(const float *__restrict__ part_m, 
             continue;
         const float f = expf(ms - m);
         l += part_l[at] * f;
-        acc += part_acc[at * ATT_HD + d] * f;
+        acc += part_acc[at * HD + d] * f;
     }
-    out[((size_t)(j / group) * heads + h * group + j % group) * ATT_HD + d] = acc / l;
+    out[((size_t)(j / group) * heads + h * group + j % group) * HD + d] = acc / l;
+}
+
+extern "C" __global__ void tf_attention_merge(const float *__restrict__ part_m, const float *__restrict__ part_l,
+                                              const float *__restrict__ part_acc, float *__restrict__ out, int n,
+                                              int heads, int kv_heads, int splits)
+{
+    att_merge<ATT_HD>(part_m, part_l, part_acc, out, n, heads, kv_heads, splits);
+}
+
+extern "C" __global__ void tf_attention_merge256(const float *__restrict__ part_m, const float *__restrict__ part_l,
+                                                 const float *__restrict__ part_acc, float *__restrict__ out, int n,
+                                                 int heads, int kv_heads, int splits)
+{
+    att_merge<256>(part_m, part_l, part_acc, out, n, heads, kv_heads, splits);
 }
 
 // Attention on tensor cores for prefill. Each f32 input is split into high and
@@ -1296,6 +1311,214 @@ ATT_KERNELS(KV_F32, )
 ATT_KERNELS(KV_BF16, _bf16)
 ATT_KERNELS(KV_FP8, _fp8)
 ATT_KERNELS(KV_BF16_FP8, _bf16_fp8)
+
+// Attention with 256-dim heads (TASK-29, Qwen3.5), for any number of rows:
+// att_first's scheme with 16 query rows per block, 16 threads per row (2
+// positions and 16 output values each, values strided so a row's threads hit
+// different banks). Same partial results as the 128-dim kernels, merged by
+// tf_attention_merge256. Dynamic shared memory: A2_SMEM bytes.
+#define A2_HD 256
+#define A2_QT 16
+#define A2_SMEM ((A2_QT + 2 * ATT_PT) * A2_HD * 4)
+
+template <int fmt>
+__device__ __forceinline__ void att_256(ATT_ARGS)
+{
+    extern __shared__ __align__(16) float a2_smem[];
+    float(*qs)[A2_HD] = (float(*)[A2_HD])a2_smem;
+    float(*ks)[A2_HD] = (float(*)[A2_HD])(a2_smem + A2_QT * A2_HD);
+    float(*vs)[A2_HD] = (float(*)[A2_HD])(a2_smem + (A2_QT + ATT_PT) * A2_HD);
+    float(*ps)[ATT_PT] = (float(*)[ATT_PT])ks;
+
+    const int h = blockIdx.y;
+    const int split = blockIdx.z;
+    const int group = heads / kv_heads;
+    const int rows = n * group;
+    const int j0 = blockIdx.x * A2_QT;
+    const int tid = threadIdx.x;
+    const int r = tid >> 4;
+    const int sub = tid & 15;
+    const int lane = tid & 31;
+    const int j = j0 + r;
+    const int limit = j < rows ? pos0 + j / group : -1;
+
+    for (int i = tid; i < A2_QT * (A2_HD / 4); i += blockDim.x)
+    {
+        const int jr = j0 + i / (A2_HD / 4), d4 = i % (A2_HD / 4);
+        float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        if (jr < rows)
+        {
+            v = ((const float4 *)(q + ((size_t)(jr / group) * heads + h * group + jr % group) * A2_HD))[d4];
+        }
+        *(float4 *)&qs[i / (A2_HD / 4)][d4 * 4] = v;
+    }
+
+    const int last_row = min(j0 + A2_QT, rows) - 1;
+    const int block_limit = pos0 + last_row / group;
+    const int needed = block_limit / ATT_PT + 1;
+    const int first_tile = split * tiles_per_split;
+    const int end_tile = min(first_tile + tiles_per_split, needed);
+
+    float m = -INFINITY, l = 0.0f, acc[16];
+#pragma unroll
+    for (int k = 0; k < 16; k++)
+    {
+        acc[k] = 0.0f;
+    }
+    for (int tile = first_tile; tile < end_tile; tile++)
+    {
+        __syncthreads();
+        for (int i = tid; i < ATT_PT * (A2_HD / 4); i += blockDim.x)
+        {
+            const int p = i / (A2_HD / 4), d4 = i % (A2_HD / 4);
+            const bool ok = tile * ATT_PT + p <= block_limit;
+            const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            *(float4 *)&ks[p][d4 * 4] = ok ? kv_get4(kv_head(tiles_k[tile], p, h, kv_kf(fmt), kvd, A2_HD), d4, kv_kf(fmt)) : zero;
+            *(float4 *)&vs[p][d4 * 4] = ok ? kv_get4(kv_head(tiles_v[tile], p, h, kv_vf(fmt), kvd, A2_HD), d4, kv_vf(fmt)) : zero;
+        }
+        __syncthreads();
+        float s[2];
+#pragma unroll
+        for (int i = 0; i < 2; i++)
+        {
+            const int p = sub * 2 + i;
+            float dot = 0.0f;
+            for (int d0 = 0; d0 < A2_HD; d0++)
+            {
+                const int d = (d0 + lane) & (A2_HD - 1);
+                dot += qs[r][d] * ks[p][d];
+            }
+            s[i] = tile * ATT_PT + p <= limit ? dot * scale : -INFINITY;
+        }
+        float mx = fmaxf(s[0], s[1]);
+        for (int off = 8; off > 0; off >>= 1)
+        {
+            mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, off));
+        }
+        const float m_new = fmaxf(m, mx);
+        float sum = 0.0f;
+#pragma unroll
+        for (int i = 0; i < 2; i++)
+        {
+            s[i] = m_new == -INFINITY ? 0.0f : expf(s[i] - m_new);
+            sum += s[i];
+        }
+        for (int off = 8; off > 0; off >>= 1)
+        {
+            sum += __shfl_xor_sync(0xffffffffu, sum, off);
+        }
+        const float alpha = m == -INFINITY ? 0.0f : expf(m - m_new);
+        l = l * alpha + sum;
+        m = m_new;
+#pragma unroll
+        for (int k = 0; k < 16; k++)
+        {
+            acc[k] *= alpha;
+        }
+        __syncthreads();
+        ps[r][sub * 2] = s[0];
+        ps[r][sub * 2 + 1] = s[1];
+        __syncthreads();
+        for (int p = 0; p < ATT_PT; p++)
+        {
+            const float w = ps[r][p];
+#pragma unroll
+            for (int k = 0; k < 16; k++)
+            {
+                acc[k] += w * vs[p][sub + 16 * k];
+            }
+        }
+    }
+    if (j >= rows)
+    {
+        return;
+    }
+    const size_t at = ((size_t)split * kv_heads + h) * rows + j;
+    if (sub == 0)
+    {
+        part_m[at] = m;
+        part_l[at] = l;
+    }
+#pragma unroll
+    for (int k = 0; k < 16; k++)
+    {
+        part_acc[at * A2_HD + sub + 16 * k] = acc[k];
+    }
+}
+
+#define ATT_KERNELS_256(F, SUFFIX)                                                                                      \
+    extern "C" __global__ void __launch_bounds__(256) tf_attention256##SUFFIX(ATT_ARGS)                                 \
+    {                                                                                                                   \
+        att_256<F>(ATT_PASS);                                                                                           \
+    }
+
+ATT_KERNELS_256(KV_F32, )
+ATT_KERNELS_256(KV_BF16, _bf16)
+ATT_KERNELS_256(KV_FP8, _fp8)
+ATT_KERNELS_256(KV_BF16_FP8, _bf16_fp8)
+
+// The gated delta rule of a Gated DeltaNet layer (TASK-29) over n tokens:
+// one block per value head h, thread j holding column j of the head's DR_DK
+// x dv state in registers, so each token's update needs no reduction across
+// threads. Rows of `mixed` (cd floats per token) hold the L2-normalized,
+// scaled queries, the keys, then the values; value head h reads key head
+// h mod kh. `state` is read at the start and written back at the end.
+#define DR_DK 128
+
+extern "C" __global__ void __launch_bounds__(256) tf_delta_rule(const float *__restrict__ mixed,
+                                                                const float *__restrict__ beta,
+                                                                const float *__restrict__ decay, float *__restrict__ state,
+                                                                float *__restrict__ core, int n, int cd, int kh, int vh,
+                                                                int dv)
+{
+    __shared__ float qs[DR_DK];
+    __shared__ float ks[DR_DK];
+    const int h = blockIdx.x;
+    const int j = threadIdx.x;
+    const int kq = h % kh;
+    float *m = state + (size_t)h * DR_DK * dv;
+    float st[DR_DK];
+#pragma unroll
+    for (int i = 0; i < DR_DK; i++)
+    {
+        st[i] = m[(size_t)i * dv + j];
+    }
+    for (int t = 0; t < n; t++)
+    {
+        const float *row = mixed + (size_t)t * cd;
+        __syncthreads();
+        for (int i = j; i < DR_DK; i += blockDim.x)
+        {
+            qs[i] = row[kq * DR_DK + i];
+            ks[i] = row[(kh + kq) * DR_DK + i];
+        }
+        __syncthreads();
+        const float v = row[2 * kh * DR_DK + h * dv + j];
+        const float g = expf(decay[(size_t)t * vh + h]);
+        const float b = beta[(size_t)t * vh + h];
+        float kv = 0.0f;
+#pragma unroll
+        for (int i = 0; i < DR_DK; i++)
+        {
+            st[i] *= g;
+            kv += st[i] * ks[i];
+        }
+        const float delta = (v - kv) * b;
+        float o = 0.0f;
+#pragma unroll
+        for (int i = 0; i < DR_DK; i++)
+        {
+            st[i] += ks[i] * delta;
+            o += st[i] * qs[i];
+        }
+        core[(size_t)t * vh * dv + h * dv + j] = o;
+    }
+#pragma unroll
+    for (int i = 0; i < DR_DK; i++)
+    {
+        m[(size_t)i * dv + j] = st[i];
+    }
+}
 
 // Q8_0 matmul on tensor cores for many inputs. Weights go in as exact f16 integers and
 // inputs, scaled by a power of 2 per row (tf_rowscale), as high and low f16 parts.

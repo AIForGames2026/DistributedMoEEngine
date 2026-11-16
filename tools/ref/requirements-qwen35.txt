@@ -1,0 +1,9 @@
+# tools/ref/ref_qwen35.py only (TASK-29): transformers' qwen3_5_moe needs a newer release than
+# requirements.txt pins, so keep it in its own venv. CPU build of PyTorch is enough:
+#   pip install -r tools/ref/requirements-qwen35.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0
+numpy==2.5.5
+gguf==0.19.0
+safetensors==0.8.0
+tokenizers==0.23.3
+transformers==5.23.0

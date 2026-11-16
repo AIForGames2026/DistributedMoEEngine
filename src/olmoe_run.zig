@@ -1,4 +1,4 @@
-//! OLMoE-1B-7B (TASK-10) or Qwen3-MoE (TASK-12) forward pass split across
+//! OLMoE-1B-7B (TASK-10), Qwen3-MoE (TASK-12) or Qwen3.5-MoE (TASK-29) forward pass split across
 //! two processes. Linux.
 //!
 //!   olmoe local MODEL --golden G.tfref                 one process, every expert
@@ -1959,10 +1959,10 @@ const ServeEngine = struct {
         return .{ .ctx = self, .vocab = self.w.cfg.vocab, .cap = cap, .truncate = truncate, .step = step };
     }
 
-    fn truncate(ctx: *anyopaque, len: usize) void
+    fn truncate(ctx: *anyopaque, len: usize) usize
     {
         const self: *ServeEngine = @ptrCast(@alignCast(ctx));
-        self.cache.len = @min(self.cache.len, len);
+        return self.cache.truncate(len);
     }
 
     fn step(ctx: *anyopaque, tokens: []const u32, logits: []f32) anyerror!void
@@ -2006,6 +2006,12 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     defer if (tier) |t| t.close(gpa);
     var cache: olmoe.KvCache = undefined;
     var path_buf: [512]u8 = undefined;
+    if (cfg.recurrentLayers() > 0 and (opts.kv_offload != null or opts.prefix_cache != null))
+    {
+        // Neither the NVMe tier nor saved prefixes carry a Gated DeltaNet layer's state yet.
+        std.debug.print("{s}: --kv-offload and --prefix-cache do not support {s} yet\n", .{ name, modelName(cfg) });
+        return error.Unsupported;
+    }
     if (opts.kv_offload) |dir|
     {
         const path = try zPrint(&path_buf, "{s}/tf_kv_{d}.bin", .{ dir, c.getpid() });
@@ -2018,9 +2024,9 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     }
     defer cache.deinit(gpa);
     const kv_bytes = if (tier) |t| t.memoryBytes() else cache.k.len + cache.v.len;
-    const full_bytes = cfg.layers * cap * cache.positionBytes();
+    const full_bytes = cfg.attnLayers() * cap * cache.positionBytes();
     std.debug.print("{s}: context {d} tokens + {d} generated, chunks of {d}; KV cache {s}, {t}, {d} bytes per token: {d:.2} GB in memory (all of it would be {d:.2} GB), GPU attention {s}\n", .{
-        name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", opts.kv_format, cfg.layers * cache.positionBytes(), @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
+        name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", opts.kv_format, cfg.attnLayers() * cache.positionBytes(), @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
     });
 
     var key: ?prefix_cache.Key = null;
@@ -2234,8 +2240,8 @@ fn reportProfile(name: []const u8, what: []const u8) void
             return @as(f64, @floatFromInt(ns)) / 1e9;
         }
     }.f;
-    std.debug.print("{s}: {s} time: projections {d:.1} s, QK norm and rope {d:.1} s, attention {d:.1} s, output {d:.1} s, router {d:.1} s, experts {d:.1} s, LM head {d:.1} s\n", .{
-        name, what, s(p.projections), s(p.qk_rope), s(p.attention), s(p.output), s(p.router), s(p.experts), s(p.head),
+    std.debug.print("{s}: {s} time: projections {d:.1} s, QK norm and rope {d:.1} s, attention {d:.1} s, Gated DeltaNet {d:.1} s, output {d:.1} s, router {d:.1} s, experts {d:.1} s, LM head {d:.1} s\n", .{
+        name, what, s(p.projections), s(p.qk_rope), s(p.attention), s(p.recurrent), s(p.output), s(p.router), s(p.experts), s(p.head),
     });
 }
 
@@ -2275,6 +2281,7 @@ fn modelName(cfg: olmoe.Config) []const u8
     return switch (cfg.arch) {
         .olmoe => "OLMoE",
         .qwen3moe => if (cfg.yarn > 0) "Qwen3-MoE (YaRN)" else "Qwen3-MoE",
+        .qwen35moe => "Qwen3.5-MoE",
     };
 }
 

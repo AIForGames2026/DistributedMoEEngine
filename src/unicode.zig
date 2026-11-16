@@ -13,6 +13,11 @@ pub fn isNumber(cp: u21) bool {
     return inRanges(&tables.numbers, cp);
 }
 
+/// General category M (combining marks), which Qwen3.5's pattern treats like letters.
+pub fn isMark(cp: u21) bool {
+    return inRanges(&tables.marks, cp);
+}
+
 /// The White_Space property, which `\s` matches in the tokenizers' regexes.
 pub fn isSpace(cp: u21) bool {
     return switch (cp) {

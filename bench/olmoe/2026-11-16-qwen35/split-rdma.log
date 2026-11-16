@@ -1,0 +1,23 @@
+load: 128 of 256 experts, 17.11 GB in 6.47 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (17.11 GB in 0.44 s)
+expert: serving, resident memory 17262 MB
+load: non-expert weights and 128 of 256 experts, 19.78 GB in 6.94 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (19.78 GB in 0.52 s)
+rdma: prompt 0 (5 tokens, 375 ms): logits max err 3.58e-5, top-1 5/5, hidden max err 5.33e-5, experts chosen 1600/1600 same ok
+rdma: prompt 1 (19 tokens, 1166 ms): logits max err 4.39e-5, top-1 19/19, hidden max err 4.64e-5, experts chosen 6080/6080 same ok
+rdma: prompt 2 (15 tokens, 967 ms): logits max err 4.39e-5, top-1 15/15, hidden max err 5.34e-5, experts chosen 4800/4800 same ok
+rdma: PASS: Qwen3.5-MoE logits within 1e-2 of the PyTorch reference (worst 4.39e-5), every top-1 token identical
+rdma: generate prompt 0: 32 tokens in 2.67 s (12.0 tokens/s, prompt included)
+rdma:   tokens: 11751 11 264 3177 34756 364 1141 8807 3712 11 7431 11 321 25438 57902 13 27480 12484 303 279 9897 81183 919 314 279 3046 11 3055 279 181474 10629 11
+rdma:   same as transformers' generate(): 32/32 tokens, logits max err 4.96e-5 ok
+rdma: generate prompt 1: 32 tokens in 3.46 s (9.3 tokens/s, prompt included)
+rdma:   tokens: 73111 1393 471 220 16 8 478 73111 1393 471 220 17 8 1358 727 73111 697 6515 1393 11 20781 65787 1590 198 262 413 307 303 20781 25 198 285
+rdma:   same as transformers' generate(): 32/32 tokens, logits max err 3.35e-1 FAIL
+rdma: generate prompt 2: 32 tokens in 3.21 s (10.0 tokens/s, prompt included)
+rdma:   tokens: 279 1324 314 4393 4868 369 1691 8882 1056 279 2702 1324 314 4868 13 1061 5954 586 310 5281 685 279 1558 1331 1973 7459 279 52652 2695 13 271 760
+rdma:   same as transformers' generate(): 32/32 tokens, logits max err 4.58e-5 ok
+rdma: FAIL: generated tokens or their logits differ from transformers' generate()
+rdma: 27008 expert calls sent to rank 1, 27712 run locally; payload f32
+expert: ran 27008 expert FFNs for rank 0, 310 us each on average (max 1398 us), 8.38 s in all; resident memory 17265 MB
+rdma: heap: 484 allocations, 484 frees, peak 291.5 MB, 0 bytes still allocated at exit (balanced)
+error: GenerateMismatch

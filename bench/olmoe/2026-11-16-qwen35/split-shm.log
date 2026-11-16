@@ -1,0 +1,24 @@
+load: 128 of 256 experts, 17.11 GB in 6.43 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (17.11 GB in 0.44 s)
+expert: serving, resident memory 17256 MB
+load: non-expert weights and 128 of 256 experts, 19.78 GB in 6.91 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (19.78 GB in 0.52 s)
+shm: prompt 0 (5 tokens, 365 ms): logits max err 3.58e-5, top-1 5/5, hidden max err 5.33e-5, experts chosen 1600/1600 same ok
+shm: prompt 1 (19 tokens, 749 ms): logits max err 4.39e-5, top-1 19/19, hidden max err 4.64e-5, experts chosen 6080/6080 same ok
+shm: prompt 2 (15 tokens, 713 ms): logits max err 4.39e-5, top-1 15/15, hidden max err 5.34e-5, experts chosen 4800/4800 same ok
+shm: PASS: Qwen3.5-MoE logits within 1e-2 of the PyTorch reference (worst 4.39e-5), every top-1 token identical
+shm: generate prompt 0: 32 tokens in 2.66 s (12.0 tokens/s, prompt included)
+shm:   tokens: 11751 11 264 3177 34756 364 1141 8807 3712 11 7431 11 321 25438 57902 13 27480 12484 303 279 9897 81183 919 314 279 3046 11 3055 279 181474 10629 11
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 4.96e-5 ok
+shm: generate prompt 1: 32 tokens in 3.03 s (10.6 tokens/s, prompt included)
+shm:   tokens: 73111 1393 471 220 16 8 478 73111 1393 471 220 17 8 1358 727 73111 697 6515 1393 11 20781 65787 1590 198 262 413 307 303 20781 25 198 285
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 3.35e-1 FAIL
+shm: generate prompt 2: 32 tokens in 2.96 s (10.8 tokens/s, prompt included)
+shm:   tokens: 279 1324 314 4393 4868 369 1691 8882 1056 279 2702 1324 314 4868 13 1061 5954 586 310 5281 685 279 1558 1331 1973 7459 279 52652 2695 13 271 760
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 4.58e-5 ok
+shm: FAIL: generated tokens or their logits differ from transformers' generate()
+shm: 27008 expert calls sent to rank 1, 27712 run locally; payload f32
+expert: ran 27008 expert FFNs for rank 0, 253 us each on average (max 1363 us), 6.83 s in all; resident memory 17260 MB
+expert: heap: 44 allocations, 44 frees, peak 29.7 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 484 allocations, 484 frees, peak 291.5 MB, 0 bytes still allocated at exit (balanced)
+error: GenerateMismatch

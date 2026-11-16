@@ -29,6 +29,8 @@ pub fn build(b: *std.Build) void {
     // Tiny random Qwen3-MoE with YaRN and transformers' outputs for it (tools/ref/ref_qwen3.py --tiny).
     engine.addAnonymousImport("qwen3_tiny.gguf", .{ .root_source_file = b.path("tests/golden/qwen3_tiny.gguf") });
     engine.addAnonymousImport("qwen3_tiny.tfref", .{ .root_source_file = b.path("tests/golden/qwen3_tiny.tfref") });
+    engine.addAnonymousImport("qwen35_tiny.gguf", .{ .root_source_file = b.path("tests/golden/qwen35_tiny.gguf") });
+    engine.addAnonymousImport("qwen35_tiny.tfref", .{ .root_source_file = b.path("tests/golden/qwen35_tiny.tfref") });
     // The TCP transport uses Winsock on Windows.
     if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 

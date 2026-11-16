@@ -14,7 +14,7 @@ const KvFormat = @import("kv_format.zig").KvFormat;
 const Handle = opaque {};
 extern fn tf_gpu_open(out: *?*Handle, fatbin: *const anyopaque, err: [*]u8, err_len: usize) c_int;
 extern fn tf_gpu_map(g: *Handle, host: *anyopaque, len: usize, dev: *u64) c_int;
-extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int) c_int;
+extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int, hd: c_int) c_int;
 extern fn tf_gpu_set_attention_kernel(g: *Handle, which: c_int) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
 extern fn tf_gpu_matmul(g: *Handle, w: u64, format: c_int, x: [*]const f32, n: c_int, rows: c_int, cols: c_int, y: [*]f32) c_int;
@@ -175,7 +175,7 @@ pub fn main(init: std.process.Init) !void
             for (0..reps + 1) |_|
             {
                 const t0 = nowNs();
-                if (tf_gpu_attention(g.?, q.ptr, @intCast(n), @intCast(pos0), @intCast(heads), @intCast(kv_heads), @intCast(kvd), scale, tiles_k.ptr, tiles_v.ptr, @intCast(ntiles), @intCast(splits), out[which].ptr, @intFromEnum(format)) != 0)
+                if (tf_gpu_attention(g.?, q.ptr, @intCast(n), @intCast(pos0), @intCast(heads), @intCast(kv_heads), @intCast(kvd), scale, tiles_k.ptr, tiles_v.ptr, @intCast(ntiles), @intCast(splits), out[which].ptr, @intFromEnum(format), 128) != 0)
                 {
                     return error.AttentionFailed;
                 }

@@ -1,0 +1,51 @@
+{
+  "recordings": [
+    {
+      "id": "olmoe-chat",
+      "source": "bench/trace/2026-11-15/chat-olmoe-two-sparks-rdma.jsonl.gz",
+      "title": "Chat: OLMoE-1B-7B split across two DGX Sparks over RDMA",
+      "summary": "A scripted three-turn chat at temperature 0 through the engine's OpenAI-compatible server (TASK-30), recorded with --record. Rank 0 on gx10-02 runs attention, the router and experts 0 to 31 of each layer; rank 1 on gx10-03 runs experts 32 to 63, reached over RDMA. The per-rank call counts below come from the frames and are checked against the engine's own counters.",
+      "results": "bench/trace/2026-11-15-recording.md",
+      "ranks": [
+        "gx10-02",
+        "gx10-03"
+      ],
+      "speed": 1
+    },
+    {
+      "id": "qwen3-chat",
+      "source": "bench/trace/2026-11-15/chat-qwen3-one-spark.jsonl.gz",
+      "title": "Chat: Qwen3-30B-A3B on one DGX Spark, with reasoning",
+      "summary": "The same scripted three-turn chat with Qwen3-30B-A3B (48 layers, 128 experts, top 8) on gx10-02's GPU, thinking on, recorded with --record.",
+      "results": "bench/trace/2026-11-15-recording.md",
+      "ranks": [
+        "gx10-02"
+      ],
+      "speed": 1
+    },
+    {
+      "id": "soak",
+      "source": "bench/rc/2026-11-16-soak/soak-first-6000.jsonl.gz",
+      "title": "Soak: the first 3 minutes of the one-hour run (TASK-15)",
+      "summary": "The first 6,000 steps of TASK-15's one-hour soak: OLMoE-1B-7B in two engine processes on gx10-02, linked over RDMA, repeating the golden prompts at 30.8 tokens/s. Every one of its 577 rounds gave the same tokens and logits. The full hour's recording (110,979 steps) is archived with the run.",
+      "results": "bench/rc/2026-11-16-soak.md",
+      "ranks": [
+        "gx10-02",
+        "gx10-02"
+      ],
+      "speed": 1
+    },
+    {
+      "id": "cross",
+      "source": "bench/rc/2026-11-16-soak/cross/cross.jsonl.gz",
+      "title": "Cross-machine: desktop GPU and a DGX Spark over the internet (TASK-15)",
+      "summary": "TASK-15's 10-minute cross-machine run: rank 0 on a desktop's RTX 5070 Ti, rank 1 on gx10-02, linked over TCP through Tailscale's relay. It is slow (0.6 tokens/s, each layer waits about 100 ms on the relay), but its tokens matched transformers exactly. It plays at 10x speed by default.",
+      "results": "bench/rc/2026-11-16-soak.md",
+      "ranks": [
+        "desktop",
+        "gx10-02"
+      ],
+      "speed": 10
+    }
+  ]
+}

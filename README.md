@@ -5,9 +5,9 @@
 
 Run AI models too big for one machine across a small cluster of NVIDIA DGX Sparks. TensorFold-Swarm gives each machine a share of a Mixture-of-Experts model and sends only the tokens between them, over RDMA or TCP, with no Python at runtime.
 
-**[Try the simulator in your browser](https://aiforgames2026.github.io/DistributedMoEEngine/)**: about 3 minutes, nothing to install.
+**[Watch the engine in your browser](https://aiforgames2026.github.io/DistributedMoEEngine/)**: recorded chats and soak runs of the real engine, replayed with each token's experts lit on the machine that ran them. Nothing to install. The [simulator with its guided mission](https://aiforgames2026.github.io/DistributedMoEEngine/inspector.html) is a second tab.
 
-[![The inspector showing tokens flying between three machines](docs/images/inspector.png)](https://aiforgames2026.github.io/DistributedMoEEngine/)
+[![The inspector showing tokens flying between three machines](docs/images/inspector.png)](https://aiforgames2026.github.io/DistributedMoEEngine/inspector.html)
 
 **Status: alpha.** OLMoE-1B-7B runs split across two processes and matches Hugging Face's output. It processes whole prompts and can't generate text yet.
 
@@ -47,12 +47,13 @@ zig-out/bin/dispatch expert --port 7470 --moe # first machine
 zig-out/bin/dispatch router --host <first machine's IP> --port 7470 --moe # second machine
 ```
 
-Run the browser inspector locally (needs [Node.js 22](https://nodejs.org)):
+Build the website locally and open the URL it prints (needs [Node.js 22](https://nodejs.org)):
 
 ```bash
 cd web
 npm ci
-npm run dev
+npm run build
+npm run preview
 ```
 
 To run the real 7 GB model, over RDMA or on a GPU, see [Building and running everything](docs/BUILDING.md).
@@ -100,7 +101,7 @@ Engine binaries are not part of this slice and classmates are not asked to run a
 
 The site is hosted on GitHub Pages (the Dec 6 host), and any member with write access can redeploy:
 
-1. Check it locally, then play through the mission:
+1. Check it locally: the main page replays each recording, and `inspector.html` plays through the mission:
 
    ```bash
    cd web
@@ -110,14 +111,14 @@ The site is hosted on GitHub Pages (the Dec 6 host), and any member with write a
    npm run preview
    ```
 
-2. Push to `main`. Any change under `web/` or to `.github/workflows/pages.yml` starts the [Pages workflow](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml), which builds the site, fails if the bundle contains an executable or installer, and publishes it.
+2. Push to `main`. Any change under `web/`, to a recording under `bench/`, or to `.github/workflows/pages.yml` starts the [Pages workflow](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml). It builds the site, fails if the bundle holds an executable or installer, a page without a Content-Security-Policy, or a main page over 5 MB to load, and publishes it. The recordings on the main page are listed in `web/showcase.json`.
 3. To redeploy with no code change, use **Run workflow** on that page, or run:
 
    ```bash
    gh workflow run pages.yml --ref main
    ```
 
-4. Wait for the workflow to pass, then open https://aiforgames2026.github.io/DistributedMoEEngine/ in a private window, ideally on another machine, and play through the mission with no console errors.
+4. Wait for the workflow to pass, then open https://aiforgames2026.github.io/DistributedMoEEngine/ in a private window, ideally on another machine. Replay each recording, then play through the mission on `inspector.html`, with no console errors.
 5. First-time setup only, on a fork: under **Settings > Pages**, set **Source** to **GitHub Actions**.
 
 During a test window, push only fixes the session needs, and list each one in the [release notes](#release-notes).

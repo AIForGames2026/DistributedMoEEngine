@@ -78,6 +78,14 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .ghost:hover { background: var(--cell); }
 header .tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 label.ghost { border-radius: 8px; cursor: pointer; font-size: 13px; }
+a.ghost { border-radius: 8px; font-size: 13px; text-decoration: none; }
+#pick { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 13px; max-width: 360px; }
+.badge { background: var(--user); color: var(--ink); border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+.msg.note a { color: rgb(var(--rank0)); }
+@media (max-width: 640px) {
+  header .tools { margin-left: 0; flex-wrap: wrap; }
+  #pick { max-width: 100%; flex: 1 1 100%; }
+}
 #player { display: flex; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel); font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 #player input[type=range] { flex: 1; min-width: 140px; }
 #player select { padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
@@ -93,9 +101,13 @@ body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px
 <body>
 <header>
   <h1>TensorFold Live</h1>
+  <span class="badge" id="badge" hidden>Recording of the real engine</span>
   <span class="meta"><span id="dot" class="dot"></span><span id="conn">connecting to the engine</span></span>
   <span class="meta" id="model"></span>
   <span class="tools">
+    <select id="pick" aria-label="recording" hidden></select>
+    <a id="inspector" class="ghost" href="inspector.html" hidden>3D inspector</a>
+    <a id="repo" class="ghost" href="https://github.com/AIForGames2026/DistributedMoEEngine" hidden>Source</a>
     <button id="golive" class="ghost" type="button" hidden>Back to live</button>
     <label class="ghost">Replay a recording<input type="file" id="file" accept=".jsonl,.gz,.json,.txt" hidden></label>
   </span>
@@ -139,6 +151,8 @@ let live = null;
 // The recording being replayed, if any (TASK-16).
 let rp = null;
 let ws = null;
+// On the public site (TASK-18) the page never connects to an engine and replays only the recordings this manifest lists.
+const showcase = document.querySelector('meta[name="tensorfold-showcase"]')?.content || null;
 
 function freshState(h) {
   const ranks = h.ranks.length;
@@ -282,7 +296,7 @@ function draw(now) {
   if (!topo) {
     ctx.fillStyle = color("--muted");
     ctx.font = "14px system-ui, sans-serif";
-    ctx.fillText(rp === null ? "Waiting for the engine's live feed..." : "", 20, 30);
+    ctx.fillText(rp !== null ? "" : showcase ? "Loading the recording..." : "Waiting for the engine's live feed...", 20, 30);
     requestAnimationFrame(draw);
     return;
   }
@@ -635,7 +649,82 @@ async function loadTrace(name, blob) {
     showProblem(`${name} is not a TensorFold recording: ${e.message}.`);
     return;
   }
-  startReplay(name, trace);
+  startReplay(name, trace, null);
+}
+
+// The public site's list of recordings, each with a label saying where and how it was recorded.
+async function startShowcase() {
+  document.querySelector("header h1").textContent = "TensorFold-Swarm";
+  $("form").hidden = true;
+  $("dot").hidden = true;
+  $("conn").textContent = "loading the recording";
+  $("empty").textContent = "Loading the recording...";
+  for (const id of ["badge", "inspector", "repo"]) {
+    $(id).hidden = false;
+  }
+  let list;
+  try {
+    const res = await fetch(showcase);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    list = (await res.json()).recordings;
+    if (!Array.isArray(list) || !list.length || !list.every((r) => r && typeof r.file === "string" && typeof r.title === "string")) {
+      throw new Error("it lists no recordings");
+    }
+  } catch (e) {
+    showProblem(`Could not load the list of recordings: ${e.message}.`);
+    return;
+  }
+  const pick = $("pick");
+  list.forEach((rec, i) => {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = rec.title;
+    pick.appendChild(o);
+  });
+  pick.hidden = false;
+  const want = new URLSearchParams(location.search).get("r");
+  const at = Math.max(0, list.findIndex((rec) => rec.id === want));
+  pick.value = String(at);
+  pick.addEventListener("change", () => openRecording(list[Number(pick.value)], true));
+  openRecording(list[at], false);
+}
+
+let opening = 0;
+async function openRecording(rec, chosen) {
+  const ticket = ++opening;
+  if (chosen && rec.id) {
+    window.history.replaceState(null, "", `?r=${encodeURIComponent(rec.id)}`);
+  }
+  let trace;
+  try {
+    const res = await fetch(rec.file);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    trace = parseTrace(await readText(await res.blob()));
+  } catch (e) {
+    if (ticket === opening) {
+      showProblem(`Could not replay "${rec.title}": ${e.message}.`);
+    }
+    return;
+  }
+  if (ticket === opening) {
+    startReplay(rec.file.split("/").pop(), trace, rec);
+  }
+}
+
+function addLabel(label) {
+  const el = addMsg("note", label.summary ? label.summary + " " : "");
+  if (label.results) {
+    const a = document.createElement("a");
+    a.href = label.results;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "Raw results and how it was recorded";
+    el.appendChild(a);
+  }
 }
 
 function showProblem(text) {
@@ -644,17 +733,28 @@ function showProblem(text) {
   el.classList.add("error");
 }
 
-function startReplay(name, trace) {
+// `label` describes a recording from the public site's list, and may name its machines more plainly than the file does.
+function startReplay(name, trace, label) {
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
-  rp = { ...trace, name, i: 0, clock: 0, speed: parseFloat($("speed").value) || 1, playing: true, dragging: false, reply: null, shown: 0 };
-  topo = trace.hello;
+  if (label && [...$("speed").options].some((o) => o.value === String(label.speed)))
+  {
+    $("speed").value = String(label.speed);
+  }
+  rp = { ...trace, name, label, i: 0, clock: 0, speed: parseFloat($("speed").value) || 1, playing: true, dragging: false, reply: null, shown: 0 };
+  const ranks = label && Array.isArray(label.ranks) && label.ranks.length === trace.hello.ranks.length ? label.ranks : trace.hello.ranks;
+  topo = { ...trace.hello, ranks };
   $("dot").classList.remove("on");
-  const when = trace.hello.recorded ? ` on ${new Date(trace.hello.recorded * 1000).toLocaleString()}` : "";
-  $("conn").textContent = `replaying ${name}, recorded${when}`;
+  const date = trace.hello.recorded ? new Date(trace.hello.recorded * 1000) : null;
+  if (label) {
+    const day = date ? ` on ${date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}` : "";
+    $("conn").textContent = `recorded${day}, replayed in your browser with no engine connected`;
+  } else {
+    $("conn").textContent = `replaying ${name}, recorded${date ? ` on ${date.toLocaleString()}` : ""}`;
+  }
   $("model").textContent = `${topo.model} · ${topo.layers} layers × ${topo.experts} experts, top ${topo.top_k} · ${topo.transport}`;
   $("form").hidden = true;
   $("player").hidden = false;
-  $("golive").hidden = !/^https?:$/.test(location.protocol) || new URLSearchParams(location.search).has("trace");
+  $("golive").hidden = showcase !== null || !/^https?:$/.test(location.protocol) || new URLSearchParams(location.search).has("trace");
   seekReplay(0);
   $("play").textContent = "Pause";
 }
@@ -663,6 +763,10 @@ function resetReplayChat() {
   $("log").innerHTML = "";
   rp.reply = null;
   rp.shown = 0;
+  if (rp.label)
+  {
+    addLabel(rp.label);
+  }
   if (!rp.chats) addMsg("note", `This recording has no chat: ${rp.steps.toLocaleString()} engine steps of a ${topo.transport} run.`);
 }
 
@@ -742,6 +846,8 @@ if (traceUrl) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.blob();
   }).then((b) => loadTrace(traceUrl.split("/").pop(), b)).catch((e) => showProblem(`Could not load ${traceUrl}: ${e.message}.`));
+} else if (showcase) {
+  startShowcase();
 } else if (/^https?:$/.test(location.protocol)) {
   connect();
 }

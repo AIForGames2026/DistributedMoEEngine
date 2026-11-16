@@ -12,7 +12,14 @@ npm ci
 npm run dev
 ```
 
-Then open the URL Vite prints (usually http://localhost:5173). `npm run build` writes the static site to `web/dist/`. `npm test` checks the trace generator and that the guided mission's lessons still hold.
+Then open the URL Vite prints (usually http://localhost:5173/inspector.html) for the simulator.
+
+`npm run build` writes the static site to `web/dist/`, and `npm run preview` serves it:
+- Its main page, `index.html`, is the engine's own 2D page (`web/live.html`) in showcase mode. `scripts/showcase.mjs` builds it, with the recordings listed in `web/showcase.json` copied beside it and labeled. That page never connects to an engine.
+- `inspector.html` is the simulator.
+- `scripts/check-bundle.mjs` then fails the build if the site holds an executable or installer, a page without a Content-Security-Policy, or a main page over 5 MB to load.
+
+`npm test` checks the trace generator, that the guided mission's lessons still hold, and that the bundle check catches what it should.
 
 ## Engine
 

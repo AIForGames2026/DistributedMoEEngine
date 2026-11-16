@@ -1,0 +1,18 @@
+attbench: 256-dim heads, 16 query heads, 2 KV heads, 2048 new tokens, 3 reps, f32 cache (4096 bytes per position per layer)
+  0 cached: f32 20.79 ms (1.65 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 3.48 ms (9.87 TFLOPS, 2 GB/s, 5.3e-7 off f32);
+  16384 cached: f32 437.89 ms (1.33 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 49.68 ms (11.76 TFLOPS, 2 GB/s, 1.4e-6 off f32);
+  65536 cached: f32 1672.52 ms (1.34 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 190.36 ms (11.73 TFLOPS, 1 GB/s, 2.7e-6 off f32);
+  129024 cached: f32 3526.30 ms (1.24 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 409.78 ms (10.65 TFLOPS, 1 GB/s, 3.6e-6 off f32);
+  260096 cached: f32 7081.66 ms (1.24 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 818.15 ms (10.71 TFLOPS, 1 GB/s, 5.7e-6 off f32);
+attbench: 256-dim heads, 16 query heads, 2 KV heads, 2048 new tokens, 3 reps, bf16 cache (2048 bytes per position per layer)
+  65536 cached: f32 1847.96 ms (1.21 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 179.33 ms (12.45 TFLOPS, 1 GB/s, 1.9e-6 off f32);
+attbench: 256-dim heads, 16 query heads, 2 KV heads, 2048 new tokens, 3 reps, fp8 cache (1056 bytes per position per layer)
+  65536 cached: f32 1744.54 ms (1.28 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 204.08 ms (10.94 TFLOPS, 0 GB/s, 1.8e-6 off f32);
+attbench: 256-dim heads, 16 query heads, 2 KV heads, 2048 new tokens, 3 reps, bf16_fp8 cache (1552 bytes per position per layer)
+  65536 cached: f32 1719.22 ms (1.30 TFLOPS, 0 GB/s, 0.0e0 off f32); tensor cores 188.97 ms (11.82 TFLOPS, 1 GB/s, 1.9e-6 off f32);
+attbench: 256-dim heads, 16 query heads, 2 KV heads, 1 new tokens, 5 reps, f32 cache (4096 bytes per position per layer)
+  32000 cached: f32 1.17 ms (0.45 TFLOPS, 112 GB/s, 0.0e0 off f32); tensor cores 0.82 ms (0.64 TFLOPS, 161 GB/s, 2.7e-8 off f32);
+  129024 cached: f32 4.19 ms (0.50 TFLOPS, 126 GB/s, 0.0e0 off f32); tensor cores 3.17 ms (0.67 TFLOPS, 167 GB/s, 4.4e-8 off f32);
+  262000 cached: f32 8.35 ms (0.51 TFLOPS, 129 GB/s, 0.0e0 off f32); tensor cores 6.41 ms (0.67 TFLOPS, 167 GB/s, 6.2e-8 off f32);
+attbench: 128-dim heads, 32 query heads, 4 KV heads, 2048 new tokens, 3 reps, f32 cache (4096 bytes per position per layer)
+  16384 cached: first 347.52 ms (1.68 TFLOPS, 0 GB/s, 5.2e-8 off wide); wide 75.94 ms (7.69 TFLOPS, 1 GB/s, 0.0e0 off wide); tensor cores 64 44.47 ms (13.14 TFLOPS, 2 GB/s, 1.3e-6 off wide); tensor cores 128 34.70 ms (16.83 TFLOPS, 2 GB/s, 1.3e-6 off wide);

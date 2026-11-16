@@ -1,11 +1,11 @@
 //! Attention kernel benchmark (TASK-12). Linux, `zig build attbench -Dgpu=true`.
 //!
-//!   attbench [--heads H] [--kv-heads K] [--n N] [--pos P[,P...]] [--reps R] [--alloc map|host] [--format f32|bf16|fp8|bf16_fp8]
+//!   attbench [--heads H] [--kv-heads K] [--hd 128|256] [--n N] [--pos P[,P...]] [--reps R] [--alloc map|host] [--format f32|bf16|fp8|bf16_fp8]
 //!   attbench --mm [--alloc map|host] [--reps R]
 //!
 //! Times each attention kernel on random data for N new tokens after P cached
-//! positions, and reports how far each output is from the wide kernel's. `--format`
-//! stores the cache compactly (TASK-27). `--mm`
+//! positions, and reports how far each output is from the wide kernel's (the f32
+//! kernel's for `--hd 256`). `--format` stores the cache compactly (TASK-27). `--mm`
 //! times the matmul kernels instead. `--alloc host` puts data in pinned memory.
 const std = @import("std");
 const c = std.c;
@@ -22,12 +22,14 @@ extern fn tf_gpu_set_matmul_kernel(g: *Handle, which: c_int) c_int;
 extern fn tf_gpu_alloc_host(g: *Handle, len: usize, host: *?*anyopaque, dev: *u64) c_int;
 
 const fatbin align(64) = @embedFile("kernels.fatbin").*;
-const hd = 128;
 const tile = 32;
 /// tf_gpu_set_attention_kernel 1 to 5 (decode only up to 16 rows), compared with the wide kernel (2).
 const names = [_][]const u8{ "first", "wide", "tensor cores 64", "tensor cores 128", "decode" };
 const kernels = names.len;
 const max_decode_rows = 16;
+/// With 256-dim heads, kernel 1 picks the f32 kernel and 4 the tensor-core one.
+const names256 = [_][]const u8{ "f32", "tensor cores" };
+const ids256 = [_]c_int{ 1, 4 };
 
 pub fn main(init: std.process.Init) !void
 {
@@ -41,6 +43,7 @@ pub fn main(init: std.process.Init) !void
     var pinned = false;
     var mm = false;
     var format: KvFormat = .f32;
+    var hd: usize = 128;
     while (it.next()) |arg|
     {
         if (std.mem.eql(u8, arg, "--mm"))
@@ -56,6 +59,14 @@ pub fn main(init: std.process.Init) !void
         else if (std.mem.eql(u8, arg, "--kv-heads"))
         {
             kv_heads = try std.fmt.parseInt(usize, v, 10);
+        }
+        else if (std.mem.eql(u8, arg, "--hd"))
+        {
+            hd = try std.fmt.parseInt(usize, v, 10);
+            if (hd != 128 and hd != 256)
+            {
+                return error.Usage;
+            }
         }
         else if (std.mem.eql(u8, arg, "--n"))
         {
@@ -158,8 +169,8 @@ pub fn main(init: std.process.Init) !void
         a.* = dk + i * tile * row[0];
         b.* = dv + i * tile * row[1];
     }
-    const scale = 1.0 / @sqrt(@as(f32, hd));
-    std.debug.print("attbench: {d} query heads, {d} KV heads, {d} new tokens, {d} reps, {s} cache ({d} bytes per position per layer)\n", .{ heads, kv_heads, n, reps, @tagName(format), row[0] + row[1] });
+    const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+    std.debug.print("attbench: {d}-dim heads, {d} query heads, {d} KV heads, {d} new tokens, {d} reps, {s} cache ({d} bytes per position per layer)\n", .{ hd, heads, kv_heads, n, reps, @tagName(format), row[0] + row[1] });
     for (positions[0..count]) |pos0|
     {
         const ntiles = (pos0 + n + tile - 1) / tile;
@@ -167,15 +178,17 @@ pub fn main(init: std.process.Init) !void
         const blocks = (rows + 31) / 32 * kv_heads;
         const splits = std.math.clamp(@min((128 + blocks - 1) / blocks, ntiles / 8), 1, 256);
         var ms: [kernels]f64 = @splat(0);
-        const used: usize = if (rows <= max_decode_rows) kernels else kernels - 1;
+        const used: usize = if (hd == 256) ids256.len else if (rows <= max_decode_rows) kernels else kernels - 1;
+        const shown: []const []const u8 = if (hd == 256) &names256 else &names;
+        const reference = if (hd == 256) out[0] else out[1];
         for (0..used) |which|
         {
-            _ = tf_gpu_set_attention_kernel(g.?, @intCast(which + 1));
+            _ = tf_gpu_set_attention_kernel(g.?, if (hd == 256) ids256[which] else @intCast(which + 1));
             var best: u64 = std.math.maxInt(u64);
             for (0..reps + 1) |_|
             {
                 const t0 = nowNs();
-                if (tf_gpu_attention(g.?, q.ptr, @intCast(n), @intCast(pos0), @intCast(heads), @intCast(kv_heads), @intCast(kvd), scale, tiles_k.ptr, tiles_v.ptr, @intCast(ntiles), @intCast(splits), out[which].ptr, @intFromEnum(format), 128) != 0)
+                if (tf_gpu_attention(g.?, q.ptr, @intCast(n), @intCast(pos0), @intCast(heads), @intCast(kv_heads), @intCast(kvd), scale, tiles_k.ptr, tiles_v.ptr, @intCast(ntiles), @intCast(splits), out[which].ptr, @intFromEnum(format), @intCast(hd)) != 0)
                 {
                     return error.AttentionFailed;
                 }
@@ -187,14 +200,14 @@ pub fn main(init: std.process.Init) !void
         const flops = 4 * @as(f64, @floatFromInt(n * heads * hd)) * avg_seen;
         const bytes = @as(f64, @floatFromInt((pos0 + n) * (row[0] + row[1])));
         std.debug.print("  {d} cached:", .{pos0});
-        for (names[0..used], ms[0..used], out[0..used]) |name, t, o|
+        for (shown[0..used], ms[0..used], out[0..used]) |name, t, o|
         {
             var worst: f32 = 0;
-            for (o, out[1]) |a, b|
+            for (o, reference) |a, b|
             {
                 worst = @max(worst, @abs(a - b));
             }
-            std.debug.print(" {s} {d:.2} ms ({d:.2} TFLOPS, {d:.0} GB/s, {e:.1} off wide);", .{ name, t, flops / t / 1e9, bytes / t / 1e6, worst });
+            std.debug.print(" {s} {d:.2} ms ({d:.2} TFLOPS, {d:.0} GB/s, {e:.1} off {s});", .{ name, t, flops / t / 1e9, bytes / t / 1e6, worst, shown[if (hd == 256) 0 else 1] });
         }
         std.debug.print("\n", .{});
     }

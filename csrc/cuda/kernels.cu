@@ -1446,10 +1446,260 @@ __device__ __forceinline__ void att_256(ATT_ARGS)
     }
 }
 
+// tc_attention for 256-dim heads: 64 rows per block, two warps per 16 rows,
+// each holding half the dimensions. The pair adds their partial scores through
+// shared memory, so both take the same softmax and each keeps half the output.
+// Dynamic shared memory: T2_SMEM bytes.
+#define T2_Q 64
+#define T2_LD (A2_HD + 8)
+#define T2_SMEM (4 * TC_P * T2_LD * 2)
+
+template <int fmt>
+__device__ __forceinline__ void tc_attention256(ATT_ARGS)
+{
+    extern __shared__ __align__(16) __half t2_smem[];
+    __half(*kh)[T2_LD] = (__half(*)[T2_LD])t2_smem;
+    __half(*kl)[T2_LD] = (__half(*)[T2_LD])(t2_smem + TC_P * T2_LD);
+    __half(*vh)[T2_LD] = (__half(*)[T2_LD])(t2_smem + 2 * TC_P * T2_LD);
+    __half(*vl)[T2_LD] = (__half(*)[T2_LD])(t2_smem + 3 * TC_P * T2_LD);
+    float4 *xs = (float4 *)t2_smem; // partial scores, over the keys once they are used
+
+    const int h = blockIdx.y;
+    const int split = blockIdx.z;
+    const int group = heads / kv_heads;
+    const int rows = n * group;
+    const int j0 = blockIdx.x * T2_Q;
+    const int tid = threadIdx.x;
+    const int warp = tid >> 5, lane = tid & 31;
+    const int g = lane >> 2, c = lane & 3;
+    const int half_d = (warp & 1) * 128;
+    const int r_lo = j0 + (warp >> 1) * 16 + g, r_hi = r_lo + 8;
+
+    unsigned qh[8][4], ql[8][4];
+    {
+        const float *q_lo = r_lo < rows ? q + ((size_t)(r_lo / group) * heads + h * group + r_lo % group) * A2_HD + half_d : nullptr;
+        const float *q_hi = r_hi < rows ? q + ((size_t)(r_hi / group) * heads + h * group + r_hi % group) * A2_HD + half_d : nullptr;
+#pragma unroll
+        for (int kk = 0; kk < 8; kk++)
+        {
+            const int d = kk * 16 + c * 2;
+            float2 a = make_float2(0.0f, 0.0f), b = a, e = a, f = a;
+            if (q_lo)
+            {
+                a = *(const float2 *)(q_lo + d);
+                e = *(const float2 *)(q_lo + d + 8);
+            }
+            if (q_hi)
+            {
+                b = *(const float2 *)(q_hi + d);
+                f = *(const float2 *)(q_hi + d + 8);
+            }
+            tc_split(a.x, a.y, qh[kk][0], ql[kk][0]);
+            tc_split(b.x, b.y, qh[kk][1], ql[kk][1]);
+            tc_split(e.x, e.y, qh[kk][2], ql[kk][2]);
+            tc_split(f.x, f.y, qh[kk][3], ql[kk][3]);
+        }
+    }
+    const int limit_lo = r_lo < rows ? pos0 + r_lo / group : -1;
+    const int limit_hi = r_hi < rows ? pos0 + r_hi / group : -1;
+    const int last_row = min(j0 + T2_Q, rows) - 1;
+    const int block_limit = pos0 + last_row / group;
+    const int needed = block_limit / ATT_PT + 1;
+    const int first_tile = split * tiles_per_split;
+    const int end_tile = min(first_tile + tiles_per_split, needed);
+
+    float m_lo = -INFINITY, m_hi = -INFINITY, l_lo = 0.0f, l_hi = 0.0f;
+    float o[16][4];
+#pragma unroll
+    for (int i = 0; i < 16; i++)
+    {
+#pragma unroll
+        for (int e = 0; e < 4; e++)
+        {
+            o[i][e] = 0.0f;
+        }
+    }
+
+    for (int tile = first_tile; tile < end_tile; tile++)
+    {
+        __syncthreads();
+        for (int i = tid; i < TC_P * (A2_HD / 4); i += 256)
+        {
+            const int p = i / (A2_HD / 4), d4 = i % (A2_HD / 4);
+            float4 kv = make_float4(0.0f, 0.0f, 0.0f, 0.0f), vv = kv;
+            if (tile * ATT_PT + p <= block_limit)
+            {
+                kv = kv_get4(kv_head(tiles_k[tile], p, h, kv_kf(fmt), kvd, A2_HD), d4, kv_kf(fmt));
+                vv = kv_get4(kv_head(tiles_v[tile], p, h, kv_vf(fmt), kvd, A2_HD), d4, kv_vf(fmt));
+            }
+            unsigned a0, a1, b0, b1;
+            tc_split(kv.x, kv.y, a0, b0);
+            tc_split(kv.z, kv.w, a1, b1);
+            *(uint2 *)&kh[p][d4 * 4] = make_uint2(a0, a1);
+            *(uint2 *)&kl[p][d4 * 4] = make_uint2(b0, b1);
+            tc_split(vv.x, vv.y, a0, b0);
+            tc_split(vv.z, vv.w, a1, b1);
+            *(uint2 *)&vh[p][d4 * 4] = make_uint2(a0, a1);
+            *(uint2 *)&vl[p][d4 * 4] = make_uint2(b0, b1);
+        }
+        __syncthreads();
+
+        float s[4][4];
+#pragma unroll
+        for (int nt = 0; nt < 4; nt++)
+        {
+            s[nt][0] = 0.0f;
+            s[nt][1] = 0.0f;
+            s[nt][2] = 0.0f;
+            s[nt][3] = 0.0f;
+#pragma unroll
+            for (int kk = 0; kk < 8; kk++)
+            {
+                const int d = half_d + kk * 16 + c * 2;
+                unsigned bh[2], bl[2];
+                bh[0] = *(const unsigned *)&kh[nt * 8 + g][d];
+                bh[1] = *(const unsigned *)&kh[nt * 8 + g][d + 8];
+                bl[0] = *(const unsigned *)&kl[nt * 8 + g][d];
+                bl[1] = *(const unsigned *)&kl[nt * 8 + g][d + 8];
+                tc_mma(s[nt], ql[kk], bh);
+                tc_mma(s[nt], qh[kk], bl);
+                tc_mma(s[nt], qh[kk], bh);
+            }
+        }
+
+        __syncthreads();
+#pragma unroll
+        for (int nt = 0; nt < 4; nt++)
+        {
+            xs[(warp * 4 + nt) * 32 + lane] = make_float4(s[nt][0], s[nt][1], s[nt][2], s[nt][3]);
+        }
+        __syncthreads();
+#pragma unroll
+        for (int nt = 0; nt < 4; nt++)
+        {
+            const float4 other = xs[((warp ^ 1) * 4 + nt) * 32 + lane];
+            s[nt][0] += other.x;
+            s[nt][1] += other.y;
+            s[nt][2] += other.z;
+            s[nt][3] += other.w;
+        }
+
+        float mx_lo = -INFINITY, mx_hi = -INFINITY;
+#pragma unroll
+        for (int nt = 0; nt < 4; nt++)
+        {
+#pragma unroll
+            for (int e = 0; e < 2; e++)
+            {
+                const int pos = tile * ATT_PT + nt * 8 + c * 2 + e;
+                s[nt][e] = pos <= limit_lo ? s[nt][e] * scale : -INFINITY;
+                s[nt][2 + e] = pos <= limit_hi ? s[nt][2 + e] * scale : -INFINITY;
+                mx_lo = fmaxf(mx_lo, s[nt][e]);
+                mx_hi = fmaxf(mx_hi, s[nt][2 + e]);
+            }
+        }
+#pragma unroll
+        for (int off = 1; off < 4; off <<= 1)
+        {
+            mx_lo = fmaxf(mx_lo, __shfl_xor_sync(0xffffffffu, mx_lo, off));
+            mx_hi = fmaxf(mx_hi, __shfl_xor_sync(0xffffffffu, mx_hi, off));
+        }
+        const float mn_lo = fmaxf(m_lo, mx_lo), mn_hi = fmaxf(m_hi, mx_hi);
+        float sum_lo = 0.0f, sum_hi = 0.0f;
+#pragma unroll
+        for (int nt = 0; nt < 4; nt++)
+        {
+#pragma unroll
+            for (int e = 0; e < 2; e++)
+            {
+                s[nt][e] = mn_lo == -INFINITY ? 0.0f : expf(s[nt][e] - mn_lo);
+                s[nt][2 + e] = mn_hi == -INFINITY ? 0.0f : expf(s[nt][2 + e] - mn_hi);
+                sum_lo += s[nt][e];
+                sum_hi += s[nt][2 + e];
+            }
+        }
+        const float al_lo = m_lo == -INFINITY ? 0.0f : expf(m_lo - mn_lo);
+        const float al_hi = m_hi == -INFINITY ? 0.0f : expf(m_hi - mn_hi);
+        l_lo = l_lo * al_lo + sum_lo;
+        l_hi = l_hi * al_hi + sum_hi;
+        m_lo = mn_lo;
+        m_hi = mn_hi;
+#pragma unroll
+        for (int i = 0; i < 16; i++)
+        {
+            o[i][0] *= al_lo;
+            o[i][1] *= al_lo;
+            o[i][2] *= al_hi;
+            o[i][3] *= al_hi;
+        }
+
+#pragma unroll
+        for (int kk = 0; kk < 2; kk++)
+        {
+            unsigned ph[4], pl[4];
+            tc_split(s[2 * kk][0], s[2 * kk][1], ph[0], pl[0]);
+            tc_split(s[2 * kk][2], s[2 * kk][3], ph[1], pl[1]);
+            tc_split(s[2 * kk + 1][0], s[2 * kk + 1][1], ph[2], pl[2]);
+            tc_split(s[2 * kk + 1][2], s[2 * kk + 1][3], ph[3], pl[3]);
+#pragma unroll
+            for (int nt = 0; nt < 16; nt++)
+            {
+                unsigned bh[2], bl[2];
+                tc_ldm_trans(bh, &vh[kk * 16 + (lane & 15)][half_d + nt * 8]);
+                tc_ldm_trans(bl, &vl[kk * 16 + (lane & 15)][half_d + nt * 8]);
+                tc_mma(o[nt], pl, bh);
+                tc_mma(o[nt], ph, bl);
+                tc_mma(o[nt], ph, bh);
+            }
+        }
+    }
+
+    // Each lane summed a quarter of its rows: add up the 4 lanes of a row.
+#pragma unroll
+    for (int off = 1; off < 4; off <<= 1)
+    {
+        l_lo += __shfl_xor_sync(0xffffffffu, l_lo, off);
+        l_hi += __shfl_xor_sync(0xffffffffu, l_hi, off);
+    }
+    const bool first = c == 0 && half_d == 0;
+    if (r_lo < rows)
+    {
+        const size_t at = ((size_t)split * kv_heads + h) * rows + r_lo;
+        if (first)
+        {
+            part_m[at] = m_lo;
+            part_l[at] = l_lo;
+        }
+#pragma unroll
+        for (int nt = 0; nt < 16; nt++)
+        {
+            *(float2 *)&part_acc[at * A2_HD + half_d + nt * 8 + c * 2] = make_float2(o[nt][0], o[nt][1]);
+        }
+    }
+    if (r_hi < rows)
+    {
+        const size_t at = ((size_t)split * kv_heads + h) * rows + r_hi;
+        if (first)
+        {
+            part_m[at] = m_hi;
+            part_l[at] = l_hi;
+        }
+#pragma unroll
+        for (int nt = 0; nt < 16; nt++)
+        {
+            *(float2 *)&part_acc[at * A2_HD + half_d + nt * 8 + c * 2] = make_float2(o[nt][2], o[nt][3]);
+        }
+    }
+}
+
 #define ATT_KERNELS_256(F, SUFFIX)                                                                                      \
     extern "C" __global__ void __launch_bounds__(256) tf_attention256##SUFFIX(ATT_ARGS)                                 \
     {                                                                                                                   \
         att_256<F>(ATT_PASS);                                                                                           \
+    }                                                                                                                   \
+    extern "C" __global__ void __launch_bounds__(256) tf_attention_tc256##SUFFIX(ATT_ARGS)                              \
+    {                                                                                                                   \
+        tc_attention256<F>(ATT_PASS);                                                                                   \
     }
 
 ATT_KERNELS_256(KV_F32, )

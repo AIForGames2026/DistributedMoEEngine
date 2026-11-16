@@ -17,6 +17,8 @@
 #define A2_HD 256 /* tf_attention256 (TASK-29) */
 #define A2_QT 16
 #define A2_SMEM ((A2_QT + 2 * 32) * A2_HD * 4)
+#define T2_Q 64 /* tf_attention_tc256 */
+#define T2_SMEM (4 * 32 * (A2_HD + 8) * 2)
 #define DR_DK 128 /* tf_delta_rule */
 #define MM_BM 128 /* tf_mm_q8 and tf_mm_f32 */
 #define MM_BN 64
@@ -37,9 +39,10 @@ struct tf_gpu {
     CUfunction mm_q8, mm_f32, mv_q8, mv_gateup, gather, combine;
     /* Attention kernels, one of each per KV cache format (TASK-27): f32, bf16, fp8, bf16 keys with fp8 values. */
     CUfunction attention[4], attention_wide[4], attention_tc[4], attention_tc128[4], attention_dec8[4], attention_dec16[4];
-    /* 256-dim heads (TASK-29): one kernel per format and its merge; a256_ok once their shared memory is granted. */
-    CUfunction attention256[4], attention_merge256, delta_rule;
-    int a256_ok;
+    /* 256-dim heads (TASK-29): f32 and tensor-core kernels per format and their merge; a256_ok and
+     * t256_ok once their shared memory is granted. */
+    CUfunction attention256[4], attention_tc256[4], attention_merge256, delta_rule;
+    int a256_ok, t256_ok;
     CUfunction tm_q8, rowscale, silu_rows;
     /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
@@ -145,8 +148,11 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
     for (int f = 0; f < 4; f++)
     {
         char name[64];
+        char tc_name[64];
         snprintf(name, sizeof name, "tf_attention256%s", suffix[f]);
-        if ((r = cuModuleGetFunction(&g->attention256[f], g->mod, name)) != CUDA_SUCCESS)
+        snprintf(tc_name, sizeof tc_name, "tf_attention_tc256%s", suffix[f]);
+        if ((r = cuModuleGetFunction(&g->attention256[f], g->mod, name)) != CUDA_SUCCESS ||
+            (r = cuModuleGetFunction(&g->attention_tc256[f], g->mod, tc_name)) != CUDA_SUCCESS)
         {
             tf_gpu_close(g);
             return fail(r, "loading attention kernels", err, err_len);
@@ -166,6 +172,12 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
     {
         g->a256_ok = g->a256_ok && cuFuncSetAttribute(g->attention256[f], CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                                                       A2_SMEM) == CUDA_SUCCESS;
+    }
+    g->t256_ok = optin >= T2_SMEM && g->info.major >= 8;
+    for (int f = 0; f < 4; f++)
+    {
+        g->t256_ok = g->t256_ok && cuFuncSetAttribute(g->attention_tc256[f], CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                                                      T2_SMEM) == CUDA_SUCCESS;
     }
     g->wide_ok = optin >= ATT_W_SMEM;
     for (int f = 0; f < 4; f++)
@@ -652,7 +664,14 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
         per_split += per_split & 1;
     }
     void *args[] = {&g->aq, &tk, &tv, &g->pm, &g->pl, &g->pacc, &n, &pos0, &heads, &kv_heads, &kvd, &per_split, &scale};
-    if (hd == A2_HD)
+    /* 256-dim heads: tensor cores (also faster for decode) unless TF_ATT_KERNEL picks 1, 2 or 5. */
+    const int tc256 = g->t256_ok && (!g->att_kernel || which == 3 || which == 4);
+    if (hd == A2_HD && tc256)
+    {
+        r = cuLaunchKernel(g->attention_tc256[fmt], (unsigned)((rows + T2_Q - 1) / T2_Q), (unsigned)kv_heads, (unsigned)splits,
+                           256, 1, 1, T2_SMEM, 0, args, NULL);
+    }
+    else if (hd == A2_HD)
     {
         r = cuLaunchKernel(g->attention256[fmt], (unsigned)((rows + A2_QT - 1) / A2_QT), (unsigned)kv_heads, (unsigned)splits,
                            256, 1, 1, A2_SMEM, 0, args, NULL);

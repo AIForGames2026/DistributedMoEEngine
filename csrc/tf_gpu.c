@@ -31,8 +31,8 @@ struct tf_gpu {
     CUfunction attention_merge;
     CUfunction silu_mul;
     CUfunction mm_q8, mm_f32, mv_q8, mv_gateup, gather, combine;
-    /* Attention kernels, one of each per KV cache format (TASK-27): f32, bf16, fp8. */
-    CUfunction attention[3], attention_wide[3], attention_tc[3], attention_tc128[3], attention_dec8[3], attention_dec16[3];
+    /* Attention kernels, one of each per KV cache format (TASK-27): f32, bf16, fp8, bf16 keys with fp8 values. */
+    CUfunction attention[4], attention_wide[4], attention_tc[4], attention_tc128[4], attention_dec8[4], attention_dec16[4];
     CUfunction tm_q8, rowscale, silu_rows;
     /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
@@ -114,10 +114,10 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
         tf_gpu_close(g);
         return fail(r, "loading kernels", err, err_len);
     }
-    static const char *const suffix[3] = {"", "_bf16", "_fp8"};
+    static const char *const suffix[4] = {"", "_bf16", "_fp8", "_bf16_fp8"};
     static const char *const base[6] = {"tf_attention", "tf_attention_wide", "tf_attention_tc", "tf_attention_tc128",
                                         "tf_attention_decode8", "tf_attention_decode16"};
-    for (int f = 0; f < 3; f++)
+    for (int f = 0; f < 4; f++)
     {
         CUfunction *dst[6] = {&g->attention[f], &g->attention_wide[f], &g->attention_tc[f], &g->attention_tc128[f],
                               &g->attention_dec8[f], &g->attention_dec16[f]};
@@ -136,7 +136,7 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
     int optin = 0;
     cuDeviceGetAttribute(&optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, g->dev);
     g->wide_ok = optin >= ATT_W_SMEM;
-    for (int f = 0; f < 3; f++)
+    for (int f = 0; f < 4; f++)
     {
         g->wide_ok = g->wide_ok && cuFuncSetAttribute(g->attention_wide[f], CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                                                       ATT_W_SMEM) == CUDA_SUCCESS;
@@ -580,7 +580,7 @@ void tf_gpu_unregister(tf_gpu *g, void *host)
 int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int kv_heads, int kvd, float scale,
                      const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt)
 {
-    if (n <= 0 || heads <= 0 || kv_heads <= 0 || heads % kv_heads || tiles <= 0 || splits <= 0 || fmt < 0 || fmt > 2)
+    if (n <= 0 || heads <= 0 || kv_heads <= 0 || heads % kv_heads || tiles <= 0 || splits <= 0 || fmt < 0 || fmt > 3)
         return -1;
     const int rows = n * (heads / kv_heads);
     const size_t qb = (size_t)n * heads * ATT_HD * sizeof(float);

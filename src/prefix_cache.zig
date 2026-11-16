@@ -48,8 +48,8 @@ fn roundUp(x: u64) u64
 /// Where each part of a file of `positions` positions starts.
 const Layout = struct {
     positions: u64,
-    /// Bytes per position, keys or values alone.
-    row: u64,
+    /// Bytes per position of the keys (index 0) and the values (1).
+    row: [2]u64,
     vocab: u64,
 
     fn tokens(_: Layout) u64
@@ -62,15 +62,16 @@ const Layout = struct {
         return page + roundUp(self.positions * 4);
     }
 
-    fn segmentBytes(self: Layout) u64
+    fn segmentBytes(self: Layout, kind: usize) u64
     {
-        return roundUp(self.positions * self.row);
+        return roundUp(self.positions * self.row[kind]);
     }
 
     /// Keys (kind 0) or values (kind 1) of `layer`.
     fn segment(self: Layout, layer: usize, kind: usize) u64
     {
-        return self.logits() + roundUp(self.vocab * 4) + (@as(u64, layer) * 2 + kind) * self.segmentBytes();
+        const per_layer = self.segmentBytes(0) + self.segmentBytes(1);
+        return self.logits() + roundUp(self.vocab * 4) + @as(u64, layer) * per_layer + kind * self.segmentBytes(0);
     }
 
     fn fileBytes(self: Layout, layers: usize) u64
@@ -227,7 +228,7 @@ pub fn restore(key: Key, m: Match, cache: *olmoe.KvCache, logits: []f32) !Transf
     const t0 = nowNs();
     var path_buf: [600]u8 = undefined;
     const path = try zPath(&path_buf, key.dir, m.fileName());
-    const lay: Layout = .{ .positions = m.saved, .row = cache.row, .vocab = key.cfg.vocab };
+    const lay: Layout = .{ .positions = m.saved, .row = .{ cache.row[0], cache.row[1] }, .vocab = key.cfg.vocab };
     const ropts: ReaderOpts = .{ .queue_depth = 32, .block_bytes = 1 << 20, .sqpoll = 0 };
     var readers: [2]*Reader = undefined;
     for ([_][]u8{ cache.k, cache.v }, 0..) |region, kind|
@@ -249,11 +250,13 @@ pub fn restore(key: Key, m: Match, cache: *olmoe.KvCache, logits: []f32) !Transf
     {
         tf_reader_close(r);
     };
-    const len = roundUp(@as(u64, m.positions) * cache.row);
+    var total: u64 = 0;
     for (0..key.cfg.layers) |layer|
     {
         for (0..2) |kind|
         {
+            const len = roundUp(@as(u64, m.positions) * cache.row[kind]);
+            total += len;
             const dst = cache.pages(layer, kind);
             const rc = tf_reader_read(readers[kind], lay.segment(layer, kind), @intCast(len), dst.ptr, null, null, 0);
             if (rc != 0)
@@ -274,7 +277,7 @@ pub fn restore(key: Key, m: Match, cache: *olmoe.KvCache, logits: []f32) !Transf
         try preadAll(fd, std.mem.sliceAsBytes(logits[0..key.cfg.vocab]), lay.logits());
     }
     cache.len = m.positions;
-    return .{ .bytes = 2 * key.cfg.layers * len, .ns = nowNs() - t0 };
+    return .{ .bytes = total, .ns = nowNs() - t0 };
 }
 
 pub const Saved = struct {
@@ -305,7 +308,7 @@ pub fn save(key: Key, tokens: []const u32, cache: *const olmoe.KvCache, logits: 
     const name = try std.fmt.bufPrint(&out.name, "{x:0>16}{s}", .{ hasher.final(), suffix });
     out.name_len = name.len;
 
-    const lay: Layout = .{ .positions = tokens.len, .row = cache.row, .vocab = key.cfg.vocab };
+    const lay: Layout = .{ .positions = tokens.len, .row = .{ cache.row[0], cache.row[1] }, .vocab = key.cfg.vocab };
     const pages = std.heap.page_allocator;
     const head = try pages.alloc(u8, lay.segment(0, 0));
     defer pages.free(head);
@@ -340,11 +343,12 @@ pub fn save(key: Key, tokens: []const u32, cache: *const olmoe.KvCache, logits: 
         _ = c.unlink(tmp);
     };
     try pwriteAll(fd, head, 0);
-    const len = lay.segmentBytes();
     for (0..key.cfg.layers) |layer|
     {
-        try pwriteAll(fd, cache.pages(layer, 0)[0..len], lay.segment(layer, 0));
-        try pwriteAll(fd, cache.pages(layer, 1)[0..len], lay.segment(layer, 1));
+        for (0..2) |kind|
+        {
+            try pwriteAll(fd, cache.pages(layer, kind)[0..lay.segmentBytes(kind)], lay.segment(layer, kind));
+        }
     }
     if (c.fsync(fd) != 0)
     {
@@ -386,9 +390,14 @@ test "a prompt takes whole chunks of a saved prefix, or all of an identical one"
 }
 
 test "file layout keeps every part on page boundaries" {
-    const lay: Layout = .{ .positions = 131041, .row = 512 * 4, .vocab = 151936 };
+    const lay: Layout = .{ .positions = 131041, .row = .{ 512 * 4, 512 * 4 }, .vocab = 151936 };
     try std.testing.expectEqual(@as(u64, 0), lay.logits() % page);
     try std.testing.expectEqual(@as(u64, 0), lay.segment(3, 1) % page);
-    try std.testing.expect(lay.segmentBytes() >= 131041 * 512 * 4);
-    try std.testing.expectEqual(lay.segment(1, 0) - lay.segment(0, 1), lay.segmentBytes());
+    try std.testing.expect(lay.segmentBytes(0) >= 131041 * 512 * 4);
+    try std.testing.expectEqual(lay.segment(1, 0) - lay.segment(0, 1), lay.segmentBytes(1));
+    // Keys and values of different sizes (bf16_fp8) still sit on pages, values after keys.
+    const mixed: Layout = .{ .positions = 1000, .row = .{ 1024, 528 }, .vocab = 151936 };
+    try std.testing.expectEqual(@as(u64, 0), mixed.segment(2, 1) % page);
+    try std.testing.expectEqual(mixed.segment(0, 1) - mixed.segment(0, 0), mixed.segmentBytes(0));
+    try std.testing.expectEqual(mixed.segment(1, 0) - mixed.segment(0, 1), mixed.segmentBytes(1));
 }

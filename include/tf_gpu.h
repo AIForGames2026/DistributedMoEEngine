@@ -63,7 +63,8 @@ void tf_gpu_free_host(tf_gpu *g, void *host);
  * start at device address tiles_k[i], one row per position, KV head h at
  * h * 128 values into the row; values likewise. `fmt` says how a row stores
  * kvd values (TASK-27, src/kv_format.zig): 0 f32 (kvd * 4 bytes), 1 bfloat16
- * (kvd * 2), 2 E4M3 then a power-of-two scale byte per KV head, padded to 16.
+ * (kvd * 2), 2 E4M3 then a power-of-two scale byte per KV head, padded to 16,
+ * 3 keys as in 1 and values as in 2.
  * `splits` divides the tiles among blocks (1 for prefill, more for long decode). */
 int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int kv_heads, int kvd, float scale,
                      const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles, int splits, float *out, int fmt);

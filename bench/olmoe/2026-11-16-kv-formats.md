@@ -62,7 +62,7 @@ Counting tokens until the first difference is a harsh measure: one near-tie flip
 | keys to bf16 | 0.805 | 43 of 43 |
 | values to bf16 | 1.13 | 43 of 43 |
 
-So keys in bf16 with values in fp8 would likely keep bf16's top-1 agreement at 2.67x smaller. That format is not built.
+So keys in bf16 with values in fp8 would likely keep bf16's top-1 agreement at 2.67x smaller. That format was built next, as `bf16_fp8`, and it did: [`2026-11-16-kv-bf16-fp8.md`](2026-11-16-kv-bf16-fp8.md).
 
 ## Speed, Qwen3-30B-A3B with YaRN 4, all in memory
 

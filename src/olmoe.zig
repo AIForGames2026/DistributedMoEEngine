@@ -868,15 +868,16 @@ pub fn topK(p: []const f32, k: usize, idx: []u32, val: []f32) void {
 
 /// Keys (after QK norm and rotary) and values for every position seen so
 /// far, per layer, so each new token attends to them without recomputing.
-/// Each position is one row of `row` bytes in `format` (TASK-27).
+/// Each position is one row of keys and one of values, `row` bytes each, in `format` (TASK-27).
 pub const KvCache = struct {
     cap: usize,
     d: usize,
     kv_heads: usize,
     format: KvFormat = .f32,
-    row: usize,
+    /// Bytes per position of the keys (index 0) and the values (1).
+    row: [2]usize,
     /// Bytes from one layer's first position to the next layer's: whole pages, for O_DIRECT.
-    layer_bytes: usize = 0,
+    layer_bytes: [2]usize = .{ 0, 0 },
     len: usize = 0,
     k: []u8,
     v: []u8,
@@ -902,7 +903,7 @@ pub const KvCache = struct {
     /// A cache that keeps its positions through `tier`, in `format`, with room for `cap`.
     pub fn tiered(cfg: Config, cap: usize, format: KvFormat, tier: Tier) KvCache
     {
-        return .{ .cap = cap, .d = cfg.kvDim(), .kv_heads = cfg.kv_heads, .format = format, .row = format.rowBytes(cfg.kvDim(), cfg.kv_heads), .k = &.{}, .v = &.{}, .tier = tier };
+        return .{ .cap = cap, .d = cfg.kvDim(), .kv_heads = cfg.kv_heads, .format = format, .row = format.rows(cfg.kvDim(), cfg.kv_heads), .k = &.{}, .v = &.{}, .tier = tier };
     }
 
     /// Room for `cap` positions in every layer, in f32.
@@ -917,13 +918,16 @@ pub const KvCache = struct {
     {
         _ = a;
         const d = cfg.kvDim();
-        const row = format.rowBytes(d, cfg.kv_heads);
+        const row = format.rows(d, cfg.kv_heads);
         // Positions rounded up to whole tiles, so the GPU never reads past the end.
         const room = (cap + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions * AttentionJob.tile_positions;
-        const layer_bytes = std.mem.alignForward(usize, room * row, std.heap.page_size_max);
-        const k = try allocPages(cfg.layers * layer_bytes);
+        const layer_bytes: [2]usize = .{
+            std.mem.alignForward(usize, room * row[0], std.heap.page_size_max),
+            std.mem.alignForward(usize, room * row[1], std.heap.page_size_max),
+        };
+        const k = try allocPages(cfg.layers * layer_bytes[0]);
         errdefer freePages(k);
-        const v = try allocPages(cfg.layers * layer_bytes);
+        const v = try allocPages(cfg.layers * layer_bytes[1]);
         var self: KvCache = .{ .cap = room, .d = d, .kv_heads = cfg.kv_heads, .format = format, .row = row, .layer_bytes = layer_bytes, .k = k, .v = v };
         if (gpu_register) |reg|
         {
@@ -983,11 +987,11 @@ pub const KvCache = struct {
     /// Device addresses of each tile of `layer` covering positions 0 to `len` - 1.
     pub fn tiles(self: KvCache, layer: usize, len: usize, out_k: []u64, out_v: []u64) void
     {
-        const tile_bytes = AttentionJob.tile_positions * self.row;
-        for (0..(len + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions) |i|
+        const tp = AttentionJob.tile_positions;
+        for (0..(len + tp - 1) / tp) |i|
         {
-            out_k[i] = self.dev_k + layer * self.layer_bytes + i * tile_bytes;
-            out_v[i] = self.dev_v + layer * self.layer_bytes + i * tile_bytes;
+            out_k[i] = self.dev_k + layer * self.layer_bytes[0] + i * tp * self.row[0];
+            out_v[i] = self.dev_v + layer * self.layer_bytes[1] + i * tp * self.row[1];
         }
     }
 
@@ -998,12 +1002,12 @@ pub const KvCache = struct {
         {
             return t.store(t.ctx, layer, pos0, n, k, v);
         }
-        const dk = self.keys(layer)[pos0 * self.row ..];
-        const dv = self.values(layer)[pos0 * self.row ..];
+        const dk = self.keys(layer)[pos0 * self.row[0] ..];
+        const dv = self.values(layer)[pos0 * self.row[1] ..];
         if (self.format == .f32)
         {
-            @memcpy(dk[0 .. n * self.row], std.mem.sliceAsBytes(k[0 .. n * self.d]));
-            @memcpy(dv[0 .. n * self.row], std.mem.sliceAsBytes(v[0 .. n * self.d]));
+            @memcpy(dk[0 .. n * self.row[0]], std.mem.sliceAsBytes(k[0 .. n * self.d]));
+            @memcpy(dv[0 .. n * self.row[1]], std.mem.sliceAsBytes(v[0 .. n * self.d]));
             return;
         }
         const Rows = struct {
@@ -1017,8 +1021,8 @@ pub const KvCache = struct {
                 const c = w.c;
                 for (first..end) |i|
                 {
-                    c.format.encodeRow(w.k[i * c.d ..][0..c.d], w.dk[i * c.row ..][0..c.row], c.kv_heads);
-                    c.format.encodeRow(w.v[i * c.d ..][0..c.d], w.dv[i * c.row ..][0..c.row], c.kv_heads);
+                    c.format.part(0).encodeRow(w.k[i * c.d ..][0..c.d], w.dk[i * c.row[0] ..][0..c.row[0]], c.kv_heads);
+                    c.format.part(1).encodeRow(w.v[i * c.d ..][0..c.d], w.dv[i * c.row[1] ..][0..c.row[1]], c.kv_heads);
                 }
             }
         };
@@ -1027,21 +1031,28 @@ pub const KvCache = struct {
         pool.parallelFor(threads, n, Rows{ .c = self, .k = k, .v = v, .dk = dk, .dv = dv }, Rows.run);
     }
 
-    /// One layer's keys, `row` bytes per position.
+    /// One layer's keys, `row[0]` bytes per position.
     pub fn keys(self: KvCache, layer: usize) []u8
     {
-        return self.k[layer * self.layer_bytes ..][0 .. self.cap * self.row];
+        return self.k[layer * self.layer_bytes[0] ..][0 .. self.cap * self.row[0]];
     }
 
     pub fn values(self: KvCache, layer: usize) []u8
     {
-        return self.v[layer * self.layer_bytes ..][0 .. self.cap * self.row];
+        return self.v[layer * self.layer_bytes[1] ..][0 .. self.cap * self.row[1]];
     }
 
     /// One layer's keys (kind 0) or values (1) with the padding after them: page-aligned and whole pages.
     pub fn pages(self: KvCache, layer: usize, kind: usize) []u8
     {
-        return (if (kind == 0) self.k else self.v)[layer * self.layer_bytes ..][0..self.layer_bytes];
+        const lb = self.layer_bytes[kind];
+        return (if (kind == 0) self.k else self.v)[layer * lb ..][0..lb];
+    }
+
+    /// Bytes one position takes in one layer, keys and values together.
+    pub fn positionBytes(self: KvCache) usize
+    {
+        return self.row[0] + self.row[1];
     }
 
     /// One layer's keys as floats, for an f32 cache.
@@ -1228,7 +1239,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                 for (0..last + 1) |s|
                 {
                     const ks = if (plain) layer_k[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
-                        cache.format.decodeHead(cache.keys(li)[s * cache.row ..][0..cache.row], kvd, hd / group, kh);
+                        cache.format.part(0).decodeHead(cache.keys(li)[s * cache.row[0] ..][0..cache.row[0]], kvd, hd / group, kh);
                         break :blk kh;
                     };
                     scores[s] = dot(qh, ks) * scale;
@@ -1246,7 +1257,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                 {
                     const p = scores[s] / sum;
                     const vs = if (plain) layer_v[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
-                        cache.format.decodeHead(cache.values(li)[s * cache.row ..][0..cache.row], kvd, hd / group, vh);
+                        cache.format.part(1).decodeHead(cache.values(li)[s * cache.row[1] ..][0..cache.row[1]], kvd, hd / group, vh);
                         break :blk vh;
                     };
                     for (out, vs) |*o, vv|
@@ -2193,7 +2204,7 @@ test "compact KV caches stay close to f32, and cached steps match a full pass in
         {
             peak = @max(peak, @abs(x));
         }
-        for ([_]KvFormat{ .bf16, .fp8 }) |fmt|
+        for ([_]KvFormat{ .bf16, .fp8, .bf16_fp8 }) |fmt|
         {
             const got = try gpa.alloc(f32, n * cfg.vocab);
             defer gpa.free(got);

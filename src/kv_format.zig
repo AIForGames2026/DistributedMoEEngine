@@ -5,19 +5,37 @@
 //! - `fp8`: kvd E4M3 bytes, then one byte per KV head (padded to 16) giving
 //!   that head's power-of-two scale, so a value decodes as its E4M3 value
 //!   times the scale, exactly, on the CPU and the GPU alike.
+//! - `bf16_fp8`: keys as `bf16` and values as `fp8`, since keys lose the most in FP8.
 const std = @import("std");
 
 pub const KvFormat = enum(u8) {
     f32 = 0,
     bf16 = 1,
     fp8 = 2,
+    bf16_fp8 = 3,
 
     pub fn parse(s: []const u8) ?KvFormat
     {
         return std.meta.stringToEnum(KvFormat, s);
     }
 
-    /// Bytes one position takes, keys or values alone.
+    /// The format of the keys (kind 0) or the values (kind 1); the methods below take one of these.
+    pub fn part(self: KvFormat, kind: usize) KvFormat
+    {
+        if (self == .bf16_fp8)
+        {
+            return if (kind == 0) .bf16 else .fp8;
+        }
+        return self;
+    }
+
+    /// Bytes one position takes, keys (index 0) and values (1).
+    pub fn rows(self: KvFormat, kvd: usize, kv_heads: usize) [2]usize
+    {
+        return .{ self.part(0).rowBytes(kvd, kv_heads), self.part(1).rowBytes(kvd, kv_heads) };
+    }
+
+    /// Bytes one position takes in a keys or values format.
     pub fn rowBytes(self: KvFormat, kvd: usize, kv_heads: usize) usize
     {
         return switch (self)
@@ -25,6 +43,7 @@ pub const KvFormat = enum(u8) {
             .f32 => kvd * 4,
             .bf16 => kvd * 2,
             .fp8 => kvd + scaleBytes(kv_heads),
+            .bf16_fp8 => unreachable,
         };
     }
 
@@ -63,6 +82,7 @@ pub const KvFormat = enum(u8) {
                     }
                 }
             },
+            .bf16_fp8 => unreachable,
         }
     }
 
@@ -94,6 +114,7 @@ pub const KvFormat = enum(u8) {
                     o.* = e4m3_table[b] * scale;
                 }
             },
+            .bf16_fp8 => unreachable,
         }
     }
 };
@@ -299,6 +320,7 @@ test "rows of each format decode within their precision, scales exactly" {
                     .f32 => 0,
                     .bf16 => @abs(x) / 256,
                     .fp8 => @max(@abs(x) / 16, amax / 448 * std.math.ldexp(@as(f32, 1), -9)),
+                    .bf16_fp8 => unreachable,
                 };
                 try std.testing.expect(@abs(o - x) <= tol);
             }
@@ -306,4 +328,6 @@ test "rows of each format decode within their precision, scales exactly" {
     }
     try std.testing.expectEqual(@as(usize, 2048 + 16), KvFormat.fp8.rowBytes(2048, 16));
     try std.testing.expectEqual(@as(usize, 512 + 16), KvFormat.fp8.rowBytes(512, 4));
+    try std.testing.expectEqual([2]usize{ 1024, 512 + 16 }, KvFormat.bf16_fp8.rows(512, 4));
+    try std.testing.expectEqual([2]usize{ 2048, 2048 }, KvFormat.f32.rows(512, 4));
 }

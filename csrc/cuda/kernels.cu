@@ -475,6 +475,18 @@ extern "C" __global__ void tf_combine(const float *__restrict__ yb, const int *_
 #define KV_F32 0
 #define KV_BF16 1
 #define KV_FP8 2
+#define KV_BF16_FP8 3 // keys as bf16, values as fp8
+
+// The format of the keys and of the values in a cache of format fmt.
+__device__ __forceinline__ constexpr int kv_kf(int fmt)
+{
+    return fmt == KV_BF16_FP8 ? KV_BF16 : fmt;
+}
+
+__device__ __forceinline__ constexpr int kv_vf(int fmt)
+{
+    return fmt == KV_BF16_FP8 ? KV_FP8 : fmt;
+}
 
 __device__ __forceinline__ int kv_row_bytes(int fmt, int kvd)
 {
@@ -590,8 +602,8 @@ __device__ __forceinline__ void att_first(const float *__restrict__ q, const uns
         for (int i = tid; i < ATT_PT * ATT_HD; i += blockDim.x) {
             const int p = i / ATT_HD, d = i % ATT_HD;
             const bool ok = tile * ATT_PT + p <= block_limit;
-            ks[p][d] = ok ? kv_get1(kv_head(tiles_k[tile], p, h, fmt, kvd), d, fmt) : 0.0f;
-            vs[p][d] = ok ? kv_get1(kv_head(tiles_v[tile], p, h, fmt, kvd), d, fmt) : 0.0f;
+            ks[p][d] = ok ? kv_get1(kv_head(tiles_k[tile], p, h, kv_kf(fmt), kvd), d, kv_kf(fmt)) : 0.0f;
+            vs[p][d] = ok ? kv_get1(kv_head(tiles_v[tile], p, h, kv_vf(fmt), kvd), d, kv_vf(fmt)) : 0.0f;
         }
         __syncthreads();
         float s[4];
@@ -720,8 +732,8 @@ __device__ __forceinline__ void att_wide(
             const int pos = t * ATT_PT + p % ATT_PT;
             float4 kv = make_float4(0.f, 0.f, 0.f, 0.f), vv = kv;
             if (t < end_tile && pos <= block_limit) {
-                kv = kv_get4(kv_head(tiles_k[t], p % ATT_PT, h, fmt, kvd), d4, fmt);
-                vv = kv_get4(kv_head(tiles_v[t], p % ATT_PT, h, fmt, kvd), d4, fmt);
+                kv = kv_get4(kv_head(tiles_k[t], p % ATT_PT, h, kv_kf(fmt), kvd), d4, kv_kf(fmt));
+                vv = kv_get4(kv_head(tiles_v[t], p % ATT_PT, h, kv_vf(fmt), kvd), d4, kv_vf(fmt));
             }
             *(float4 *)&ks[p][d4 * 4] = kv;
             *(float4 *)&vs[p][d4 * 4] = vv;
@@ -948,8 +960,8 @@ __device__ __forceinline__ void tc_attention(const float *__restrict__ q, const 
             float4 kv = make_float4(0.0f, 0.0f, 0.0f, 0.0f), vv = kv;
             if (tile * ATT_PT + p <= block_limit)
             {
-                kv = kv_get4(kv_head(tiles_k[tile], p, h, fmt, kvd), d4, fmt);
-                vv = kv_get4(kv_head(tiles_v[tile], p, h, fmt, kvd), d4, fmt);
+                kv = kv_get4(kv_head(tiles_k[tile], p, h, kv_kf(fmt), kvd), d4, kv_kf(fmt));
+                vv = kv_get4(kv_head(tiles_v[tile], p, h, kv_vf(fmt), kvd), d4, kv_vf(fmt));
             }
             unsigned a0, a1, b0, b1;
             tc_split(kv.x, kv.y, a0, b0);
@@ -1149,11 +1161,11 @@ __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const
         {
             s[r] = 0.0f;
         }
-        const KvHead kr = kv_head(tiles_k[tile], lane, h, fmt, kvd);
+        const KvHead kr = kv_head(tiles_k[tile], lane, h, kv_kf(fmt), kvd);
 #pragma unroll 4
         for (int d4 = 0; d4 < ATT_HD / 4; d4++)
         {
-            const float4 kv = kv_get4(kr, d4, fmt);
+            const float4 kv = kv_get4(kr, d4, kv_kf(fmt));
 #pragma unroll
             for (int r = 0; r < R; r++)
             {
@@ -1191,7 +1203,7 @@ __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const
 #pragma unroll 4
         for (int p = 0; p < valid; p++)
         {
-            const float4 vv = kv_get4(kv_head(tiles_v[tile], p, h, fmt, kvd), lane, fmt);
+            const float4 vv = kv_get4(kv_head(tiles_v[tile], p, h, kv_vf(fmt), kvd), lane, kv_vf(fmt));
 #pragma unroll
             for (int r = 0; r < R; r++)
             {
@@ -1283,6 +1295,7 @@ __device__ __forceinline__ void dec_attention(const float *__restrict__ q, const
 ATT_KERNELS(KV_F32, )
 ATT_KERNELS(KV_BF16, _bf16)
 ATT_KERNELS(KV_FP8, _fp8)
+ATT_KERNELS(KV_BF16_FP8, _bf16_fp8)
 
 // Q8_0 matmul on tensor cores for many inputs. Weights go in as exact f16 integers and
 // inputs, scaled by a power of 2 per row (tf_rowscale), as high and low f16 parts.

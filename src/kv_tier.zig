@@ -50,8 +50,8 @@ pub const Stats = struct {
 pub const TierCache = struct {
     cfg: olmoe.Config,
     opts: Options,
-    /// Bytes per position, and per tile: whole pages, so O_DIRECT can move tiles one at a time.
-    row: usize,
+    /// Bytes per position of keys and of values, and per tile: whole pages, so O_DIRECT can move tiles one at a time.
+    row: [2]usize,
     tile_bytes: usize,
     sink_tiles: usize,
     ring_tiles: usize,
@@ -93,8 +93,9 @@ pub const TierCache = struct {
             return error.OffloadNeedsGpu;
         }
         const pages = std.heap.page_allocator;
-        const row = opts.format.rowBytes(cfg.kvDim(), cfg.kv_heads);
-        const tile_bytes = std.mem.alignForward(usize, tile_positions * row, 4096);
+        const row = opts.format.rows(cfg.kvDim(), cfg.kv_heads);
+        // Keys and values share one tile size, the larger, so bf16_fp8 values leave some of theirs unused.
+        const tile_bytes = std.mem.alignForward(usize, tile_positions * @max(row[0], row[1]), 4096);
         const sink_tiles = (opts.sinks + tile_positions - 1) / tile_positions;
         // The window, one chunk, and partial tiles at both ends.
         const ring_tiles = (opts.window + opts.max_chunk) / tile_positions + 4;
@@ -246,11 +247,12 @@ pub const TierCache = struct {
             std.debug.assert(ti >= self.flushed or ti < self.sink_tiles);
             std.debug.assert(ti < self.sink_tiles or ti - self.flushed < self.ring_tiles);
             const m = self.memTile(layer, ti);
-            const at = m.at + (p % tile_positions) * self.row;
+            const at_k = m.at + (p % tile_positions) * self.row[0];
+            const at_v = m.at + (p % tile_positions) * self.row[1];
             const dk = if (m.ring) self.ring_k else self.sinks_k;
             const dv = if (m.ring) self.ring_v else self.sinks_v;
-            self.opts.format.encodeRow(k[i * kvd ..][0..kvd], dk[at..][0..self.row], self.cfg.kv_heads);
-            self.opts.format.encodeRow(v[i * kvd ..][0..kvd], dv[at..][0..self.row], self.cfg.kv_heads);
+            self.opts.format.part(0).encodeRow(k[i * kvd ..][0..kvd], dk[at_k..][0..self.row[0]], self.cfg.kv_heads);
+            self.opts.format.part(1).encodeRow(v[i * kvd ..][0..kvd], dv[at_v..][0..self.row[1]], self.cfg.kv_heads);
         }
     }
 

@@ -1,6 +1,6 @@
 //! Attention kernel benchmark (TASK-12). Linux, `zig build attbench -Dgpu=true`.
 //!
-//!   attbench [--heads H] [--kv-heads K] [--n N] [--pos P[,P...]] [--reps R] [--alloc map|host] [--format f32|bf16|fp8]
+//!   attbench [--heads H] [--kv-heads K] [--n N] [--pos P[,P...]] [--reps R] [--alloc map|host] [--format f32|bf16|fp8|bf16_fp8]
 //!   attbench --mm [--alloc map|host] [--reps R]
 //!
 //! Times each attention kernel on random data for N new tokens after P cached
@@ -110,9 +110,9 @@ pub fn main(init: std.process.Init) !void
     const cap = (max_pos + n + tile - 1) / tile * tile;
     var dk: u64 = 0;
     var dv: u64 = 0;
-    const row = format.rowBytes(kvd, kv_heads);
-    const k = try deviceBuffer(g.?, pinned, cap * row / 4, &dk);
-    const v = try deviceBuffer(g.?, pinned, cap * row / 4, &dv);
+    const row = format.rows(kvd, kv_heads);
+    const k = try deviceBuffer(g.?, pinned, cap * row[0] / 4, &dk);
+    const v = try deviceBuffer(g.?, pinned, cap * row[1] / 4, &dv);
     const q = try pages.alloc(f32, n * heads * hd);
     defer pages.free(q);
     var out: [kernels][]f32 = undefined;
@@ -132,16 +132,17 @@ pub fn main(init: std.process.Init) !void
     }
     const src = try pages.alloc(f32, kvd);
     defer pages.free(src);
-    for ([_][]f32{ k, v }) |buf|
+    for ([_][]f32{ k, v }, 0..) |buf, kind|
     {
         const bytes = std.mem.sliceAsBytes(buf);
+        const rb = row[kind];
         for (0..cap) |p|
         {
             for (src) |*x|
             {
                 x.* = r.float(f32) * 2 - 1;
             }
-            format.encodeRow(src, bytes[p * row ..][0..row], kv_heads);
+            format.part(kind).encodeRow(src, bytes[p * rb ..][0..rb], kv_heads);
         }
     }
     if (!pinned and (tf_gpu_map(g.?, k.ptr, k.len * 4, &dk) != 0 or tf_gpu_map(g.?, v.ptr, v.len * 4, &dv) != 0))
@@ -154,11 +155,11 @@ pub fn main(init: std.process.Init) !void
     defer pages.free(tiles_v);
     for (tiles_k, tiles_v, 0..) |*a, *b, i|
     {
-        a.* = dk + i * tile * row;
-        b.* = dv + i * tile * row;
+        a.* = dk + i * tile * row[0];
+        b.* = dv + i * tile * row[1];
     }
     const scale = 1.0 / @sqrt(@as(f32, hd));
-    std.debug.print("attbench: {d} query heads, {d} KV heads, {d} new tokens, {d} reps, {s} cache ({d} bytes per position per layer)\n", .{ heads, kv_heads, n, reps, @tagName(format), 2 * row });
+    std.debug.print("attbench: {d} query heads, {d} KV heads, {d} new tokens, {d} reps, {s} cache ({d} bytes per position per layer)\n", .{ heads, kv_heads, n, reps, @tagName(format), row[0] + row[1] });
     for (positions[0..count]) |pos0|
     {
         const ntiles = (pos0 + n + tile - 1) / tile;
@@ -184,7 +185,7 @@ pub fn main(init: std.process.Init) !void
         }
         const avg_seen = @as(f64, @floatFromInt(pos0)) + @as(f64, @floatFromInt(n + 1)) / 2;
         const flops = 4 * @as(f64, @floatFromInt(n * heads * hd)) * avg_seen;
-        const bytes = @as(f64, @floatFromInt((pos0 + n) * row * 2));
+        const bytes = @as(f64, @floatFromInt((pos0 + n) * (row[0] + row[1])));
         std.debug.print("  {d} cached:", .{pos0});
         for (names[0..used], ms[0..used], out[0..used]) |name, t, o|
         {

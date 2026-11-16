@@ -43,8 +43,9 @@
 //!          heap refuses to grow past what the weights and GPU leave),
 //!          --spike F (with --context: the middle third of the prompt comes in
 //!          steps F times as big, reported phase by phase),
-//!          --kv-format f32|bf16|fp8 (TASK-27: how rank 0's KV cache stores
-//!          keys and values; bf16 halves it, fp8 cuts it about 3.9 times)
+//!          --kv-format f32|bf16|fp8|bf16_fp8 (TASK-27: how rank 0's KV cache
+//!          stores keys and values; bf16 halves it, fp8 cuts it about 3.9 times,
+//!          bf16_fp8 keeps keys in bf16 and values in fp8, about 2.6 times)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
 //! LM head) and its own experts; rank 1 holds the rest of the experts. The
@@ -185,7 +186,7 @@ pub fn main(init: std.process.Init) !void {
             \\         --serve [IP:]PORT  --ctx N  --no-reuse  (an OpenAI-compatible server instead of --golden)
             \\         --record FILE  (rank 0 records every step for the page to replay)
             \\         --capacity C  --expert-capacity C  --max-step N  --memory-budget MB  --spike F  (TASK-17)
-            \\         --kv-format f32|bf16|fp8  (TASK-27; f32 by default)
+            \\         --kv-format f32|bf16|fp8|bf16_fp8  (TASK-27; f32 by default)
             \\
         , .{});
         std.process.exit(2);
@@ -2017,9 +2018,9 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     }
     defer cache.deinit(gpa);
     const kv_bytes = if (tier) |t| t.memoryBytes() else cache.k.len + cache.v.len;
-    const full_bytes = cfg.layers * 2 * cap * cache.row;
+    const full_bytes = cfg.layers * cap * cache.positionBytes();
     std.debug.print("{s}: context {d} tokens + {d} generated, chunks of {d}; KV cache {s}, {t}, {d} bytes per token: {d:.2} GB in memory (all of it would be {d:.2} GB), GPU attention {s}\n", .{
-        name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", opts.kv_format, cfg.layers * 2 * cache.row, @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
+        name, n, opts.generate, opts.chunk, if (tier != null) "offloaded to NVMe" else "all in memory", opts.kv_format, cfg.layers * cache.positionBytes(), @as(f64, @floatFromInt(kv_bytes)) / 1e9, @as(f64, @floatFromInt(full_bytes)) / 1e9, if (cache.dev_k != 0 or tier != null) "on" else "off",
     });
 
     var key: ?prefix_cache.Key = null;

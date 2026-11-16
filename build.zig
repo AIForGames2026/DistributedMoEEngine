@@ -170,6 +170,8 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
     olmoe_mod.addIncludePath(b.path("include"));
     olmoe_mod.addCSourceFiles(.{ .files = &(c_sources ++ [_][]const u8{"csrc/io/uring_reader.c"}), .flags = &c_flags });
     linkUring(b, olmoe_mod, uring);
+    // The server's built-in chat page (TASK-30).
+    olmoe_mod.addAnonymousImport("live.html", .{ .root_source_file = b.path("web/live.html") });
     const gpu = b.option(bool, "gpu", "Build olmoe with CUDA matmuls (needs nvcc and the driver)") orelse false;
     const olmoe_options = b.addOptions();
     olmoe_options.addOption(bool, "rdma", rdma);

@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TensorFold Live</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1b1f24;
+  --muted: #5f6b7a;
+  --line: #dde2e8;
+  --cell: #eceff3;
+  --rank0: 37, 99, 235;
+  --rank1: 234, 88, 12;
+  --ok: #15803d;
+  --bad: #b91c1c;
+  --user: #e8eefc;
+  --think: #f1f3f5;
+  --radius: 10px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216;
+    --panel: #171b21;
+    --ink: #e6e9ed;
+    --muted: #93a0b0;
+    --line: #2a313a;
+    --cell: #222831;
+    --rank0: 96, 145, 255;
+    --rank1: 251, 146, 60;
+    --ok: #4ade80;
+    --bad: #f87171;
+    --user: #1f2a44;
+    --think: #1d2229;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); display: flex; flex-direction: column; }
+header { display: flex; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+header .meta { color: var(--muted); font-size: 13px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 6px; vertical-align: middle; }
+.dot.on { background: var(--ok); }
+main { flex: 1; display: grid; grid-template-columns: minmax(320px, 420px) 1fr; min-height: 0; }
+#chat { display: flex; flex-direction: column; border-right: 1px solid var(--line); min-height: 0; background: var(--panel); }
+#log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 100%; white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; font-size: 14px; }
+.msg.user { align-self: flex-end; background: var(--user); padding: 8px 12px; border-radius: var(--radius); max-width: 85%; }
+.msg.assistant .think { background: var(--think); color: var(--muted); padding: 8px 10px; border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+.msg.assistant .think summary { cursor: pointer; user-select: none; }
+.msg .foot { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.msg.error { color: var(--bad); }
+.empty { color: var(--muted); font-size: 14px; margin: auto; text-align: center; max-width: 280px; }
+form { border-top: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+textarea { width: 100%; resize: none; min-height: 64px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.row label { display: flex; gap: 4px; align-items: center; }
+.row input[type=number] { width: 68px; padding: 3px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+button { padding: 7px 16px; border-radius: 8px; border: 0; background: rgb(var(--rank0)); color: #fff; font-weight: 600; cursor: pointer; margin-left: auto; }
+button.stop { background: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+#view { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+#stage { flex: 1; position: relative; min-height: 240px; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+.stat { background: var(--panel); padding: 10px 14px; }
+.stat .k { font-size: 12px; color: var(--muted); }
+.stat .v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.stat .s { font-size: 12px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.good { color: var(--ok); }
+.warn { color: var(--bad); }
+@media (max-width: 800px) {
+  main { grid-template-columns: 1fr; grid-template-rows: minmax(300px, 1fr) minmax(360px, 1fr); }
+  #chat { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>TensorFold Live</h1>
+  <span class="meta"><span id="dot" class="dot"></span><span id="conn">connecting to the engine</span></span>
+  <span class="meta" id="model"></span>
+</header>
+<main>
+  <section id="chat">
+    <div id="log"><div class="empty" id="empty">Send a message. Each token's experts light up on the machine that ran them.</div></div>
+    <form id="form">
+      <textarea id="input" placeholder="Message the model (Enter sends, Shift+Enter for a new line)"></textarea>
+      <div class="row">
+        <label>max tokens <input type="number" id="max" value="512" min="1" max="32768"></label>
+        <label>temperature <input type="number" id="temp" value="0" min="0" max="2" step="0.1"></label>
+        <label id="thinkbox" hidden><input type="checkbox" id="think" checked> thinking</label>
+        <button id="send" type="submit">Send</button>
+      </div>
+    </form>
+  </section>
+  <section id="view">
+    <div id="stage"><canvas id="canvas"></canvas></div>
+    <div id="stats"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const css = getComputedStyle(document.documentElement);
+const color = (name) => css.getPropertyValue(name).trim();
+
+// Everything the diagram knows, reset on each new connection.
+let topo = null;
+let live = null;
+
+function freshState(h) {
+  const ranks = h.ranks.length;
+  const cols = [];
+  const colOf = new Int32Array(h.experts);
+  for (let r = 0; r < ranks; r++) cols.push([]);
+  for (let e = 0; e < h.experts; e++) {
+    const r = Math.min(h.owner[e], ranks - 1);
+    colOf[e] = cols[r].length;
+    cols[r].push(e);
+  }
+  return {
+    cols, colOf,
+    heat: cols.map((c) => new Float32Array(h.layers * c.length)),
+    total: cols.map((c) => new Float32Array(h.layers * c.length)),
+    totalMax: 1,
+    drawn: new Array(ranks).fill(0),
+    base: null,
+    engine: null,
+    frames: 0, dropped: 0, rejected: 0, lastSeq: -1, gapAfterFirst: false,
+    decode: [], prefill: null,
+    rtt: [], cache0: null, cache: null,
+    offset: 0, delay: 0,
+    packets: [], linkCalls: [],
+  };
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/telemetry");
+  ws.onmessage = (ev) => {
+    let f;
+    try { f = JSON.parse(ev.data); } catch { if (live) live.rejected++; return; }
+    if (!f || typeof f !== "object" || typeof f.t !== "string") { if (live) live.rejected++; return; }
+    if (f.t === "hello") return onHello(f);
+    if (f.t === "step") return onStep(f);
+  };
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+}
+
+function setConn(on) {
+  $("dot").classList.toggle("on", on);
+  $("conn").textContent = on ? "live" : "not connected; retrying";
+}
+
+function validHello(h) {
+  const n = (v) => Number.isInteger(v) && v > 0 && v <= 4096;
+  return h.schema === "tensorfold.live" && h.version === 0 && n(h.layers) && n(h.experts) && n(h.top_k) &&
+    Array.isArray(h.ranks) && h.ranks.length >= 1 && h.ranks.length <= 8 &&
+    Array.isArray(h.owner) && h.owner.length === h.experts && h.owner.every((o) => Number.isInteger(o) && o >= 0 && o < h.ranks.length);
+}
+
+function onHello(h) {
+  if (!validHello(h)) { if (live) live.rejected++; return; }
+  topo = h;
+  live = freshState(h);
+  live.offset = performance.now() - h.ms;
+  $("model").textContent = `${h.model} · ${h.layers} layers × ${h.experts} experts, top ${h.top_k} · ${h.transport}`;
+  $("thinkbox").hidden = !/qwen/i.test(h.model);
+}
+
+function validStep(f) {
+  return Number.isInteger(f.seq) && Number.isInteger(f.n) && f.n > 0 && typeof f.ms === "number" &&
+    Array.isArray(f.x) && f.x.length % 3 === 0 && Array.isArray(f.engine) && Array.isArray(f.layer_us);
+}
+
+function onStep(f) {
+  if (!topo || !validStep(f)) { if (live) live.rejected++; return; }
+  const L = topo.layers, E = topo.experts, k = topo.top_k;
+  const ranks = topo.ranks.length;
+  const byRank = new Array(ranks).fill(0);
+  for (let i = 0; i < f.x.length; i += 3) {
+    const l = f.x[i], e = f.x[i + 1], c = f.x[i + 2];
+    if (!(l >= 0 && l < L && e >= 0 && e < E && c > 0)) { live.rejected++; return; }
+  }
+  if (live.lastSeq >= 0 && f.seq !== live.lastSeq + 1) {
+    live.dropped += f.seq - live.lastSeq - 1;
+    live.gapAfterFirst = true;
+  }
+  live.lastSeq = f.seq;
+  live.frames++;
+  // One token lights its experts fully; a prefill chunk shades them by how often they ran.
+  let peak = 1;
+  if (f.n > 1) for (let i = 2; i < f.x.length; i += 3) peak = Math.max(peak, f.x[i]);
+  for (let i = 0; i < f.x.length; i += 3) {
+    const l = f.x[i], e = f.x[i + 1], c = f.x[i + 2];
+    const r = Math.min(topo.owner[e], ranks - 1);
+    const cell = l * live.cols[r].length + live.colOf[e];
+    const v = f.n > 1 ? 0.35 + 0.65 * c / peak : 1;
+    live.heat[r][cell] = Math.max(live.heat[r][cell], v);
+    live.total[r][cell] += c;
+    live.totalMax = Math.max(live.totalMax, live.total[r][cell]);
+    byRank[r] += c;
+  }
+  for (let r = 0; r < ranks; r++) live.drawn[r] += byRank[r];
+  if (live.base === null) {
+    live.base = f.engine.map((v, r) => (v === null ? null : v - byRank[r]));
+    live.cache0 = f.cache;
+  }
+  live.engine = f.engine;
+  // The link's round trip over the last two seconds.
+  live.rtt.push({ ms: f.ms, us: f.rtt_us, layers: f.rtt_layers });
+  while (live.rtt.length > 2 && f.ms - live.rtt[1].ms > 2000) live.rtt.shift();
+  live.cache = f.cache;
+  live.delay = performance.now() - live.offset - f.ms;
+  if (f.n === 1) {
+    live.decode.push(f.ms);
+    while (live.decode.length > 1 && f.ms - live.decode[0] > 3000) live.decode.shift();
+  } else {
+    live.prefill = { n: f.n, ms: f.step_us / 1000 };
+  }
+  if (ranks > 1 && byRank[1] > 0) {
+    const now = performance.now();
+    live.linkCalls.push({ t: now, calls: byRank[1] });
+    const dots = Math.min(byRank[1], f.n > 1 ? 24 : 8);
+    for (let i = 0; i < dots; i++) live.packets.push({ t0: now + i * 12, lane: Math.random() });
+  }
+}
+
+const canvas = $("canvas");
+const ctx = canvas.getContext("2d");
+let last = performance.now();
+
+function draw(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (!topo) {
+    ctx.fillStyle = color("--muted");
+    ctx.font = "14px system-ui, sans-serif";
+    ctx.fillText("Waiting for the engine's live feed...", 20, 30);
+    requestAnimationFrame(draw);
+    return;
+  }
+  const ranks = topo.ranks.length;
+  const decay = Math.exp(-dt / 0.35);
+  for (const h of live.heat) for (let i = 0; i < h.length; i++) h[i] *= decay;
+
+  const pad = 20, gap = ranks > 1 ? Math.max(90, W * 0.12) : 0;
+  const stacked = ranks > 1 && W < 640;
+  const boxes = [];
+  for (let r = 0; r < ranks; r++) {
+    const w = stacked ? W - 2 * pad : (W - 2 * pad - gap * (ranks - 1)) / ranks;
+    const h = stacked ? (H - 2 * pad - gap * (ranks - 1)) / ranks : H - 2 * pad;
+    const x = stacked ? pad : pad + r * (w + gap);
+    const y = stacked ? pad + r * (h + gap) : pad;
+    boxes.push({ x, y, w, h });
+  }
+  const cellBg = color("--cell");
+  for (let r = 0; r < ranks; r++) {
+    const b = boxes[r];
+    const rgb = color(r === 0 ? "--rank0" : "--rank1");
+    const cols = live.cols[r].length || 1;
+    ctx.fillStyle = color("--ink");
+    ctx.font = "600 13px system-ui, sans-serif";
+    ctx.fillText(`rank ${r} · ${topo.ranks[r]}`, b.x, b.y + 4);
+    ctx.fillStyle = color("--muted");
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(`${live.cols[r].length} experts per layer · ${live.drawn[r].toLocaleString()} calls`, b.x, b.y + 20);
+    const top = b.y + 32, avail = b.h - 40;
+    const cell = Math.max(1, Math.min(b.w / cols, avail / topo.layers));
+    const gw = cell * cols, gh = cell * topo.layers;
+    const ox = b.x + (b.w - gw) / 2, oy = top + (avail - gh) / 2;
+    b.grid = { ox, oy, gw, gh };
+    const inset = cell >= 6 ? 1 : 0;
+    const heat = live.heat[r], total = live.total[r];
+    for (let l = 0; l < topo.layers; l++) {
+      for (let c = 0; c < live.cols[r].length; c++) {
+        const i = l * live.cols[r].length + c;
+        const base = total[i] > 0 ? 0.08 + 0.22 * Math.sqrt(total[i] / live.totalMax) : 0;
+        const a = Math.max(heat[i], base);
+        const cx = ox + c * cell + inset, cy = oy + l * cell + inset, cw = cell - 2 * inset;
+        ctx.fillStyle = cellBg;
+        ctx.fillRect(cx, cy, cw, cw);
+        if (a > 0.01) {
+          ctx.fillStyle = `rgba(${rgb}, ${a.toFixed(3)})`;
+          ctx.fillRect(cx, cy, cw, cw);
+        }
+      }
+    }
+    ctx.fillStyle = color("--muted");
+    ctx.font = "11px system-ui, sans-serif";
+    if (cell >= 4) {
+      ctx.save();
+      ctx.translate(ox - 6, oy + gh / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = "center";
+      ctx.fillText("layer", 0, 0);
+      ctx.restore();
+    }
+  }
+  if (ranks > 1) drawLink(boxes[0], boxes[1], stacked, now);
+  requestAnimationFrame(draw);
+}
+
+function drawLink(a, b, stacked, now) {
+  const x0 = stacked ? a.x + a.w / 2 : a.grid.ox + a.grid.gw + 6;
+  const y0 = stacked ? a.grid.oy + a.grid.gh + 6 : a.grid.oy + a.grid.gh / 2;
+  const x1 = stacked ? x0 : b.grid.ox - 6;
+  const y1 = stacked ? b.grid.oy - 6 : y0;
+  ctx.strokeStyle = color("--line");
+  ctx.lineWidth = 8;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+  // A dot rides out with each dispatch and back with its combine.
+  const flight = 420;
+  live.packets = live.packets.filter((p) => now - p.t0 < flight);
+  for (const p of live.packets) {
+    const t = (now - p.t0) / flight;
+    if (t < 0) continue;
+    const out = t < 0.5;
+    const u = out ? t * 2 : 2 - t * 2;
+    const off = (p.lane - 0.5) * 6;
+    const x = x0 + (x1 - x0) * u + (stacked ? off : 0);
+    const y = y0 + (y1 - y0) * u + (stacked ? 0 : off);
+    ctx.fillStyle = `rgba(${color(out ? "--rank0" : "--rank1")}, 0.9)`;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  live.linkCalls = live.linkCalls.filter((c) => now - c.t < 1000);
+  const callsPerS = live.linkCalls.reduce((s, c) => s + c.calls, 0);
+  const pk = callsPerS * topo.chunks * 2;
+  const r0 = live.rtt[0], r1 = live.rtt[live.rtt.length - 1];
+  const rtt = r0 && r1.layers > r0.layers ? (r1.us - r0.us) / (r1.layers - r0.layers) : null;
+  ctx.fillStyle = color("--muted");
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  ctx.fillText(topo.transport, mx + (stacked ? 70 : 0), my - (stacked ? 0 : 18));
+  ctx.fillText(`${Math.round(pk).toLocaleString()} packets/s`, mx + (stacked ? 70 : 0), my + (stacked ? 14 : 22));
+  if (rtt !== null) ctx.fillText(`${rtt.toFixed(0)} µs per layer`, mx + (stacked ? 70 : 0), my + (stacked ? 28 : 36));
+  ctx.textAlign = "left";
+}
+
+function stat(k, v, s, cls) {
+  return `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div><div class="s">${s || ""}</div></div>`;
+}
+
+function renderStats() {
+  if (!live) { $("stats").innerHTML = ""; return; }
+  const d = live.decode;
+  const tps = d.length > 1 ? (d.length - 1) / ((d[d.length - 1] - d[0]) / 1000) : 0;
+  const out = [];
+  out.push(stat("decode", tps ? `${tps.toFixed(1)} tokens/s` : "idle", live.prefill ? `last prefill: ${live.prefill.n} tokens in ${live.prefill.ms.toFixed(0)} ms` : "no prefill yet"));
+  for (let r = 0; r < topo.ranks.length; r++) {
+    const eng = live.engine && live.base && live.engine[r] !== null && live.base[r] !== null ? live.engine[r] - live.base[r] : null;
+    let line, cls = "";
+    if (eng === null) line = "the engine keeps no count of its own here";
+    else if (live.gapAfterFirst) line = `engine counted ${eng.toLocaleString()}; frames were dropped, so no comparison`;
+    else if (eng === live.drawn[r]) { line = `matches the engine's own count`; cls = "good"; }
+    else { line = `engine counted ${eng.toLocaleString()}`; cls = "warn"; }
+    out.push(stat(`rank ${r} expert calls`, live.drawn[r].toLocaleString(), line, cls));
+  }
+  if (live.cache && live.cache0) {
+    const c = live.cache, c0 = live.cache0;
+    const calls = (c.resident + c.hinted + c.late + c.missed) - (c0.resident + c0.hinted + c0.late + c0.missed);
+    const hits = (c.resident + c.hinted) - (c0.resident + c0.hinted);
+    out.push(stat("expert cache (rank 0)", calls ? `${(100 * hits / calls).toFixed(1)}% hits` : "no calls yet",
+      `${(c.missed - c0.missed).toLocaleString()} misses, ${(c.late - c0.late).toLocaleString()} late, ${(c.loads - c0.loads).toLocaleString()} loads`));
+  }
+  out.push(stat("live feed", `${live.frames.toLocaleString()} frames`,
+    `${live.dropped} dropped · ${live.rejected} rejected · ${Math.max(0, live.delay).toFixed(0)} ms behind`, live.dropped || live.rejected ? "warn" : ""));
+  $("stats").innerHTML = out.join("");
+}
+
+// Chat
+const history = [];
+let busy = null;
+
+function addMsg(role, text) {
+  $("empty")?.remove();
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  el.textContent = text;
+  $("log").appendChild(el);
+  $("log").scrollTop = $("log").scrollHeight;
+  return el;
+}
+
+async function send(text) {
+  history.push({ role: "user", content: text });
+  addMsg("user", text);
+  const el = addMsg("assistant", "");
+  const think = document.createElement("details");
+  think.className = "think";
+  think.open = true;
+  think.innerHTML = "<summary>thinking</summary>";
+  const thinkText = document.createElement("div");
+  think.appendChild(thinkText);
+  const body = document.createElement("div");
+  el.appendChild(body);
+  const foot = document.createElement("div");
+  foot.className = "foot";
+  el.appendChild(foot);
+  let content = "", reasoning = "", extra = null, finish = null;
+  busy = new AbortController();
+  setBusy(true);
+  const req = {
+    messages: history,
+    stream: true,
+    stream_options: { include_usage: true },
+    max_tokens: Math.max(1, parseInt($("max").value, 10) || 512),
+    temperature: Math.max(0, parseFloat($("temp").value) || 0),
+  };
+  if (!$("thinkbox").hidden) req.chat_template_kwargs = { enable_thinking: $("think").checked };
+  try {
+    const res = await fetch("/v1/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req), signal: busy.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(err?.error?.message || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+        const chunk = JSON.parse(line.slice(6));
+        if (chunk.error) throw new Error(chunk.error.message);
+        const ch = chunk.choices?.[0];
+        if (ch) {
+          if (ch.delta?.reasoning_content) {
+            reasoning += ch.delta.reasoning_content;
+            if (!think.parentNode) el.insertBefore(think, body);
+            thinkText.textContent = reasoning;
+          }
+          if (ch.delta?.content) {
+            content += ch.delta.content;
+            body.textContent = content;
+            if (think.parentNode && think.open && content.trim()) think.open = false;
+          }
+          if (ch.finish_reason) finish = ch.finish_reason;
+        }
+        if (chunk.tensorfold) extra = { ...chunk.tensorfold, usage: chunk.usage };
+        $("log").scrollTop = $("log").scrollHeight;
+      }
+    }
+    history.push({ role: "assistant", content, ...(reasoning ? { reasoning_content: reasoning } : {}) });
+    if (extra) {
+      const u = extra.usage || {};
+      foot.textContent = `${u.completion_tokens ?? "?"} tokens · first token ${extra.ttft_ms.toFixed(0)} ms · ${extra.decode_tokens_per_s.toFixed(1)} tokens/s` +
+        (extra.cached_tokens ? ` · ${extra.cached_tokens} prompt tokens reused` : "") + (finish && finish !== "stop" ? ` · stopped: ${finish}` : "");
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      history.push({ role: "assistant", content });
+      foot.textContent = "stopped";
+    } else {
+      history.pop();
+      el.classList.add("error");
+      body.textContent = (content ? content + "\n" : "") + "Error: " + e.message;
+    }
+  } finally {
+    busy = null;
+    setBusy(false);
+  }
+}
+
+function setBusy(on) {
+  $("send").textContent = on ? "Stop" : "Send";
+  $("send").classList.toggle("stop", on);
+}
+
+$("form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  if (busy) { busy.abort(); return; }
+  const text = $("input").value.trim();
+  if (!text) return;
+  $("input").value = "";
+  send(text);
+});
+$("input").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+    ev.preventDefault();
+    $("form").requestSubmit();
+  }
+});
+
+connect();
+requestAnimationFrame(draw);
+setInterval(renderStats, 250);
+</script>
+</body>
+</html>

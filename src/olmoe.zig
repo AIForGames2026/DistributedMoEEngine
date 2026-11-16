@@ -1431,6 +1431,8 @@ pub const LocalExperts = struct {
     batch: []f32 = &.{},
     /// Below this many tokens, calls run one at a time.
     batch_min: usize = 16,
+    /// Expert calls run so far, for the live diagram's check (TASK-16b).
+    calls: u64 = 0,
 
     const max_group = 1024;
 
@@ -1493,6 +1495,7 @@ pub const LocalExperts = struct {
             for (0..k) |j| {
                 const e = self.get(layer, idx[t * k + j]) orelse return error.ExpertNotLocal;
                 e.forward(x[t * d ..][0..d], self.out, self.scratch);
+                self.calls += 1;
                 for (out[t * d ..][0..d], self.out) |*o, y| o.* += w[t * k + j] * y;
             }
         }
@@ -1563,6 +1566,10 @@ pub const LocalExperts = struct {
             groups += 1;
         }
         starts[groups] = @intCast(calls);
+        for (0..groups) |g|
+        {
+            self.calls += starts[g + 1] - starts[g];
+        }
         if (gpu_experts) |run|
         {
             // Batch row i is token order[i] / k: reuse `order` once it holds tokens.

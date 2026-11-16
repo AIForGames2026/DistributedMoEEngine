@@ -70,6 +70,7 @@ const tokenizer = @import("tokenizer.zig");
 const chat = @import("chat.zig");
 const completion = @import("completion.zig");
 const serve = @import("serve.zig");
+const telemetry = @import("telemetry.zig");
 const gpu =if (build_options.gpu) @import("gpu.zig") else struct {
     fn open() !void {
         std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
@@ -176,8 +177,16 @@ pub fn main(init: std.process.Init) !void {
         {
             moe.ahead = &la;
         }
+        var host_buf: [64]u8 = undefined;
+        const host = hostName(&host_buf);
+        const nobody: [max_experts]u8 = @splat(0);
+        const live: Live = .{
+            .owner = nobody[0..l.cfg.experts],
+            .ranks = &.{host},
+            .probe = if (box) |b| .{ .ctx = b.cache, .sample = sampleCache } else .{ .ctx = &l.local, .sample = sampleLocal },
+        };
         const result = if (opts.serve != null)
-            runServe(gpa, &l, moe, opts, "local")
+            runServe(gpa, &l, moe, opts, "local", live)
         else if (opts.context > 0)
             runLong(gpa, &l.weights.?, moe, opts, "local")
         else
@@ -839,11 +848,27 @@ const SplitMoe = struct {
     remote: u64 = 0,
     local_calls: u64 = 0,
     hints: u64 = 0,
+    /// Layers with remote calls, and their time from the first dispatch to the last combine.
+    rtt_layers: u64 = 0,
+    rtt_ns: u64 = 0,
     /// The tracker link watching rank 1 (TASK-09), if there is one.
     health: ?*tracker.Client = null,
 
     fn moe(self: *SplitMoe) olmoe.Moe {
         return .{ .ctx = self, .run = run };
+    }
+
+    /// The live diagram's view of this split's own counters.
+    fn sample(ctx: *anyopaque, out: *telemetry.Counters) void
+    {
+        const self: *SplitMoe = @ptrCast(@alignCast(ctx));
+        out.calls = .{ self.local_calls, self.remote };
+        out.rtt_ns = self.rtt_ns;
+        out.rtt_layers = self.rtt_layers;
+        if (self.experts.cache) |cache|
+        {
+            out.cache = cacheCounts(cache);
+        }
     }
 
     /// Refuses to route to rank 1 once the tracker marks it unhealthy.
@@ -920,6 +945,7 @@ const SplitMoe = struct {
         if (n * k * d > self.contrib.len) return error.TooManyTokens;
         try self.checkPeer();
         self.experts.enter(layer);
+        const t0 = mf.nowNs();
         const chunks = wire.chunkCount(self.enc, d);
         // Packets, not expert calls: each call is `chunks` packets each way.
         var sent: usize = 0;
@@ -964,6 +990,11 @@ const SplitMoe = struct {
             got += 1;
         }
         try self.ep.flushCredits();
+        if (sent > 0)
+        {
+            self.rtt_ns += mf.nowNs() - t0;
+            self.rtt_layers += 1;
+        }
         // Fixed order (token, then choice), whatever order combines arrived in.
         for (0..n) |t| {
             for (0..k) |j| {
@@ -1266,7 +1297,18 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         moe.ahead = &la;
         moe.prefetch = SplitMoe.prefetch;
     }
-    const result = if (opts.serve != null) runServe(gpa, &l, moe, opts, name) else runGolden(gpa, &l.weights.?, moe, opts, name);
+    var host_buf: [64]u8 = undefined;
+    const host = hostName(&host_buf);
+    // Rank 1's machine: its tracker entry, this one when forked, else the address dialed.
+    const forked = std.mem.eql(u8, opts.mode, "shm") or std.mem.eql(u8, opts.mode, "rdma");
+    const peer = if (opts.swarm) |sw| sw.peer.info.nodeName() else if (forked) host else opts.host;
+    const live: Live = .{
+        .owner = owner[0..cfg.experts],
+        .ranks = &.{ host, peer },
+        .chunks = wire.chunkCount(opts.payload, cfg.d_model),
+        .probe = .{ .ctx = &split, .sample = SplitMoe.sample },
+    };
+    const result = if (opts.serve != null) runServe(gpa, &l, moe, opts, name, live) else runGolden(gpa, &l.weights.?, moe, opts, name);
     if (result) |_| {} else |err|
     {
         if (err == error.PeerUnhealthy)
@@ -1402,7 +1444,7 @@ fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.
 /// rank's weights and `moe` (local experts or a split over any transport),
 /// keeping one `--ctx` position KV cache whose shared prefix later requests
 /// reuse unless `--no-reuse`.
-fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, name: []const u8) !void
+fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, name: []const u8, live: Live) !void
 {
     const spec = opts.serve.?;
     const colon = std.mem.lastIndexOfScalar(u8, spec, ':');
@@ -1418,9 +1460,22 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
     const w = &l.weights.?;
     var cache = try olmoe.KvCache.init(gpa, w.cfg, opts.ctx);
     defer cache.deinit(gpa);
-    var eng: ServeEngine = .{ .gpa = gpa, .w = w, .moe = moe, .cache = &cache };
     const base = if (std.mem.lastIndexOfScalar(u8, opts.model, '/')) |i| opts.model[i + 1 ..] else opts.model;
     const model_id = if (std.mem.endsWith(u8, base, ".gguf")) base[0 .. base.len - 5] else base;
+    // Never freed: the broadcaster's thread reads them until the process exits.
+    const feed = try gpa.create(telemetry.Feed);
+    feed.* = try telemetry.Feed.init(gpa, w.cfg.layers, w.cfg.experts, 256);
+    const tap = try gpa.create(telemetry.Tap);
+    tap.* = try telemetry.Tap.init(gpa, moe, w.cfg.top_k, feed, live.probe, mf.nowNs);
+    const bc = try gpa.create(telemetry.Broadcaster);
+    bc.* = .{
+        .gpa = std.heap.c_allocator,
+        .feed = feed,
+        .topo = .{ .model = model_id, .transport = name, .ranks = live.ranks, .owner = live.owner, .chunks = live.chunks },
+        .top_k = w.cfg.top_k,
+        .clock = mf.nowNs,
+    };
+    var eng: ServeEngine = .{ .gpa = gpa, .w = w, .moe = tap.moe(), .tap = tap, .cache = &cache };
     return serve.run(gpa, eng.engine(opts.ctx), &tok, format, .{
         .addr = addr,
         .port = port,
@@ -1429,7 +1484,51 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
         .reuse = opts.reuse,
         .clock = mf.nowNs,
         .name = name,
+        .page = live_page,
+        .live = bc,
     });
+}
+
+/// The built-in chat page (TASK-30), embedded from `web/live.html`.
+const live_page = @embedFile("live.html");
+
+/// What the live diagram shows about this run.
+const Live = struct {
+    owner: []const u8,
+    ranks: []const []const u8,
+    chunks: usize = 0,
+    probe: telemetry.Probe = .{},
+};
+
+fn hostName(buf: *[64]u8) []const u8
+{
+    @memset(buf, 0);
+    if (c.gethostname(buf, buf.len - 1) != 0)
+    {
+        return "this machine";
+    }
+    return std.mem.sliceTo(buf, 0);
+}
+
+fn cacheCounts(cache: *const ExpertCache) telemetry.CacheCounts
+{
+    const st = cache.stats;
+    return .{ .resident = st.resident, .hinted = st.hinted, .late = st.late, .missed = st.missed, .loads = st.loads };
+}
+
+/// A single process's experts, all loaded, as the live diagram's engine counter.
+fn sampleLocal(ctx: *anyopaque, out: *telemetry.Counters) void
+{
+    const local: *olmoe.LocalExperts = @ptrCast(@alignCast(ctx));
+    out.calls[0] = local.calls;
+}
+
+/// A single process's expert cache, as the live diagram's engine counter.
+fn sampleCache(ctx: *anyopaque, out: *telemetry.Counters) void
+{
+    const cache: *ExpertCache = @ptrCast(@alignCast(ctx));
+    out.calls[0] = cache.stats.calls();
+    out.cache = cacheCounts(cache);
 }
 
 /// The model behind the server's engine interface.
@@ -1437,6 +1536,7 @@ const ServeEngine = struct {
     gpa: std.mem.Allocator,
     w: *const olmoe.Weights,
     moe: olmoe.Moe,
+    tap: *telemetry.Tap,
     cache: *olmoe.KvCache,
 
     fn engine(self: *ServeEngine, cap: usize) completion.Engine
@@ -1453,7 +1553,9 @@ const ServeEngine = struct {
     fn step(ctx: *anyopaque, tokens: []const u32, logits: []f32) anyerror!void
     {
         const self: *ServeEngine = @ptrCast(@alignCast(ctx));
+        self.tap.beginStep();
         try olmoe.step(self.gpa, self.w, self.moe, self.cache, tokens, logits, null);
+        self.tap.endStep(tokens.len);
     }
 };
 

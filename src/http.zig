@@ -13,6 +13,9 @@ pub const Head = struct {
     expect_continue: bool = false,
     /// Asks to switch protocols (WebSocket), with the client's key.
     websocket_key: ?[]const u8 = null,
+    host: ?[]const u8 = null,
+    /// Set by browsers on WebSocket and cross-site requests.
+    origin: ?[]const u8 = null,
     /// Bytes up to and including the blank line.
     len: usize,
 };
@@ -70,6 +73,14 @@ pub fn parseHead(buf: []const u8, max_head: usize) Error!Head {
         {
             key = value;
         }
+        else if (std.ascii.eqlIgnoreCase(name, "host"))
+        {
+            head.host = value;
+        }
+        else if (std.ascii.eqlIgnoreCase(name, "origin"))
+        {
+            head.origin = value;
+        }
     }
     if (upgrade)
     {
@@ -78,10 +89,20 @@ pub fn parseHead(buf: []const u8, max_head: usize) Error!Head {
     return head;
 }
 
+/// True unless a browser says the request comes from a page served elsewhere.
+pub fn sameOrigin(head: Head) bool {
+    const origin = head.origin orelse return true;
+    const host = head.host orelse return false;
+    const rest = if (std.mem.startsWith(u8, origin, "http://")) origin[7..] else if (std.mem.startsWith(u8, origin, "https://")) origin[8..] else return false;
+    return std.ascii.eqlIgnoreCase(rest, host);
+}
+
 pub fn reason(status: u16) []const u8 {
     return switch (status) {
+        101 => "Switching Protocols",
         200 => "OK",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         411 => "Length Required",
@@ -124,6 +145,9 @@ test "rejects bad and unfinished heads" {
     try std.testing.expectError(error.BadRequest, parseHead("GET nothing HTTP/1.1\r\n\r\n", 4096));
     try std.testing.expectError(error.LengthRequired, parseHead("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n", 4096));
     try std.testing.expectError(error.TooLarge, parseHead("GET / HTTP/1.1\r\nX: aaaaaaaaaaaaaaaa", 16));
-    const ws = try parseHead("GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc==\r\n\r\n", 4096);
+    const ws = try parseHead("GET /ws HTTP/1.1\r\nHost: 127.0.0.1:8091\r\nOrigin: http://127.0.0.1:8091\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc==\r\n\r\n", 4096);
     try std.testing.expectEqualStrings("abc==", ws.websocket_key.?);
+    try std.testing.expect(sameOrigin(ws));
+    const other = try parseHead("GET /ws HTTP/1.1\r\nHost: 127.0.0.1:8091\r\nOrigin: https://example.com\r\n\r\n", 4096);
+    try std.testing.expect(!sameOrigin(other));
 }

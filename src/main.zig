@@ -78,6 +78,7 @@ test {
     _ = @import("http.zig");
     _ = @import("openai.zig");
     _ = @import("completion.zig");
+    _ = @import("telemetry.zig");
     _ = @import("safetensors.zig");
     _ = @import("loader.zig");
     _ = @import("olmoe.zig");

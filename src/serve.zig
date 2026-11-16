@@ -10,6 +10,8 @@
 //!   POST /v1/chat/completions   OpenAI chat completions, streamed or not
 //!   GET  /v1/models             the one model this server runs
 //!   GET  /health                200 once the model is loaded
+//!   GET  /                      the built-in chat page with the live diagram
+//!   GET  /telemetry             its WebSocket feed (TASK-16b)
 const std = @import("std");
 const c = std.c;
 const http = @import("http.zig");
@@ -18,6 +20,7 @@ const chat = @import("chat.zig");
 const completion = @import("completion.zig");
 const tokenizer = @import("tokenizer.zig");
 const olmoe = @import("olmoe.zig");
+const telemetry = @import("telemetry.zig");
 
 pub const Options = struct {
     /// IPv4 address in network byte order; 127.0.0.1 unless asked otherwise.
@@ -30,6 +33,9 @@ pub const Options = struct {
     queue: usize = 4,
     clock: *const fn () u64,
     name: []const u8 = "serve",
+    /// The built-in page and its live feed, if served.
+    page: ?[]const u8 = null,
+    live: ?*telemetry.Broadcaster = null,
 };
 
 const max_head = 16 << 10;
@@ -60,12 +66,20 @@ pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokeni
     }
     defer _ = c.close(fds[0]);
     var shared: Shared = .{ .opts = opts, .listen_fd = lfd, .pipe_w = fds[1] };
+    if (opts.live) |b|
+    {
+        try b.start();
+    }
     const front = try std.Thread.spawn(.{}, frontLoop, .{&shared});
     front.detach();
     const ip: [4]u8 = @bitCast(opts.addr);
     std.debug.print("{s}: OpenAI-compatible API at http://{d}.{d}.{d}.{d}:{d}/v1 (model \"{s}\", chat format {t}, context {d} tokens{s})\n", .{
         opts.name, ip[0], ip[1], ip[2], ip[3], opts.port, opts.model_id, format, engine.cap, if (opts.reuse) ", reusing shared prompt prefixes" else "",
     });
+    if (opts.page != null)
+    {
+        std.debug.print("{s}: chat page with the live diagram at http://{d}.{d}.{d}.{d}:{d}/\n", .{ opts.name, ip[0], ip[1], ip[2], ip[3], opts.port });
+    }
 
     var session: completion.Session = .{};
     defer session.deinit(gpa);
@@ -196,6 +210,15 @@ fn route(shared: *Shared, fd: c.fd_t) !bool {
     const body = buf.items[head.len..][0..head.content_length];
     const opts = shared.opts;
 
+    if (std.mem.eql(u8, head.path, "/") and opts.page != null)
+    {
+        try sendBody(fd, 200, "text/html; charset=utf-8", opts.page.?);
+        return false;
+    }
+    if (std.mem.eql(u8, head.path, "/telemetry") and opts.live != null)
+    {
+        return upgrade(fd, head, opts.live.?);
+    }
     if (std.mem.eql(u8, head.path, "/health"))
     {
         try sendBody(fd, 200, "application/json", "{\"status\":\"ok\"}");
@@ -247,6 +270,24 @@ fn route(shared: *Shared, fd: c.fd_t) !bool {
         return error.EngineStopped;
     }
     return true;
+}
+
+/// Finishes the WebSocket handshake and gives the socket to the broadcaster.
+fn upgrade(fd: c.fd_t, head: http.Head, live: *telemetry.Broadcaster) !bool {
+    const key = head.websocket_key orelse {
+        try sendError(fd, 400, "Connect with a WebSocket.", "invalid_request_error", null);
+        return false;
+    };
+    // A page from another site must not read the feed.
+    if (!http.sameOrigin(head))
+    {
+        try sendError(fd, 403, "The live feed is only for pages this server serves.", "invalid_request_error", null);
+        return false;
+    }
+    var buf: [28]u8 = undefined;
+    var reply: [160]u8 = undefined;
+    try sendAll(fd, try std.fmt.bufPrint(&reply, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\n\r\n", .{telemetry.acceptKey(key, &buf)}));
+    return live.add(fd);
 }
 
 /// Generates one chat completion and writes it to the job's connection.

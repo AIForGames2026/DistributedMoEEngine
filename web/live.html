@@ -367,6 +367,15 @@ function draw(now) {
       ctx.restore();
     }
   }
+  if (loadingFor !== "fetch") {
+    const pending = rp ? stepInFlight() : null;
+    if (pending) {
+      const what = pending.v.n > 1 ? `Reading the ${pending.v.n.toLocaleString()}-token prompt` : "Working on the next token";
+      setLoading(`${what}... ${((rp.clock - pending.start) / 1000).toFixed(1)} of ${((pending.t - pending.start) / 1000).toFixed(1)} s`, "step");
+    } else if (loadingFor === "step") {
+      setLoading(null);
+    }
+  }
   if (ranks > 1) drawLinks(boxes, stacked, now, rp ? rp.clock : now, stacked ? W : H);
   drawLabels();
   requestAnimationFrame(draw);
@@ -720,9 +729,12 @@ $("input").addEventListener("keydown", (ev) => {
   }
 });
 
-function setLoading(text) {
+// The box shows a download ("fetch") or a replay step still in progress ("step"); a download wins.
+let loadingFor = null;
+function setLoading(text, kind = "fetch") {
+  loadingFor = text === null ? null : kind;
   $("loading").hidden = text === null;
-  if (text !== null) {
+  if (text !== null && $("loadmsg").textContent !== text) {
     $("loadmsg").textContent = text;
   }
 }
@@ -965,6 +977,17 @@ function applyItem(it) {
     else rp.reply.footer(n, n.finish);
     rp.reply = null;
   }
+}
+
+// A step that takes over a second to play shows nothing until it ends, so the loading box says what it is waiting on.
+function stepInFlight() {
+  for (let i = rp.i; i < rp.items.length; i++) {
+    const it = rp.items[i];
+    if (it.step) {
+      return it.start <= rp.clock && (it.t - it.start) / rp.speed > 1000 ? it : null;
+    }
+  }
+  return null;
 }
 
 function seekReplay(t) {

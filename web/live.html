@@ -9,11 +9,14 @@
   --bg: #f6f7f9;
   --panel: #ffffff;
   --ink: #1b1f24;
-  --muted: #5f6b7a;
+  --muted: #4d5866;
   --line: #dde2e8;
-  --cell: #eceff3;
-  --rank0: 37, 99, 235;
+  --link: #b4bdc8;
+  --cell: #e2e6eb;
+  --rank0: 29, 78, 216;
   --rank1: 234, 88, 12;
+  --heat-floor: 0.22;
+  --heat-span: 0.4;
   --ok: #15803d;
   --bad: #b91c1c;
   --user: #e8eefc;
@@ -28,7 +31,10 @@
     --ink: #e6e9ed;
     --muted: #93a0b0;
     --line: #2a313a;
+    --link: #2a313a;
     --cell: #222831;
+    --heat-floor: 0.08;
+    --heat-span: 0.22;
     --rank0: 96, 145, 255;
     --rank1: 251, 146, 60;
     --ok: #4ade80;
@@ -67,6 +73,11 @@ button:disabled { opacity: .5; cursor: default; }
 #view { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 #stage { flex: 1; position: relative; min-height: 240px; }
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(128, 128, 128, 0.15); background: color-mix(in srgb, var(--bg) 60%, transparent); }
+#loading .card { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 18px 22px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--ink); font-size: 14px; font-variant-numeric: tabular-nums; }
+.spin { width: 36px; height: 36px; border-radius: 50%; border: 3px solid var(--line); border-top-color: rgb(var(--rank0)); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
 #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
 .stat { background: var(--panel); padding: 10px 14px; }
 .stat .k { font-size: 12px; color: var(--muted); }
@@ -126,7 +137,7 @@ body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px
     </form>
   </section>
   <section id="view">
-    <div id="stage"><canvas id="canvas"></canvas></div>
+    <div id="stage"><canvas id="canvas"></canvas><div id="loading" role="status" hidden><div class="card"><div class="spin"></div><span id="loadmsg">Loading the recording...</span></div></div></div>
     <div id="player" hidden>
       <button id="play" class="ghost" type="button">Pause</button>
       <select id="speed" aria-label="replay speed">
@@ -297,7 +308,7 @@ function draw(now) {
   if (!topo) {
     ctx.fillStyle = color("--muted");
     ctx.font = "14px system-ui, sans-serif";
-    ctx.fillText(rp !== null ? "" : showcase ? "Loading the recording..." : "Waiting for the engine's live feed...", 20, 30);
+    ctx.fillText(rp !== null || showcase || traceUrl ? "" : "Waiting for the engine's live feed...", 20, 30);
     requestAnimationFrame(draw);
     return;
   }
@@ -310,18 +321,20 @@ function draw(now) {
   const stacked = ranks > 1 && W < 640;
   const boxes = layout(W, H, ranks, stacked);
   const cellBg = color("--cell");
+  const floor = parseFloat(color("--heat-floor")) || 0.08, span = parseFloat(color("--heat-span")) || 0.22;
+  labels.length = 0;
   for (let r = 0; r < ranks; r++) {
     const b = boxes[r];
     const rgb = color(r === 0 ? "--rank0" : "--rank1");
     const cols = live.cols[r].length || 1;
-    ctx.fillStyle = color("--ink");
-    ctx.font = "600 13px system-ui, sans-serif";
-    const fit = (long, short) => (ctx.measureText(long).width <= b.w ? long : short);
-    ctx.fillText(fit(`rank ${r} · ${topo.ranks[r]}`, `rank ${r}`), b.x, b.y + 4);
-    ctx.fillStyle = color("--muted");
-    ctx.font = "12px system-ui, sans-serif";
+    const fit = (font, long, short) => {
+      ctx.font = font;
+      return ctx.measureText(long).width <= b.w - 8 ? long : short;
+    };
+    const head = "600 13px system-ui, sans-serif", sub = "12px system-ui, sans-serif";
+    addText(fit(head, `rank ${r} · ${topo.ranks[r]}`, `rank ${r}`), b.x, b.y + 4, head, "--ink");
     const calls = `${live.drawn[r].toLocaleString()} calls`;
-    ctx.fillText(fit(`${live.cols[r].length} experts per layer · ${calls}`, calls), b.x, b.y + 20);
+    addText(fit(sub, `${live.cols[r].length} experts per layer · ${calls}`, calls), b.x, b.y + 20, sub, "--muted");
     const top = b.y + 32, avail = b.h - 40;
     const cell = Math.max(1, Math.min(b.w / cols, avail / topo.layers));
     const gw = cell * cols, gh = cell * topo.layers;
@@ -332,7 +345,7 @@ function draw(now) {
     for (let l = 0; l < topo.layers; l++) {
       for (let c = 0; c < live.cols[r].length; c++) {
         const i = l * live.cols[r].length + c;
-        const base = total[i] > 0 ? 0.08 + 0.22 * Math.sqrt(total[i] / live.totalMax) : 0;
+        const base = total[i] > 0 ? floor + span * Math.sqrt(total[i] / live.totalMax) : 0;
         const a = Math.max(heat[i], base);
         const cx = ox + c * cell + inset, cy = oy + l * cell + inset, cw = cell - 2 * inset;
         ctx.fillStyle = cellBg;
@@ -354,8 +367,42 @@ function draw(now) {
       ctx.restore();
     }
   }
-  if (ranks > 1) drawLinks(boxes, stacked, now, rp ? rp.clock : now);
+  if (ranks > 1) drawLinks(boxes, stacked, now, rp ? rp.clock : now, stacked ? W : H);
+  drawLabels();
   requestAnimationFrame(draw);
+}
+
+// Diagram text, drawn after everything else on a small backdrop so lines and packets never cover it.
+const labels = [];
+function addText(text, x, y, font, fill, align = "left") {
+  labels.push({ text, x, y, font, fill, align });
+}
+
+function drawLabels() {
+  const back = color("--panel");
+  for (const l of labels) {
+    ctx.font = l.font;
+    const m = ctx.measureText(l.text);
+    const up = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent, down = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent;
+    const left = l.align === "center" ? l.x - m.width / 2 : l.align === "right" ? l.x - m.width : l.x;
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = back;
+    ctx.beginPath();
+    if (ctx.roundRect)
+    {
+      ctx.roundRect(left - 4, l.y - up - 2, m.width + 8, up + down + 4, 4);
+    }
+    else
+    {
+      ctx.rect(left - 4, l.y - up - 2, m.width + 8, up + down + 4);
+    }
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = color(l.fill);
+    ctx.textAlign = l.align;
+    ctx.fillText(l.text, l.x, l.y);
+  }
+  ctx.textAlign = "left";
 }
 
 // Rank 0 on the left (on top when narrow), its peers in a grid beside it.
@@ -370,33 +417,87 @@ function layout(W, H, ranks, stacked) {
   const first = along * share;
   const rest = along - first;
   const boxes = [stacked ? { x: pad, y: pad, w: across, h: first } : { x: pad, y: pad, w: first, h: across }];
-  // The peers' grid, as square as the space allows.
-  const inner = 16;
+  // The peers' grid, as square as the space allows, with wider gaps when links run through them.
   const lines = Math.max(1, Math.min(peers, Math.round(Math.sqrt(peers * across / rest))));
   const per = Math.ceil(peers / lines);
+  const inner = per > 1 ? 28 : 16;
   const cellAcross = (across - inner * (lines - 1)) / lines;
   const cellAlong = (rest - inner * (per - 1)) / per;
   for (let i = 0; i < peers; i++) {
     const a = Math.floor(i / per), b = i % per;
     const o = pad + first + gap + b * (cellAlong + inner);
     const q = pad + a * (cellAcross + inner);
-    boxes.push(stacked ? { x: q, y: o, w: cellAcross, h: cellAlong } : { x: o, y: q, w: cellAlong, h: cellAcross });
+    boxes.push(stacked ? { x: q, y: o, w: cellAcross, h: cellAlong, line: a, pos: b } : { x: o, y: q, w: cellAlong, h: cellAcross, line: a, pos: b });
   }
   return boxes;
 }
 
-function drawLinks(boxes, stacked, now, rateNow) {
+// Where `u` (0 to 1) falls along a path of points, nudged `off` pixels sideways.
+function pointAt(path, u, off) {
+  let total = 0;
+  for (let i = 1; i < path.length; i++) total += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+  let left = u * total;
+  for (let i = 1; i < path.length; i++) {
+    const p = path[i - 1], q = path[i];
+    const len = Math.hypot(q.x - p.x, q.y - p.y);
+    if (left <= len || i === path.length - 1) {
+      const k = len ? Math.min(1, left / len) : 0, d = len || 1;
+      return { x: p.x + (q.x - p.x) * k - ((q.y - p.y) / d) * off, y: p.y + (q.y - p.y) * k + ((q.x - p.x) / d) * off };
+    }
+    left -= len;
+  }
+  return path[0];
+}
+
+// Each link's path. A peer with another box between it and rank 0 is reached through the gaps:
+// along the channel below its line of boxes, then up the gap before it.
+function linkPaths(boxes, stacked, extent) {
+  const P = (al, ac) => (stacked ? { x: ac, y: al } : { x: al, y: ac });
+  const A0 = (b) => (stacked ? b.y : b.x), C0 = (b) => (stacked ? b.x : b.y);
+  const gA0 = (b) => (stacked ? b.grid.oy : b.grid.ox), gA1 = (b) => gA0(b) + (stacked ? b.grid.gh : b.grid.gw);
+  const gC0 = (b) => (stacked ? b.grid.ox : b.grid.oy), gC1 = (b) => gC0(b) + (stacked ? b.grid.gw : b.grid.gh);
+  const mid = (b) => (gC0(b) + gC1(b)) / 2;
+  const head = 12; // Room for a box's header text, which sits just inside its top edge
   const a = boxes[0];
-  const x0 = stacked ? a.x + a.w / 2 : a.grid.ox + a.grid.gw + 6;
-  const y0 = stacked ? a.grid.oy + a.grid.gh + 6 : a.grid.oy + a.grid.gh / 2;
-  const ends = boxes.map((b) => (stacked ? { x: b.x + b.w / 2, y: b.grid.oy - 6 } : { x: b.grid.ox - 6, y: b.grid.oy + b.grid.gh / 2 }));
-  ctx.strokeStyle = color("--line");
+  const start = P(gA1(a) + 6, mid(a));
+  const startA = gA1(a) + 6;
+  const paths = [null];
+  const labelAt = [null];
+  for (let r = 1; r < boxes.length; r++) {
+    const b = boxes[r];
+    const end = P(gA0(b) - 6, mid(b));
+    if (!b.pos) {
+      paths.push([start, end]);
+      labelAt.push(null);
+      continue;
+    }
+    const row = boxes.filter((q) => q.line === b.line);
+    const next = boxes.filter((q) => q.line === b.line + 1);
+    const prev = row.find((q) => q.pos === b.pos - 1), first = row.find((q) => q.pos === 0);
+    const lo = Math.max(...row.map(gC1));
+    const hi = next.length ? Math.min(...next.map(C0)) - (stacked ? 0 : head) : extent - 2;
+    const ch = (lo + hi) / 2;
+    const gap = (gA1(prev) + (stacked ? A0(b) - head : gA0(b))) / 2;
+    const into = A0(first) - 0.35 * (A0(first) - startA);
+    paths.push([start, P(into, ch), P(gap, ch), P(gap, mid(b)), end]);
+    labelAt.push(P((gA0(prev) + gA1(prev)) / 2, ch));
+  }
+  return { start, paths, labelAt };
+}
+
+function drawLinks(boxes, stacked, now, rateNow, extent) {
+  const a = boxes[0];
+  const { start, paths, labelAt } = linkPaths(boxes, stacked, extent);
+  const x0 = start.x, y0 = start.y;
+  const ends = paths.map((p) => (p ? p[p.length - 1] : null));
+  ctx.strokeStyle = color("--link");
   ctx.lineWidth = boxes.length > 3 ? 4 : 8;
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   for (let r = 1; r < boxes.length; r++) {
     ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(ends[r].x, ends[r].y);
+    ctx.moveTo(paths[r][0].x, paths[r][0].y);
+    for (let i = 1; i < paths[r].length; i++) ctx.lineTo(paths[r][i].x, paths[r][i].y);
     ctx.stroke();
   }
   // A dot rides out with each dispatch and back with its combine.
@@ -407,11 +508,7 @@ function drawLinks(boxes, stacked, now, rateNow) {
     if (t < 0) continue;
     const out = t < 0.5;
     const u = out ? t * 2 : 2 - t * 2;
-    const e = ends[p.r];
-    const len = Math.hypot(e.x - x0, e.y - y0) || 1;
-    const off = (p.lane - 0.5) * 6;
-    const x = x0 + (e.x - x0) * u - ((e.y - y0) / len) * off;
-    const y = y0 + (e.y - y0) * u + ((e.x - x0) / len) * off;
+    const { x, y } = pointAt(paths[p.r], u, (p.lane - 0.5) * 6);
     ctx.fillStyle = `rgba(${color(out ? "--rank0" : "--rank1")}, 0.9)`;
     ctx.beginPath();
     ctx.arc(x, y, 2.5, 0, Math.PI * 2);
@@ -422,29 +519,31 @@ function drawLinks(boxes, stacked, now, rateNow) {
   for (const c of live.linkCalls) perLink[c.r] += c.calls;
   const r0 = live.rtt[0], r1 = live.rtt[live.rtt.length - 1];
   const rtt = r0 && r1.layers > r0.layers ? (r1.us - r0.us) / (r1.layers - r0.layers) : null;
-  ctx.fillStyle = color("--muted");
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  const label = (x, y, lines) => lines.forEach((t, i) => ctx.fillText(t, x, y + i * 14));
+  const font = "12px system-ui, sans-serif";
+  const label = (x, y, lines, align = "center") => lines.forEach((t, i) => addText(t, x, y + i * 16, font, "--muted", align));
   const pk = (calls) => `${Math.round(calls * topo.chunks * 2).toLocaleString()} packets/s`;
   const rttText = rtt !== null ? [`${rtt.toFixed(0)} µs per layer`] : [];
   if (boxes.length === 2) {
     const mx = (x0 + ends[1].x) / 2 + (stacked ? 70 : 0), my = (y0 + ends[1].y) / 2;
     label(mx, my - (stacked ? 0 : 18), [topo.transport]);
-    label(mx, my + (stacked ? 14 : 22), [pk(perLink[1]), ...rttText]);
+    label(mx, my + (stacked ? 16 : 24), [pk(perLink[1]), ...rttText]);
   } else {
     // Many links: a summary in rank 0's header, and each link's rate near its peer when there is room.
     const total = perLink.reduce((sum, v) => sum + v, 0);
-    ctx.textAlign = "right";
-    label(a.x + a.w, a.y + 4, [`${topo.transport} · ${pk(total)}`, ...rttText]);
-    ctx.textAlign = "center";
+    label(a.x + a.w, a.y + 4, [`${topo.transport} · ${pk(total)}`, ...rttText], "right");
     if (boxes.length <= 5 && !stacked) {
       for (let r = 1; r < boxes.length; r++) {
-        label(x0 + (ends[r].x - x0) * 0.7, y0 + (ends[r].y - y0) * 0.7 - 8, [pk(perLink[r])]);
+        if (labelAt[r])
+        {
+          label(labelAt[r].x, labelAt[r].y + 4, [pk(perLink[r])]);
+        }
+        else
+        {
+          label(x0 + (ends[r].x - x0) * 0.7, y0 + (ends[r].y - y0) * 0.7 - 8, [pk(perLink[r])]);
+        }
       }
     }
   }
-  ctx.textAlign = "left";
 }
 
 function stat(k, v, s, cls) {
@@ -621,6 +720,43 @@ $("input").addEventListener("keydown", (ev) => {
   }
 });
 
+function setLoading(text) {
+  $("loading").hidden = text === null;
+  if (text !== null) {
+    $("loadmsg").textContent = text;
+  }
+}
+
+function mb(bytes) {
+  return bytes < 1e6 ? `${Math.round(bytes / 1e3)} KB` : `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+// Downloads `url` with the spinner up, counting the bytes when the server says how many there are.
+async function fetchBlob(url, what) {
+  setLoading(`Loading ${what}...`);
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const total = Number(res.headers.get("content-length")) || 0;
+  if (!total || !res.body) {
+    return await res.blob();
+  }
+  const reader = res.body.getReader();
+  const parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    parts.push(value);
+    got += value.length;
+    setLoading(got <= total ? `Loading ${what}... ${mb(got)} of ${mb(total)}` : `Loading ${what}... ${mb(got)}`); // A compressed response counts more bytes than it says
+  }
+  return new Blob(parts);
+}
+
 // Replay (TASK-16): a recording is the live feed's frames, one per line, with the chat's notes among them.
 async function readText(blob) {
   const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
@@ -705,15 +841,12 @@ async function startShowcase() {
   }
   let list;
   try {
-    const res = await fetch(showcase);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    list = (await res.json()).recordings;
+    list = JSON.parse(await (await fetchBlob(showcase, "the list of recordings")).text()).recordings;
     if (!Array.isArray(list) || !list.length || !list.every((r) => r && typeof r.file === "string" && typeof r.title === "string")) {
       throw new Error("it lists no recordings");
     }
   } catch (e) {
+    setLoading(null);
     showProblem(`Could not load the list of recordings: ${e.message}.`);
     return;
   }
@@ -740,18 +873,21 @@ async function openRecording(rec, chosen) {
   }
   let trace;
   try {
-    const res = await fetch(rec.file);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+    const blob = await fetchBlob(rec.file, "the recording");
+    if (ticket !== opening) {
+      return;
     }
-    trace = parseTrace(await readText(await res.blob()));
+    setLoading("Reading the recording...");
+    trace = parseTrace(await readText(blob));
   } catch (e) {
     if (ticket === opening) {
+      setLoading(null);
       showProblem(`Could not replay "${rec.title}": ${e.message}.`);
     }
     return;
   }
   if (ticket === opening) {
+    setLoading(null);
     startReplay(rec.file.split("/").pop(), trace, rec);
   }
 }
@@ -883,10 +1019,13 @@ addEventListener("drop", (ev) => {
 
 const traceUrl = new URLSearchParams(location.search).get("trace");
 if (traceUrl) {
-  fetch(traceUrl).then((r) => {
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.blob();
-  }).then((b) => loadTrace(traceUrl.split("/").pop(), b)).catch((e) => showProblem(`Could not load ${traceUrl}: ${e.message}.`));
+  fetchBlob(traceUrl, "the recording").then((b) => {
+    setLoading(null);
+    return loadTrace(traceUrl.split("/").pop(), b);
+  }).catch((e) => {
+    setLoading(null);
+    showProblem(`Could not load ${traceUrl}: ${e.message}.`);
+  });
 } else if (showcase) {
   startShowcase();
 } else if (/^https?:$/.test(location.protocol)) {

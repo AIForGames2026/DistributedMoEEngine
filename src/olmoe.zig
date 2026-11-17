@@ -952,8 +952,7 @@ pub const Capacity = struct {
     dropped: u64 = 0,
     layers_over: u64 = 0,
 
-    /// Processes in one split (TASK-33), as the transport's 6-bit rank allows.
-    pub const max_ranks = 64;
+    pub const max_ranks = 2;
     pub const none = std.math.maxInt(u32);
     /// Marks a dropped call in `idx`.
     pub const skip = std.math.maxInt(u32);
@@ -2620,9 +2619,7 @@ test "capacity per rank keeps each rank's highest-weight calls" {
     var wts = [_]f32{ 0.6, 0.4, 0.7, 0.3, 0.5, 0.5, 0.9, 0.1 };
     var count: [4]u32 = undefined;
     var list: [8]u32 = undefined;
-    var limits: [Capacity.max_ranks]u32 = @splat(Capacity.none);
-    limits[1] = 3;
-    var cap: Capacity = .{ .owner = &owner, .rank_limit = limits };
+    var cap: Capacity = .{ .owner = &owner, .rank_limit = .{ Capacity.none, 3 } };
     cap.apply(&idx, &wts, idx.len, &count, &list);
     // Rank 1 had 5 calls (weights 0.6, 0.7, 0.5, 0.5, 0.9): it keeps 0.9, 0.7, 0.6.
     const want = [_]u32{ 2, 0, 3, 1, Capacity.skip, Capacity.skip, 2, 0 };
@@ -2631,7 +2628,7 @@ test "capacity per rank keeps each rank's highest-weight calls" {
     // An expert limit first, then the rank's: expert 2 keeps one call, so rank 1 fits.
     var idx2 = [_]u32{ 2, 0, 3, 1, 2, 3, 2, 0 };
     var wts2 = [_]f32{ 0.6, 0.4, 0.7, 0.3, 0.5, 0.5, 0.9, 0.1 };
-    var both: Capacity = .{ .owner = &owner, .rank_limit = limits, .expert_limit = 1 };
+    var both: Capacity = .{ .owner = &owner, .rank_limit = .{ Capacity.none, 3 }, .expert_limit = 1 };
     both.apply(&idx2, &wts2, idx2.len, &count, &list);
     const want2 = [_]u32{ Capacity.skip, 0, 3, 1, Capacity.skip, Capacity.skip, 2, Capacity.skip };
     try std.testing.expectEqualSlices(u32, &want2, &idx2);

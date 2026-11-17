@@ -89,7 +89,6 @@ test {
     {
         _ = @import("tracker.zig");
         _ = @import("prefix_cache.zig");
-        _ = @import("split.zig");
     }
 }
 

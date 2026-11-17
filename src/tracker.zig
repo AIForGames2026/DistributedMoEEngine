@@ -599,9 +599,8 @@ pub const Client = struct {
     lost: std.atomic.Value(bool) = .init(false),
     /// While set, no heartbeats go out (tests a hung process).
     paused: std.atomic.Value(bool) = .init(false),
-    /// The processes whose health `peerHealthy` reports (under the lock), and whether all are healthy.
-    watch_ids: [max_procs]u32 = undefined,
-    watch_count: usize = 0,
+    /// The process whose health `peerHealthy` reports, and that health.
+    watch_id: std.atomic.Value(u32) = .init(0),
     watch_ok: std.atomic.Value(bool) = .init(false),
     locked: std.atomic.Value(bool) = .init(false),
     view: View = .{},
@@ -682,18 +681,16 @@ pub const Client = struct {
         out.* = self.view;
     }
 
-    /// Makes `peerHealthy` report on processes `ids`.
-    pub fn watch(self: *Client, ids: []const u32) void
+    /// Makes `peerHealthy` report on process `id`.
+    pub fn watch(self: *Client, id: u32) void
     {
         self.lock();
         defer self.unlock();
-        const n = @min(ids.len, max_procs);
-        @memcpy(self.watch_ids[0..n], ids[0..n]);
-        self.watch_count = n;
+        self.watch_id.store(id, .release);
         self.refreshWatch();
     }
 
-    /// Whether every watched process is healthy in the latest map. Cheap enough
+    /// Whether the watched process is healthy in the latest map. Cheap enough
     /// to call on every dispatch.
     pub fn peerHealthy(self: *const Client) bool
     {
@@ -725,45 +722,6 @@ pub const Client = struct {
         return error.NoHealthyPeer;
     }
 
-    /// Waits up to `timeout_ms` until `out.len` healthy processes with `role`
-    /// that own experts are listed, then fills `out` with them, lowest id first.
-    pub fn waitForMany(self: *Client, role: Role, out: []Entry, timeout_ms: u64) !void
-    {
-        const end = monoNs() + timeout_ms * std.time.ns_per_ms;
-        var v: View = .{};
-        while (monoNs() < end)
-        {
-            if (self.lost.load(.acquire))
-            {
-                return error.TrackerLost;
-            }
-            self.snapshot(&v);
-            var found: usize = 0;
-            var picked: [max_procs]Entry = undefined;
-            for (v.entries[0..v.count]) |e|
-            {
-                if (e.info.role == role and e.health == .healthy and e.info.ownedCount() > 0)
-                {
-                    picked[found] = e;
-                    found += 1;
-                }
-            }
-            if (found >= out.len)
-            {
-                std.mem.sort(Entry, picked[0..found], {}, struct {
-                    fn lt(_: void, a: Entry, b: Entry) bool
-                    {
-                        return a.id < b.id;
-                    }
-                }.lt);
-                @memcpy(out, picked[0..out.len]);
-                return;
-            }
-            sleepMs(5);
-        }
-        return error.NoHealthyPeer;
-    }
-
     fn lock(self: *Client) void
     {
         while (self.locked.swap(true, .acquire))
@@ -779,13 +737,9 @@ pub const Client = struct {
 
     fn refreshWatch(self: *Client) void
     {
-        var ok = !self.lost.load(.acquire) and self.watch_count > 0;
-        for (self.watch_ids[0..self.watch_count]) |id|
-        {
-            const e = self.view.find(id);
-            ok = ok and e != null and e.?.health == .healthy;
-        }
-        self.watch_ok.store(ok, .release);
+        const id = self.watch_id.load(.acquire);
+        const e = self.view.find(id);
+        self.watch_ok.store(!self.lost.load(.acquire) and e != null and e.?.health == .healthy, .release);
     }
 
     fn takeMap(self: *Client, body: []const u8) void
@@ -1103,7 +1057,7 @@ test "join, drop, stalled heartbeat and goodbye reach every peer" {
     var info: Info = .{ .role = .expert, .rank = 1, .port = 9, .experts = 64 };
     info.setOwned(40);
     const a = try Client.start(gpa, "127.0.0.1", server.port, info);
-    watcher.watch(&.{a.id});
+    watcher.watch(a.id);
     _ = try untilAll(&.{watcher}, a.id, .healthy, 2000);
     try std.testing.expect(watcher.peerHealthy());
     var v: View = .{};

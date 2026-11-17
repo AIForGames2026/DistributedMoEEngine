@@ -14,7 +14,7 @@
 //! Frames (text, one JSON object each):
 //!   {"t":"hello", model, layers, experts, top_k, transport, ranks, owner, chunks, ms}
 //!   {"t":"step", seq, ms, n, step_us, layer_us, x: [layer, expert, count, ...],
-//!    engine: [rank 0 calls, rank 1 calls] (null where the engine keeps no count),
+//!    engine: [rank 0 calls, rank 1 calls, ...] (one per rank, at least two; null where the engine keeps no count),
 //!    rtt_us, rtt_layers, cache: {resident, hinted, late, missed, loads} or null}
 //! Recordings add `recorded` (Unix seconds) to the hello, notes from the
 //! server (`chat`, `text`, `done`), each with `after`, the seq of the step
@@ -22,10 +22,13 @@
 const std = @import("std");
 const olmoe = @import("olmoe.zig");
 
+/// The most processes a run has (TASK-33), as the transport's 6-bit rank allows.
+pub const max_ranks = 64;
+
 /// What the engine itself counted, copied into each step's frame.
 pub const Counters = struct {
     /// Expert calls by rank, counted where they ran or were sent; null where no count is kept.
-    calls: [2]?u64 = .{ null, null },
+    calls: [max_ranks]?u64 = @splat(null),
     /// Time from the first dispatch to the last combine, summed over the layers that had remote calls.
     rtt_ns: u64 = 0,
     rtt_layers: u64 = 0,
@@ -356,7 +359,7 @@ pub fn writeHello(gpa: std.mem.Allocator, out: *std.ArrayList(u8), topo: Topolog
     try out.append(gpa, '}');
 }
 
-pub fn writeStep(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: *const Slot, experts: usize) !void
+pub fn writeStep(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: *const Slot, experts: usize, ranks: usize) !void
 {
     try out.print(gpa, "{{\"t\":\"step\",\"seq\":{d},\"ms\":{d:.3},\"n\":{d},\"step_us\":{d:.1},\"layer_us\":[", .{ s.seq, ms(s.t_ns), s.tokens, us(s.step_ns) });
     for (s.layer_ns, 0..) |t, i|
@@ -376,7 +379,7 @@ pub fn writeStep(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: *const Slot
     }
     const c = s.counters;
     try out.appendSlice(gpa, "],\"engine\":[");
-    for (c.calls, 0..) |v, i|
+    for (c.calls[0..@max(ranks, 2)], 0..) |v, i|
     {
         try out.appendSlice(gpa, if (i == 0) "" else ",");
         if (v) |n|
@@ -635,7 +638,7 @@ pub const Broadcaster = struct {
             self.json.clearRetainingCapacity();
             self.frame.clearRetainingCapacity();
             const ok = blk: {
-                writeStep(self.gpa, &self.json, s, self.feed.experts) catch break :blk false;
+                writeStep(self.gpa, &self.json, s, self.feed.experts, self.topo.ranks.len) catch break :blk false;
                 if (self.recording)
                 {
                     self.rec.appendSlice(self.gpa, self.json.items) catch break :blk false;
@@ -862,7 +865,7 @@ test "the tap counts a step only while someone watches" {
     try std.testing.expectEqualSlices(u32, &.{ 0, 2, 1, 1, 1, 1, 1, 1 }, s.counts);
     var json: std.ArrayList(u8) = .empty;
     defer json.deinit(gpa);
-    try writeStep(gpa, &json, s, 4);
+    try writeStep(gpa, &json, s, 4, 2);
     try std.testing.expect(std.mem.indexOf(u8, json.items, "\"x\":[0,1,2,0,2,1,0,3,1,1,0,1,1,1,1,1,2,1,1,3,1]") != null);
     try std.testing.expect(std.mem.indexOf(u8, json.items, "\"engine\":[null,null]") != null);
     feed.pop();

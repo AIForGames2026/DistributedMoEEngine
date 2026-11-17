@@ -1,11 +1,12 @@
 //! OLMoE-1B-7B (TASK-10), Qwen3-MoE (TASK-12) or Qwen3.5-MoE (TASK-29) forward pass split across
-//! two processes. Linux.
+//! any number of processes (TASK-33; two by default). Linux.
 //!
 //!   olmoe local MODEL --golden G.tfref                 one process, every expert
-//!   olmoe shm   MODEL --golden G.tfref [options]       two processes, shared memory
-//!   olmoe rdma  MODEL --golden G.tfref [options]       two processes, RDMA (-Drdma=true)
-//!   olmoe expert MODEL --port P [options]              TCP rank 1
+//!   olmoe shm   MODEL --golden G.tfref [options]       --ranks N processes (default 2), shared memory
+//!   olmoe rdma  MODEL --golden G.tfref [options]       the same over RDMA (-Drdma=true)
+//!   olmoe expert MODEL --port P [--rank R --ranks N]   an expert rank over TCP (rank 1 by default)
 //!   olmoe router MODEL --host IP --port P --golden G.tfref [options]
+//!   olmoe router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ...  one --peer per expert rank, in rank order
 //!   olmoe rdma-expert / rdma-router                    the same over RDMA
 //!
 //! options: --payload fp8|bf16|f32 (default fp8), --placement FILE, --slots S,
@@ -23,8 +24,9 @@
 //!          P of the guesses with wrong experts, to test miss handling),
 //!          --tracker IP[:PORT] (TASK-09: join the swarm tracker; an expert
 //!          announces its address and experts there, and a router given no
-//!          --host connects to a healthy expert it lists and refuses to route
-//!          to it once the tracker marks it unhealthy), --advertise IP (the
+//!          --host waits for --ranks N - 1 healthy experts it lists, takes each
+//!          expert from the first that announced it, holds the rest itself, and
+//!          refuses to route once any of them turns unhealthy), --advertise IP (the
 //!          address an expert announces; default the one the tracker sees),
 //!          --yarn F (TASK-12: YaRN rope scaling by F over 32,768 positions,
 //!          for Qwen3-MoE past its native context; Qwen uses 4 for 128k),
@@ -48,14 +50,14 @@
 //!          bf16_fp8 keeps keys in bf16 and values in fp8, about 2.6 times)
 //!
 //! Rank 0 holds every non-expert weight (embedding, attention, norms, router,
-//! LM head) and its own experts; rank 1 holds the rest of the experts. The
-//! placement manifest says which rank owns which experts, one line per range:
-//! `<rank> <first>-<last>`; without one, rank 0 owns the lower half. For each
-//! layer, rank 0 sends every (token, expert) pair owned by rank 1 as a dispatch
-//! packet carrying the token's normalized hidden state (as several packets
-//! when it does not fit one, as with f32), runs its own experts
-//! meanwhile, and adds the combines back in a fixed order, so the result does
-//! not depend on arrival order.
+//! LM head) and its own experts; ranks 1 to N-1 hold the rest of the experts
+//! (`split.zig`). The placement manifest says which rank owns which experts, one
+//! line per range: `<rank> <first>-<last>`; without one, the experts are split
+//! into N equal ranges, rank 0 first. For each layer, rank 0 sends every (token,
+//! expert) pair to the rank owning it as a dispatch packet carrying the token's
+//! normalized hidden state (as several packets when it does not fit one, as
+//! with f32), runs its own experts meanwhile, and adds the combines back in a
+//! fixed order, so the result does not depend on which rank ran what.
 //!
 //! MODEL is the GGUF file with its `.tfsum` index (`tfload index`); G.tfref
 //! comes from tools/ref/ref_olmoe.py. Rank 0 runs each golden prompt and
@@ -75,7 +77,9 @@ const transport = @import("transport.zig");
 const mf = @import("model_file.zig");
 const Arena = @import("arena.zig").Arena;
 const ExpertCache = @import("expert_cache.zig").ExpertCache;
-const Want = @import("expert_cache.zig").Want;
+const split = @import("split.zig");
+const Experts = split.Experts;
+const SplitMoe = split.SplitMoe;
 const CacheSource = @import("expert_cache.zig").Source;
 const tracker = @import("tracker.zig");
 const kv_tier = @import("kv_tier.zig");
@@ -153,6 +157,10 @@ const Options = struct {
     memory_budget: u64 = 0,
     spike: usize = 0,
     kv_format: olmoe.KvFormat = .f32,
+    /// TASK-33: processes in the run, this expert's rank, and the peers a router dials.
+    ranks: ?usize = null,
+    rank: u8 = 1,
+    peers: []const PeerAddr = &.{},
 };
 
 /// Every allocation of this process goes through `proc_heap` (TASK-17), which
@@ -161,12 +169,22 @@ var proc_heap: budget.Heap = undefined;
 var heap_label: []const u8 = "olmoe";
 var memory: ?budget.Memory = null;
 
-/// A router's view of the swarm (TASK-09): its tracker link, watching the
-/// expert process it connected to, and the ownership that process announced.
+/// A router's view of the swarm (TASK-09, TASK-33): its tracker link, watching
+/// the expert processes it connected to (rank `i + 1` for `peers[i]`), and the
+/// ownership taken from what they announced.
 const Swarm = struct {
     client: *tracker.Client,
-    peer: tracker.Entry,
+    peers: []const tracker.Entry,
     owner: [max_experts]u8,
+};
+
+/// A peer rank 0 dials (`--peer [tcp:|rdma:]HOST:PORT[@DEV]`), with the RDMA device
+/// that reaches it when not `--dev`.
+const PeerAddr = struct {
+    host: []const u8,
+    port: u16,
+    rdma: bool,
+    device: ?[:0]const u8 = null,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -176,13 +194,14 @@ pub fn main(init: std.process.Init) !void {
     olmoe.big_allocator = gpa;
     const opts = parseArgs(init) catch {
         std.debug.print(
-            \\usage: olmoe local|shm|rdma MODEL --golden G.tfref [options]
-            \\       olmoe expert|rdma-expert MODEL --port P [options]
+            \\usage: olmoe local|shm|rdma MODEL --golden G.tfref [--ranks N] [options]
+            \\       olmoe expert|rdma-expert MODEL --port P [--rank R --ranks N] [options]
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
+            \\       olmoe router|rdma-router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ... --golden G.tfref [options]
             \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu  --yarn F
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
             \\         --lookahead H  --extra E  --cache N  --pin L  --loaders N  --mispredict P
-            \\         --tracker IP[:PORT]  --advertise IP  (a router with --tracker needs no --host)
+            \\         --tracker IP[:PORT]  --advertise IP  (a router with --tracker needs no --host; --ranks N waits for N-1 experts)
             \\         --serve [IP:]PORT  --ctx N  --no-reuse  (an OpenAI-compatible server instead of --golden)
             \\         --record FILE  (rank 0 records every step for the page to replay)
             \\         --capacity C  --expert-capacity C  --max-step N  --memory-budget MB  --spike F  (TASK-17)
@@ -233,7 +252,7 @@ pub fn main(init: std.process.Init) !void {
         const tel = try openTelemetry(gpa, l.cfg, moe, opts, "local", live);
         const run_moe = if (tel) |t| t.tap.moe() else moe;
         const result = if (opts.serve != null)
-            runServe(gpa, &l, run_moe, opts, "local", tel.?.bc)
+            runServe(gpa, &l, run_moe, opts, "local", tel.?.bc, if (box != null) opts.max_step else null)
         else if (opts.context > 0)
             runLong(gpa, &l.weights.?, run_moe, opts, "local")
         else
@@ -263,14 +282,28 @@ pub fn main(init: std.process.Init) !void {
         defer if (client) |cl| cl.close(gpa, false);
         const fd = try transport.tcp.acceptOn(l.fd);
         transport.tcp.closeSocket(l.fd);
-        return runLinked(gpa, opts, slots, is_rdma, fd, 1);
+        var link: Link = undefined;
+        try link.initSocket(opts, fd, is_rdma, @intCast(opts.rank), slots);
+        return runLinks(gpa, opts, (&link)[0..1], opts.rank, if (is_rdma) "rdma" else "tcp", &.{});
     }
     if (std.mem.eql(u8, mode, "router") or std.mem.eql(u8, mode, "rdma-router")) {
         if (opts.tracker) |t|
         {
-            return runTrackedRouter(gpa, opts, slots, is_rdma, t);
+            if (opts.peers.len > 0)
+            {
+                std.debug.print("router: give the tracker or --peer addresses, not both\n", .{});
+                std.process.exit(2);
+            }
+            return runTrackedRouter(gpa, opts, is_rdma, t);
         }
-        return runLinked(gpa, opts, slots, is_rdma, try transport.tcp.connect(opts.host, opts.port, 300), 0);
+        const one = [_]PeerAddr{.{ .host = opts.host, .port = opts.port, .rdma = is_rdma }};
+        const addrs = if (opts.peers.len > 0) opts.peers else &one;
+        var names: [split.max_ranks][]const u8 = undefined;
+        for (addrs, 0..) |a, i|
+        {
+            names[i] = a.host;
+        }
+        return runRouter(gpa, opts, addrs, names[0..addrs.len]);
     }
     std.debug.print("unknown mode '{s}'\n", .{mode});
     std.process.exit(2);
@@ -280,6 +313,7 @@ fn parseArgs(init: std.process.Init) !Options {
     var it = try init.minimal.args.iterateAllocator(init.arena.allocator());
     _ = it.next();
     var opts: Options = .{ .mode = it.next() orelse return error.Usage, .model = it.next() orelse return error.Usage };
+    var peers: std.ArrayList(PeerAddr) = .empty;
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--gpu")) {
             opts.gpu = true;
@@ -394,33 +428,99 @@ fn parseArgs(init: std.process.Init) !Options {
         } else if (std.mem.eql(u8, arg, "--mispredict")) {
             opts.mispredict = try std.fmt.parseFloat(f32, value);
             if (opts.mispredict < 0 or opts.mispredict > 1) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--ranks")) {
+            const n = try std.fmt.parseInt(usize, value, 10);
+            if (n < 2 or n > split.max_ranks)
+            {
+                return error.Usage;
+            }
+            opts.ranks = n;
+        } else if (std.mem.eql(u8, arg, "--rank")) {
+            opts.rank = try std.fmt.parseInt(u8, value, 10);
+            if (opts.rank == 0 or opts.rank >= split.max_ranks)
+            {
+                return error.Usage;
+            }
+        } else if (std.mem.eql(u8, arg, "--peer")) {
+            const peer = try parsePeer(value, std.mem.startsWith(u8, opts.mode, "rdma"));
+            if (peer.rdma and !build_options.rdma)
+            {
+                return error.Usage;
+            }
+            try peers.append(init.arena.allocator(), peer);
         } else return error.Usage;
+    }
+    opts.peers = peers.items;
+    if (opts.ranks != null and opts.peers.len > 0 and opts.ranks.? != opts.peers.len + 1)
+    {
+        return error.Usage;
     }
     return opts;
 }
 
-/// Which rank owns each expert (`owner[e]`).
-fn readPlacement(gpa: std.mem.Allocator, path: ?[]const u8, experts: usize, owner: []u8) !void {
-    if (path == null) {
-        for (owner[0..experts], 0..) |*o, e| o.* = if (e < experts / 2) 0 else 1;
-        return;
+/// `[tcp:|rdma:]HOST:PORT[@DEV]`; without a prefix, the mode's transport.
+fn parsePeer(text: [:0]const u8, rdma_default: bool) !PeerAddr
+{
+    var device: ?[:0]const u8 = null;
+    var rest: []const u8 = text;
+    if (std.mem.lastIndexOfScalar(u8, text, '@')) |at|
+    {
+        device = text[at + 1 ..];
+        rest = text[0..at];
     }
-    @memset(owner[0..experts], 0xFF);
-    const text = try mf.readWhole(gpa, path.?);
+    var rdma = rdma_default;
+    if (std.mem.startsWith(u8, rest, "tcp:"))
+    {
+        rdma = false;
+        rest = rest[4..];
+    }
+    else if (std.mem.startsWith(u8, rest, "rdma:"))
+    {
+        rdma = true;
+        rest = rest[5..];
+    }
+    const colon = std.mem.lastIndexOfScalar(u8, rest, ':') orelse return error.Usage;
+    if (device != null and !rdma)
+    {
+        return error.Usage;
+    }
+    return .{ .host = rest[0..colon], .port = try std.fmt.parseInt(u16, rest[colon + 1 ..], 10), .rdma = rdma, .device = device };
+}
+
+/// Processes in this run: `--ranks`, else rank 0 plus each `--peer`, else the
+/// ranks the manifest names, else 2.
+fn rankCount(opts: Options, manifest: ?[]const u8) !usize
+{
+    const n = if (opts.ranks) |r| r else if (opts.peers.len > 0) opts.peers.len + 1 else if (manifest) |m| @max(2, try split.placementRanks(m)) else 2;
+    if (n > split.max_ranks)
+    {
+        return error.TooManyRanks;
+    }
+    return n;
+}
+
+fn ranksOf(gpa: std.mem.Allocator, opts: Options) !usize
+{
+    const path = opts.placement orelse return rankCount(opts, null);
+    const text = try mf.readWhole(gpa, path);
     defer gpa.free(text);
-    var lines = std.mem.tokenizeScalar(u8, text, '\n');
-    while (lines.next()) |line| {
-        const l = std.mem.trim(u8, line, " \r\t");
-        if (l.len == 0 or l[0] == '#') continue;
-        var f = std.mem.tokenizeAny(u8, l, " \t");
-        const rank = try std.fmt.parseInt(u8, f.next() orelse return error.BadPlacement, 10);
-        var r = std.mem.splitScalar(u8, f.next() orelse return error.BadPlacement, '-');
-        const first = try std.fmt.parseInt(usize, r.next().?, 10);
-        const last = try std.fmt.parseInt(usize, r.next() orelse return error.BadPlacement, 10);
-        if (rank > 1 or last < first or last >= experts) return error.BadPlacement;
-        for (owner[first .. last + 1]) |*o| o.* = rank;
+    return rankCount(opts, text);
+}
+
+/// Which rank owns each expert (`owner[e]`), from `--placement` or split evenly.
+/// Returns the number of ranks.
+fn readPlacement(gpa: std.mem.Allocator, opts: Options, experts: usize, owner: []u8) !usize {
+    if (opts.placement) |path|
+    {
+        const text = try mf.readWhole(gpa, path);
+        defer gpa.free(text);
+        const ranks = try rankCount(opts, text);
+        try split.parsePlacement(text, owner[0..experts], ranks);
+        return ranks;
     }
-    for (owner[0..experts]) |o| if (o == 0xFF) return error.BadPlacement; // every expert needs an owner
+    const ranks = try rankCount(opts, null);
+    split.evenPlacement(owner[0..experts], ranks);
+    return ranks;
 }
 
 /// The weights one rank needs, read in one plan through io_uring and checked
@@ -514,28 +614,38 @@ const Loaded = struct {
 };
 
 /// Experts this rank owns, as a mask, after reading the header for the count.
-/// A router that found its expert through the tracker uses what it announced.
-fn ownedMask(gpa: std.mem.Allocator, opts: Options, rank: u8, owner: *[max_experts]u8, owned: *[max_experts]bool) !usize {
+/// A router that found its experts through the tracker uses what they announced.
+fn ownedMask(gpa: std.mem.Allocator, opts: Options, rank: u8, owner: *[max_experts]u8, owned: *[max_experts]bool) !struct { experts: usize, ranks: usize } {
     const file = try mf.File.open(opts.model);
     defer file.close();
     var state = try mf.openModel(gpa, file, null);
     defer state.deinit(gpa);
     const experts = state.model.experts;
+    var ranks: usize = 0;
     if (opts.swarm) |sw|
     {
-        if (sw.peer.info.experts != experts)
+        if (sw.peers[0].info.experts != experts)
         {
-            std.debug.print("{s}: the expert process announced {d} experts, but this model has {d}\n", .{ opts.mode, sw.peer.info.experts, experts });
+            std.debug.print("{s}: the expert processes announced {d} experts, but this model has {d}\n", .{ opts.mode, sw.peers[0].info.experts, experts });
             return error.PlacementMismatch;
         }
         owner.* = sw.owner;
+        ranks = sw.peers.len + 1;
     }
     else
     {
-        try readPlacement(gpa, opts.placement, experts, owner);
+        ranks = try readPlacement(gpa, opts, experts, owner);
     }
-    for (owned, 0..) |*o, e| o.* = e < experts and owner[e] == rank;
-    return experts;
+    if (rank >= ranks)
+    {
+        std.debug.print("{s}: this is rank {d}, but the run has {d} ranks (--ranks, --placement)\n", .{ opts.mode, rank, ranks });
+        return error.PlacementMismatch;
+    }
+    for (owned, 0..) |*o, e|
+    {
+        o.* = e < experts and owner[e] == rank;
+    }
+    return .{ .experts = experts, .ranks = ranks };
 }
 
 /// Announces this expert process to the tracker: where to reach it and which
@@ -544,8 +654,8 @@ fn joinAsExpert(gpa: std.mem.Allocator, opts: Options, where: []const u8, port: 
 {
     var owner: [max_experts]u8 = undefined;
     var owned: [max_experts]bool = undefined;
-    const experts = try ownedMask(gpa, opts, 1, &owner, &owned);
-    var info: tracker.Info = .{ .role = .expert, .rank = 1, .port = port, .experts = @intCast(experts) };
+    const experts = (try ownedMask(gpa, opts, opts.rank, &owner, &owned)).experts;
+    var info: tracker.Info = .{ .role = .expert, .rank = opts.rank, .port = port, .experts = @intCast(experts) };
     info.setLocal();
     if (opts.advertise) |a|
     {
@@ -565,265 +675,80 @@ fn joinAsExpert(gpa: std.mem.Allocator, opts: Options, where: []const u8, port: 
     return client;
 }
 
-/// A router with no --host: joins the tracker, connects to a healthy expert
-/// process it lists, takes that process's experts as the placement, and
-/// watches its health for the rest of the run.
-fn runTrackedRouter(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool, where: []const u8) !void
+/// A router with no --host or --peer: joins the tracker, waits for `--ranks` - 1
+/// healthy expert processes (one by default), takes each expert from the lowest
+/// tracker id that announced it, holds the rest itself, and refuses to route
+/// once any of them turns unhealthy.
+fn runTrackedRouter(gpa: std.mem.Allocator, opts: Options, is_rdma: bool, where: []const u8) !void
 {
     const t = try tracker.parseAddress(where);
     var info: tracker.Info = .{ .role = .router, .rank = 0 };
     info.setLocal();
     const client = try tracker.Client.start(gpa, t.host, t.port, info);
     defer client.close(gpa, false);
+    const want = (opts.ranks orelse 2) - 1;
     var tj: [16]u8 = undefined;
-    std.debug.print("{s} router: joined the tracker at {s}:{d} as id {d}; waiting for a healthy expert process\n", .{ tracker.stamp(&tj), t.host, t.port, client.id });
-    const peer = try client.waitFor(.expert, 120_000);
-    var swarm: Swarm = .{ .client = client, .peer = peer, .owner = @splat(0) };
-    info.experts = peer.info.experts;
-    for (0..peer.info.experts) |e|
-    {
-        if (peer.info.owns(e))
+    std.debug.print("{s} router: joined the tracker at {s}:{d} as id {d}; waiting for {d} healthy expert process{s}\n", .{ tracker.stamp(&tj), t.host, t.port, client.id, want, if (want == 1) "" else "es" });
+    var entries: [split.max_ranks]tracker.Entry = undefined;
+    const peers = entries[0..want];
+    try client.waitForMany(.expert, peers, 120_000);
+    // Ranks in the order the experts announced them (their --rank), then by tracker id.
+    std.mem.sort(tracker.Entry, peers, {}, struct {
+        fn lt(_: void, a: tracker.Entry, b: tracker.Entry) bool
         {
-            swarm.owner[e] = 1;
+            return a.info.rank < b.info.rank or (a.info.rank == b.info.rank and a.id < b.id);
         }
-        else
+    }.lt);
+    var swarm: Swarm = .{ .client = client, .peers = peers, .owner = @splat(0) };
+    const experts = peers[0].info.experts;
+    for (peers) |p|
+    {
+        if (p.info.experts != experts)
+        {
+            std.debug.print("router: expert processes announce {d} and {d} experts\n", .{ experts, p.info.experts });
+            return error.PlacementMismatch;
+        }
+    }
+    info.experts = experts;
+    for (0..experts) |e|
+    {
+        for (peers, 1..) |p, r|
+        {
+            if (p.info.owns(e))
+            {
+                swarm.owner[e] = @intCast(r);
+                break;
+            }
+        }
+        if (swarm.owner[e] == 0)
         {
             info.setOwned(e);
         }
     }
     try client.update(info);
-    client.watch(peer.id);
-    var ip: [16]u8 = undefined;
-    const host = tracker.formatIp4(peer.info.addr, &ip);
-    var ts: [16]u8 = undefined;
-    std.debug.print("{s} router: tracker lists expert id {d} (pid {d} on {s}) at {s}:{d} with {d} of {d} experts\n", .{ tracker.stamp(&ts), peer.id, peer.info.pid, peer.info.nodeName(), host, peer.info.port, peer.info.ownedCount(), peer.info.experts });
+    var ids: [split.max_ranks]u32 = undefined;
+    var ips: [split.max_ranks][16]u8 = undefined;
+    var addrs: [split.max_ranks]PeerAddr = undefined;
+    var names: [split.max_ranks][]const u8 = undefined;
+    for (peers, 0..) |*p, i|
+    {
+        ids[i] = p.id;
+        const host = tracker.formatIp4(p.info.addr, &ips[i]);
+        addrs[i] = .{ .host = host, .port = p.info.port, .rdma = is_rdma };
+        names[i] = p.info.nodeName();
+        var used: usize = 0;
+        for (swarm.owner[0..experts]) |o|
+        {
+            used += @intFromBool(o == i + 1);
+        }
+        var ts: [16]u8 = undefined;
+        std.debug.print("{s} router: rank {d} is expert id {d} (pid {d} on {s}) at {s}:{d}, announcing {d} of {d} experts, {d} used\n", .{ tracker.stamp(&ts), i + 1, p.id, p.info.pid, p.info.nodeName(), host, p.info.port, p.info.ownedCount(), experts, used });
+    }
+    client.watch(ids[0..want]);
     var tracked = opts;
     tracked.swarm = &swarm;
-    return runLinked(gpa, tracked, slots, is_rdma, try transport.tcp.connect(host, peer.info.port, 300), 0);
+    return runRouter(gpa, tracked, addrs[0..want], names[0..want]);
 }
-
-/// This process's experts: all loaded at startup, or held in an expert cache.
-const Experts = struct {
-    local: *olmoe.LocalExperts,
-    cache: ?*ExpertCache = null,
-    /// Forward passes so far; hints and layers are placed by step and layer.
-    step: u64 = 0,
-    /// One expert output per (token, choice), n x top_k x d_model.
-    contrib: []f32 = &.{},
-    /// Calls whose expert is still loading, by (token, choice) index.
-    pending: []u32 = &.{},
-    pending_want: []Want = &.{},
-    /// The most tokens one step may bring (`--max-step`).
-    max_tokens: usize = default_max_tokens,
-
-    const default_max_tokens = 64;
-
-    fn alloc(self: *Experts, gpa: std.mem.Allocator) !void
-    {
-        const cfg = self.local.cfg;
-        self.contrib = try gpa.alloc(f32, self.max_tokens * cfg.top_k * cfg.d_model);
-        self.pending = try gpa.alloc(u32, self.max_tokens * cfg.top_k);
-        self.pending_want = try gpa.alloc(Want, self.max_tokens * cfg.top_k);
-    }
-
-    fn free(self: *Experts, gpa: std.mem.Allocator) void
-    {
-        gpa.free(self.contrib);
-        gpa.free(self.pending);
-        gpa.free(self.pending_want);
-    }
-
-    fn pos(self: *Experts, layer: usize) u64
-    {
-        return self.step * self.local.cfg.layers + layer;
-    }
-
-    fn want(self: *Experts, layer: usize, expert: usize) !Want
-    {
-        if (self.cache) |cache|
-        {
-            return cache.want(layer, expert);
-        }
-        return .{ .layer = @intCast(layer), .expert = @intCast(expert) };
-    }
-
-    /// The expert if it is ready now, or null while it loads.
-    fn poll(self: *Experts, w: *Want) !?ExpertCache.Held
-    {
-        if (self.cache) |cache|
-        {
-            return cache.poll(w);
-        }
-        return .{ .expert = self.local.get(w.layer, w.expert) orelse return error.ExpertNotLocal, .slot = 0 };
-    }
-
-    fn wait(self: *Experts, w: *Want) !ExpertCache.Held
-    {
-        if (self.cache) |cache|
-        {
-            return cache.wait(w);
-        }
-        return (try self.poll(w)).?;
-    }
-
-    fn put(self: *Experts, h: ExpertCache.Held) void
-    {
-        if (self.cache) |cache|
-        {
-            cache.release(h);
-        }
-    }
-
-    /// Hints at an expert of this pass's `layer`.
-    fn hint(self: *Experts, layer: usize, expert: usize) void
-    {
-        self.hintAt(self.pos(layer), layer, expert);
-    }
-
-    fn hintAt(self: *Experts, at: u64, layer: usize, expert: usize) void
-    {
-        if (self.cache) |cache|
-        {
-            cache.hint(at, layer, expert);
-        }
-    }
-
-    /// Marks this pass's `layer` as started, so its queued hints are dropped.
-    fn enter(self: *Experts, layer: usize) void
-    {
-        self.enterAt(self.pos(layer));
-    }
-
-    fn enterAt(self: *Experts, at: u64) void
-    {
-        if (self.cache) |cache|
-        {
-            cache.enter(at);
-        }
-    }
-
-    /// Runs the calls of `idx` that rank 0 owns (all without `owner`) into `contrib`,
-    /// ready experts first and the rest as they load. Returns how many ran.
-    fn runCalls(self: *Experts, layer: usize, x: []const f32, n: usize, idx: []const u32, contrib: []f32, owner: ?[]const u8) !usize
-    {
-        const d = self.local.cfg.d_model;
-        const k = self.local.cfg.top_k;
-        var ran: usize = 0;
-        var waiting: usize = 0;
-        for (0..n * k) |s|
-        {
-            if (idx[s] == olmoe.Capacity.skip)
-            {
-                continue;
-            }
-            if (owner) |o|
-            {
-                if (o[idx[s]] != 0)
-                {
-                    continue;
-                }
-            }
-            var w = try self.want(layer, idx[s]);
-            if (try self.poll(&w)) |h|
-            {
-                h.expert.forward(x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], self.local.scratch);
-                self.put(h);
-                ran += 1;
-                continue;
-            }
-            self.pending[waiting] = @intCast(s);
-            self.pending_want[waiting] = w;
-            waiting += 1;
-        }
-        const cache = self.cache orelse return ran;
-        cache.stats.deferred += waiting;
-        var t0: u64 = 0;
-        while (waiting > 0)
-        {
-            var progressed = false;
-            var i: usize = 0;
-            while (i < waiting)
-            {
-                const h = (try cache.poll(&self.pending_want[i])) orelse
-                {
-                    i += 1;
-                    continue;
-                };
-                const s = self.pending[i];
-                h.expert.forward(x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], self.local.scratch);
-                cache.release(h);
-                ran += 1;
-                waiting -= 1;
-                self.pending[i] = self.pending[waiting];
-                self.pending_want[i] = self.pending_want[waiting];
-                progressed = true;
-            }
-            if (progressed and t0 != 0)
-            {
-                cache.stats.wait_ns += mf.nowNs() - t0;
-                t0 = 0;
-            }
-            else if (!progressed)
-            {
-                if (t0 == 0)
-                {
-                    t0 = mf.nowNs();
-                }
-                std.atomic.spinLoopHint();
-            }
-        }
-        return ran;
-    }
-
-    /// One process with every expert, through the cache.
-    fn moe(self: *Experts) olmoe.Moe
-    {
-        return .{ .ctx = self, .run = run, .prefetch = prefetch };
-    }
-
-    fn run(ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, w: []const f32, out: []f32) anyerror!void
-    {
-        const self: *Experts = @ptrCast(@alignCast(ctx));
-        const d = self.local.cfg.d_model;
-        const k = self.local.cfg.top_k;
-        if (n > self.max_tokens)
-        {
-            return error.TooManyTokens;
-        }
-        self.enter(layer);
-        _ = try self.runCalls(layer, x, n, idx, self.contrib, null);
-        // Fixed order (token, then choice), whatever order the experts ran in.
-        for (0..n) |t|
-        {
-            for (0..k) |j|
-            {
-                const s = t * k + j;
-                if (idx[s] == olmoe.Capacity.skip)
-                {
-                    continue;
-                }
-                for (out[t * d ..][0..d], self.contrib[s * d ..][0..d]) |*o, y|
-                {
-                    o.* += w[s] * y;
-                }
-            }
-        }
-    }
-
-    fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
-    {
-        const self: *Experts = @ptrCast(@alignCast(ctx));
-        // Layer 0's hint comes first in every pass.
-        if (layer == 0)
-        {
-            self.step += 1;
-        }
-        for (experts) |e|
-        {
-            self.hint(layer, e);
-        }
-    }
-};
 
 /// The expert cache's memory, file reader, and checksums (TASK-11).
 const CacheBox = struct {
@@ -931,469 +856,23 @@ fn reportCache(name: []const u8, cache: *ExpertCache) void
     });
 }
 
-/// Rank 0's `Moe`: local experts in this process, the rest over `ep`.
-const SplitMoe = struct {
-    ep: *transport.Endpoint,
-    local: *olmoe.LocalExperts,
-    experts: *Experts,
-    owner: []const u8,
-    enc: wire.Encoding,
-    /// One expert output per (token, choice), n x top_k x d_model.
-    contrib: []f32,
-    pkt: *wire.Packet,
-    remote: u64 = 0,
-    local_calls: u64 = 0,
-    hints: u64 = 0,
-    /// Layers with remote calls, and their time from the first dispatch to the last combine.
-    rtt_layers: u64 = 0,
-    rtt_ns: u64 = 0,
-    /// The tracker link watching rank 1 (TASK-09), if there is one.
-    health: ?*tracker.Client = null,
-    /// The longest the router waited on rank 1 with nothing sent or received
-    /// (TASK-17), and the sends that waited for rank 1 to grant ring slots.
-    stall_max_ns: u64 = 0,
-    credit_waits: u64 = 0,
-    /// The longest such wait since the spike test last cleared it.
-    stall_recent_ns: u64 = 0,
-
-    fn moe(self: *SplitMoe) olmoe.Moe {
-        return .{ .ctx = self, .run = run };
-    }
-
-    /// The live diagram's view of this split's own counters.
-    fn sample(ctx: *anyopaque, out: *telemetry.Counters) void
-    {
-        const self: *SplitMoe = @ptrCast(@alignCast(ctx));
-        out.calls = .{ self.local_calls, self.remote };
-        out.rtt_ns = self.rtt_ns;
-        out.rtt_layers = self.rtt_layers;
-        if (self.experts.cache) |cache|
-        {
-            out.cache = cacheCounts(cache);
-        }
-    }
-
-    /// Refuses to route to rank 1 once the tracker marks it unhealthy.
-    fn checkPeer(self: *SplitMoe) !void
-    {
-        if (self.health) |h|
-        {
-            if (!h.peerHealthy())
-            {
-                return error.PeerUnhealthy;
-            }
-        }
-    }
-
-    /// `ep.send`, but gives up if rank 1 turns unhealthy while it waits.
-    fn sendChecked(self: *SplitMoe, kind: wire.Kind) !void
-    {
-        while (true)
-        {
-            self.ep.trySend(self.pkt, kind) catch |err| switch (err) {
-                error.WouldBlock => {
-                    try self.ep.flushCredits();
-                    try self.checkPeer();
-                    std.atomic.spinLoopHint();
-                    continue;
-                },
-                else => |e| return e,
-            };
-            return;
-        }
-    }
-
-    /// Sends rank 1 the guessed experts it owns for `layer` (TASK-11), even
-    /// when there are none, so it can time every layer's hint.
-    fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
-    {
-        const self: *SplitMoe = @ptrCast(@alignCast(ctx));
-        // Layer 0's hint comes first in every pass; the step tells rank 1's passes apart.
-        if (layer == 0)
-        {
-            self.experts.step += 1;
-        }
-        wire.beginPrefetch(self.pkt, self.experts.step, @intCast(layer));
-        for (experts) |e|
-        {
-            if (self.owner[e] != 0)
-            {
-                try wire.addPrefetch(self.pkt, @intCast(e));
-            }
-            else
-            {
-                self.experts.hint(layer, e);
-            }
-        }
-        try self.checkPeer();
-        try self.sendChecked(.dispatch);
-        self.hints += 1;
-    }
-
-    fn take(self: *SplitMoe, r: transport.Received, layer: usize, idx: []const u32, n: usize) !void {
-        const k = self.local.cfg.top_k;
-        const d = self.local.cfg.d_model;
-        const hdr = r.packet.header;
-        const slot = hdr.token_id;
-        if (r.kind != .combine or slot >= n * k or hdr.layer != layer or hdr.expert != idx[@intCast(slot)]) return error.BadCombine;
-        _ = try wire.decodeChunk(r.packet, self.contrib[@intCast(slot * d)..][0..d]);
-        try self.ep.release();
-    }
-
-    fn run(ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, w: []const f32, out: []f32) anyerror!void {
-        const self: *SplitMoe = @ptrCast(@alignCast(ctx));
-        const k = self.local.cfg.top_k;
-        const d = self.local.cfg.d_model;
-        if (n * k * d > self.contrib.len) return error.TooManyTokens;
-        try self.checkPeer();
-        self.experts.enter(layer);
-        const t0 = mf.nowNs();
-        const chunks = wire.chunkCount(self.enc, d);
-        // Packets, not expert calls: each call is `chunks` packets each way.
-        var sent: usize = 0;
-        var got: usize = 0;
-        // When the current wait on rank 1 began, or 0 when not waiting.
-        var waiting: u64 = 0;
-        // Dispatch every remote (token, choice); drain combines whenever the
-        // peer has no free slot, so neither side waits on the other forever.
-        for (0..n * k) |s| {
-            const e = idx[s];
-            if (e == olmoe.Capacity.skip or self.owner[e] == 0)
-            {
-                continue;
-            }
-            for (0..chunks) |ch| {
-                self.pkt.header = .{ .token_id = s, .generation = 0, .src_rank = 0, .layer = @intCast(layer), .expert = @intCast(e), .flags = 0, .gate_weight = w[s], .payload_len = 0 };
-                try wire.encodeChunk(self.pkt, self.enc, x[(s / k) * d ..][0..d], ch);
-                var blocked = false;
-                while (true) {
-                    self.ep.trySend(self.pkt, .dispatch) catch |err| switch (err) {
-                        error.WouldBlock => {
-                            if (!blocked)
-                            {
-                                blocked = true;
-                                self.credit_waits += 1;
-                            }
-                            var any = false;
-                            while (try self.ep.tryRecv()) |r| {
-                                try self.take(r, layer, idx, n);
-                                got += 1;
-                                any = true;
-                            }
-                            waiting = self.waited(waiting, any);
-                            try self.ep.flushCredits();
-                            try self.checkPeer();
-                            continue;
-                        },
-                        else => |e2| return e2,
-                    };
-                    break;
-                }
-                waiting = self.waited(waiting, true);
-                sent += 1;
-            }
-            self.remote += 1;
-        }
-        // Local experts run while the peer works on the remote ones.
-        self.local_calls += try self.experts.runCalls(layer, x, n, idx, self.contrib, self.owner);
-        while (got < sent) {
-            const r = (try self.ep.tryRecv()) orelse
-            {
-                waiting = self.waited(waiting, false);
-                try self.checkPeer();
-                std.atomic.spinLoopHint();
-                continue;
-            };
-            try self.take(r, layer, idx, n);
-            got += 1;
-            waiting = self.waited(waiting, true);
-        }
-        try self.ep.flushCredits();
-        if (sent > 0)
-        {
-            self.rtt_ns += mf.nowNs() - t0;
-            self.rtt_layers += 1;
-        }
-        // Fixed order (token, then choice), whatever order combines arrived in.
-        for (0..n) |t| {
-            for (0..k) |j| {
-                const s = t * k + j;
-                if (idx[s] == olmoe.Capacity.skip)
-                {
-                    continue;
-                }
-                for (out[t * d ..][0..d], self.contrib[s * d ..][0..d]) |*o, y| o.* += w[s] * y;
-            }
-        }
-    }
-
-    /// Tracks waits on rank 1: starts one when nothing moved, and on progress
-    /// records how long it lasted. Returns the new start (0 when not waiting).
-    fn waited(self: *SplitMoe, since: u64, progressed: bool) u64
-    {
-        if (!progressed)
-        {
-            return if (since == 0) mf.nowNs() else since;
-        }
-        if (since != 0)
-        {
-            const gap = mf.nowNs() - since;
-            self.stall_max_ns = @max(self.stall_max_ns, gap);
-            self.stall_recent_ns = @max(self.stall_recent_ns, gap);
-        }
-        return 0;
-    }
-};
-
-/// Rank 1's record of rank 0's prefetch hints (TASK-11): how long before each
-/// layer's first expert call its hint arrived. Rank 0 measures how often the
-/// hints were right.
-const HintLog = struct {
-    experts: usize,
-    /// Per layer: the pass of the latest hint, when its first hint arrived,
-    /// and the pass whose first call has been seen.
-    latest: []u64,
-    first_ns: []u64,
-    started: []u64,
-    hints: u64 = 0,
-    starts: u64 = 0,
-    lead_ns: u64 = 0,
-    lead_min_ns: u64 = std.math.maxInt(u64),
-
-    const none = std.math.maxInt(u64);
-
-    fn init(a: std.mem.Allocator, layers: usize, experts: usize) !HintLog
-    {
-        const self: HintLog = .{
-            .experts = experts,
-            .latest = try a.alloc(u64, layers),
-            .first_ns = try a.alloc(u64, layers),
-            .started = try a.alloc(u64, layers),
-        };
-        @memset(self.latest, none);
-        @memset(self.started, none);
-        return self;
-    }
-
-    fn hint(self: *HintLog, pkt: *const wire.Packet, now: u64) !void
-    {
-        const layer = pkt.header.layer;
-        const step = pkt.header.token_id;
-        if (layer >= self.latest.len)
-        {
-            return error.BadDispatch;
-        }
-        if (self.latest[layer] != step)
-        {
-            self.latest[layer] = step;
-            self.first_ns[layer] = now;
-        }
-        for (0..try wire.prefetchCount(pkt)) |i|
-        {
-            if (wire.prefetchExpert(pkt, i) >= self.experts)
-            {
-                return error.BadDispatch;
-            }
-        }
-        self.hints += 1;
-    }
-
-    /// Where rank 0's pass is when `layer` starts, as the cache counts it.
-    fn position(self: *HintLog, layer: usize) ?u64
-    {
-        const step = self.latest[layer];
-        if (step == none)
-        {
-            return null;
-        }
-        return step * self.latest.len + layer;
-    }
-
-    fn call(self: *HintLog, layer: usize, now: u64) void
-    {
-        const step = self.latest[layer];
-        if (step == none)
-        {
-            return;
-        }
-        if (self.started[layer] != step)
-        {
-            self.started[layer] = step;
-            self.starts += 1;
-            const lead = now - self.first_ns[layer];
-            self.lead_ns += lead;
-            self.lead_min_ns = @min(self.lead_min_ns, lead);
-        }
-    }
-};
-
-/// A call whose expert was still loading when it arrived (TASK-14).
-const Parked = struct {
-    hdr: wire.Header,
-    want: Want,
-};
-
-/// Time rank 1 spent inside expert FFNs (TASK-22), and the slowest one.
-var ffn_ns: u64 = 0;
-var ffn_max_ns: u64 = 0;
-var answered: u64 = 0;
-
-/// Runs one call and sends its result back in as many chunks as it came in.
-fn answer(ep: *transport.Endpoint, experts: *Experts, held: ExpertCache.Held, hdr: wire.Header, x: []const f32, y: []f32, out: *wire.Packet) !void
-{
-    const t0 = mf.nowNs();
-    held.expert.forward(x, y, experts.local.scratch);
-    const took = mf.nowNs() - t0;
-    ffn_ns += took;
-    ffn_max_ns = @max(ffn_max_ns, took);
-    experts.put(held);
-    answered += 1;
-    if (answered % 256 == 0)
-    {
-        checkMemory();
-    }
-    const enc = wire.encodingOf(hdr);
-    for (0..wire.chunkCount(enc, experts.local.cfg.d_model)) |ch|
-    {
-        out.header = .{ .token_id = hdr.token_id, .generation = 0, .src_rank = 1, .layer = hdr.layer, .expert = hdr.expert, .flags = 0, .gate_weight = hdr.gate_weight, .payload_len = 0 };
-        try wire.encodeChunk(out, enc, y, ch);
-        try ep.send(out, .combine);
-    }
-}
-
-/// Rank 1: answers dispatches with its experts until rank 0 says goodbye.
-/// A call whose expert is still loading waits while later calls run.
-fn serveExperts(ep: *transport.Endpoint, experts: *Experts, owned: []const bool) !void {
-    const local = experts.local;
-    const cfg = local.cfg;
-    const d = cfg.d_model;
-    const park_cap = Experts.default_max_tokens * cfg.top_k;
-    const parked = try olmoe.big_allocator.alloc(Parked, park_cap);
-    defer olmoe.big_allocator.free(parked);
-    const parked_x = try olmoe.big_allocator.alloc(f32, park_cap * d);
-    defer olmoe.big_allocator.free(parked_x);
-    var n_parked: usize = 0;
-    var set_aside: u64 = 0;
-    var hint_arena: std.heap.ArenaAllocator = .init(olmoe.big_allocator);
-    defer hint_arena.deinit();
-    var hints = try HintLog.init(hint_arena.allocator(), cfg.layers, cfg.experts);
-    const x = try olmoe.big_allocator.alloc(f32, 2 * d);
-    defer olmoe.big_allocator.free(x);
-    const y = x[d..];
-    const out = try olmoe.big_allocator.create(wire.Packet);
-    defer olmoe.big_allocator.destroy(out);
-    out.* = std.mem.zeroes(wire.Packet);
-    var served: u64 = 0;
-    std.debug.print("expert: serving, resident memory {d:.0} MB\n", .{mb(rssBytes())});
-    // A call's chunks arrive back to back (one sender, in-order transport).
-    var have: usize = 0;
-    var first: wire.Header = undefined;
-    while (true) {
-        var i: usize = 0;
-        while (i < n_parked)
-        {
-            const held = (try experts.poll(&parked[i].want)) orelse
-            {
-                i += 1;
-                continue;
-            };
-            try answer(ep, experts, held, parked[i].hdr, parked_x[i * d ..][0..d], y, out);
-            served += 1;
-            n_parked -= 1;
-            parked[i] = parked[n_parked];
-            @memcpy(parked_x[i * d ..][0..d], parked_x[n_parked * d ..][0..d]);
-        }
-        const r = (try ep.tryRecv()) orelse {
-            if (ep.peer_done and n_parked == 0) break;
-            std.atomic.spinLoopHint();
-            continue;
-        };
-        const hdr = r.packet.header;
-        if (r.kind == .dispatch and wire.isPrefetch(hdr) and have == 0)
-        {
-            try hints.hint(r.packet, mf.nowNs());
-            for (0..try wire.prefetchCount(r.packet)) |j|
-            {
-                experts.hintAt(hdr.token_id * cfg.layers + hdr.layer, hdr.layer, wire.prefetchExpert(r.packet, j));
-            }
-            try ep.release();
-            continue;
-        }
-        if (r.kind != .dispatch or hdr.layer >= cfg.layers or hdr.expert >= cfg.experts or !owned[hdr.expert]) return error.BadDispatch;
-        const enc = wire.encodingOf(hdr);
-        const chunks = wire.chunkCount(enc, d);
-        if (have == 0)
-        {
-            first = hdr;
-            hints.call(hdr.layer, mf.nowNs());
-            if (hints.position(hdr.layer)) |at|
-            {
-                experts.enterAt(at);
-            }
-        }
-        if (hdr.token_id != first.token_id or hdr.layer != first.layer or hdr.expert != first.expert or
-            try wire.decodeChunk(r.packet, x[0..d]) != have) return error.BadDispatch;
-        try ep.release();
-        have += 1;
-        if (have < chunks) continue;
-        have = 0;
-        var w = try experts.want(hdr.layer, hdr.expert);
-        if (try experts.poll(&w)) |held|
-        {
-            try answer(ep, experts, held, hdr, x[0..d], y, out);
-            served += 1;
-            continue;
-        }
-        if (n_parked == park_cap)
-        {
-            // Full: finish the oldest first.
-            const held = try experts.wait(&parked[0].want);
-            try answer(ep, experts, held, parked[0].hdr, parked_x[0..d], y, out);
-            served += 1;
-            n_parked -= 1;
-            parked[0] = parked[n_parked];
-            @memcpy(parked_x[0..d], parked_x[n_parked * d ..][0..d]);
-        }
-        parked[n_parked] = .{ .hdr = hdr, .want = w };
-        @memcpy(parked_x[n_parked * d ..][0..d], x[0..d]);
-        n_parked += 1;
-        set_aside += 1;
-    }
-    try ep.finish();
-    if (experts.cache) |cache|
-    {
-        cache.stats.deferred += set_aside;
-    }
-    std.debug.print("expert: ran {d} expert FFNs for rank 0, {d:.0} us each on average (max {d:.0} us), {d:.2} s in all; resident memory {d:.0} MB\n", .{
-        served,
-        @as(f64, @floatFromInt(ffn_ns)) / @as(f64, @floatFromInt(@max(served, 1))) / 1e3,
-        @as(f64, @floatFromInt(ffn_max_ns)) / 1e3,
-        @as(f64, @floatFromInt(ffn_ns)) / 1e9,
-        mb(rssBytes()),
-    });
-    if (hints.hints > 0)
-    {
-        std.debug.print("expert: lookahead: {d} prefetch hints; {d} layer starts here, each after its hint, by {d:.0} us on average (min {d:.0} us)\n", .{
-            hints.hints,
-            hints.starts,
-            @as(f64, @floatFromInt(hints.lead_ns)) / @as(f64, @floatFromInt(@max(hints.starts, 1))) / 1e3,
-            @as(f64, @floatFromInt(if (hints.starts > 0) hints.lead_min_ns else 0)) / 1e3,
-        });
-    }
-}
-
-
-/// Loads this rank's weights and runs its side over `ep`.
-fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank: u8, name: []const u8) !void {
+/// Loads this rank's weights and runs its side: rank 0 over one endpoint per peer
+/// (`names` are the peers' machines), an expert rank over its link to rank 0.
+fn runRank(gpa: std.mem.Allocator, opts: Options, eps: []const *transport.Endpoint, rank: u8, name: []const u8, names: []const []const u8) !void {
     var owner: [max_experts]u8 = undefined;
     var owned: [max_experts]bool = undefined;
-    _ = try ownedMask(gpa, opts, rank, &owner, &owned);
+    const layout = try ownedMask(gpa, opts, rank, &owner, &owned);
+    if (rank == 0 and layout.ranks != eps.len + 1)
+    {
+        std.debug.print("{s}: the placement has {d} ranks, but rank 0 has {d} peers\n", .{ name, layout.ranks, eps.len });
+        return error.PlacementMismatch;
+    }
     // After any fork (CUDA state does not survive one), before the weights.
     if (opts.gpu) try gpu.open();
     defer if (opts.gpu) gpu.stop();
     var l = try Loaded.init(gpa, opts.model, &owned, rank == 0, opts.cache == 0);
     defer l.deinit(gpa);
-    // With an expert cache, rank 1 loads nothing at startup.
+    // With an expert cache, an expert rank loads nothing at startup.
     if (opts.gpu and l.weightRegion().len > 0)
     {
         try gpu.map(l.weightRegion());
@@ -1402,7 +881,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     var experts: Experts = .{ .local = &l.local, .max_tokens = opts.max_step };
     try experts.alloc(gpa);
     defer experts.free(gpa);
-    const label = if (rank == 1) "expert" else name;
+    const label = if (rank != 0) "expert" else name;
     heap_label = label;
     defer if (opts.minutes > 0) reportWeights(label, weights_hash, l.weightRegion());
     const box = if (opts.cache > 0) try CacheBox.open(gpa, opts, &l, &owned, label) else null;
@@ -1411,7 +890,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     {
         experts.cache = b.cache;
     }
-    if (rank == 1)
+    if (rank != 0)
     {
         try armBudget(opts, label);
         var owned_count: usize = 0;
@@ -1421,12 +900,13 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         }
         // Rank 0 waits for this grant when it limits calls (TASK-17); 0 means no limit.
         const grant: u16 = if (opts.capacity > 0) @intCast(@min(olmoe.Capacity.limitFor(opts.capacity, opts.chunk, l.cfg, owned_count), std.math.maxInt(u16))) else 0;
-        try ep.grantCapacity(grant);
+        try eps[0].grantCapacity(grant);
         if (grant > 0)
         {
-            std.debug.print("expert: granting rank 0 {d} expert calls per layer\n", .{grant});
+            std.debug.print("expert: rank {d} granting rank 0 {d} expert calls per layer\n", .{ rank, grant });
         }
-        const served = serveExperts(ep, &experts, &owned);
+        var server: split.Server = .{ .ep = eps[0], .experts = &experts, .owned = owned[0..l.cfg.experts], .check_memory = &checkMemory };
+        const served = server.serve();
         if (box) |b|
         {
             reportCache(label, b.cache);
@@ -1439,8 +919,14 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     const pkt = try gpa.create(wire.Packet);
     defer gpa.destroy(pkt);
     pkt.* = std.mem.zeroes(wire.Packet);
-    var split: SplitMoe = .{
-        .ep = ep,
+    const peers = try gpa.alloc(split.Peer, eps.len);
+    defer gpa.free(peers);
+    for (peers, eps) |*p, ep|
+    {
+        p.* = .{ .ep = ep };
+    }
+    var sm: SplitMoe = .{
+        .peers = peers,
         .local = &l.local,
         .experts = &experts,
         .owner = owner[0..cfg.experts],
@@ -1449,9 +935,9 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
         .pkt = pkt,
         .health = if (opts.swarm) |sw| sw.client else null,
     };
-    defer gpa.free(split.contrib);
+    defer gpa.free(sm.contrib);
     var la: olmoe.Lookahead = .{ .horizon = opts.lookahead, .extra = opts.extra, .mispredict = opts.mispredict };
-    var moe = split.moe();
+    var moe = sm.moe();
     if (opts.lookahead > 0)
     {
         moe.ahead = &la;
@@ -1460,33 +946,39 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     var cap = olmoe.Capacity.init(cfg, opts.chunk, opts.capacity, opts.expert_capacity, owner[0..cfg.experts]);
     if (opts.capacity > 0)
     {
-        // Rank 1's limit is whatever it grants.
-        const grant = try ep.awaitCapacity();
-        cap.rank_limit[1] = if (grant == 0) olmoe.Capacity.none else grant;
-        std.debug.print("{s}: capacity: {d} expert calls per layer here; rank 1 grants {d}{s}\n", .{ name, cap.rank_limit[0], grant, if (grant == 0) " (no limit)" else "" });
+        // Each peer's limit is whatever it grants.
+        for (eps, 1..) |ep, r|
+        {
+            const grant = try ep.awaitCapacity();
+            cap.rank_limit[r] = if (grant == 0) olmoe.Capacity.none else grant;
+            std.debug.print("{s}: capacity: rank {d} grants {d}{s}\n", .{ name, r, grant, if (grant == 0) " (no limit)" else "" });
+        }
+        std.debug.print("{s}: capacity: {d} expert calls per layer here\n", .{ name, cap.rank_limit[0] });
     }
     if (opts.capacity > 0 or opts.expert_capacity > 0)
     {
         moe.capacity = &cap;
     }
-    split_probe = &split;
+    split_probe = &sm;
     defer split_probe = null;
     try armBudget(opts, name);
     var host_buf: [64]u8 = undefined;
-    const host = hostName(&host_buf);
-    // Rank 1's machine: its tracker entry, this one when forked, else the address dialed.
-    const forked = std.mem.eql(u8, opts.mode, "shm") or std.mem.eql(u8, opts.mode, "rdma");
-    const peer = if (opts.swarm) |sw| sw.peer.info.nodeName() else if (forked) host else opts.host;
+    var rank_names: [split.max_ranks][]const u8 = undefined;
+    rank_names[0] = hostName(&host_buf);
+    for (names, 1..) |n, r|
+    {
+        rank_names[r] = n;
+    }
     const live: Live = .{
         .owner = owner[0..cfg.experts],
-        .ranks = &.{ host, peer },
+        .ranks = rank_names[0 .. eps.len + 1],
         .chunks = wire.chunkCount(opts.payload, cfg.d_model),
-        .probe = .{ .ctx = &split, .sample = SplitMoe.sample },
+        .probe = .{ .ctx = &sm, .sample = SplitMoe.sample },
     };
     const tel = try openTelemetry(gpa, cfg, moe, opts, name, live);
     const run_moe = if (tel) |t| t.tap.moe() else moe;
     const result = if (opts.serve != null)
-        runServe(gpa, &l, run_moe, opts, name, tel.?.bc)
+        runServe(gpa, &l, run_moe, opts, name, tel.?.bc, opts.max_step)
     else if (opts.context > 0)
         runLong(gpa, &l.weights.?, run_moe, opts, name)
     else
@@ -1499,21 +991,31 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, ep: *transport.Endpoint, rank:
     {
         if (err == error.PeerUnhealthy)
         {
-            reportRefusal(name, opts.swarm.?, split.remote);
+            reportRefusal(name, opts.swarm.?, &sm);
             return err;
         }
     }
-    try ep.finish();
-    std.debug.print("{s}: {d} expert calls sent to rank 1, {d} run locally; payload {t}\n", .{ name, split.remote, split.local_calls, opts.payload });
+    for (eps) |ep|
+    {
+        try ep.finish();
+    }
+    std.debug.print("{s}: {d} expert calls sent to {d} peer{s}, {d} run locally; payload {t}\n", .{ name, sm.remote(), peers.len, if (peers.len == 1) "" else "s", sm.local_calls, opts.payload });
+    if (peers.len > 1)
+    {
+        for (peers, 1..) |p, r|
+        {
+            std.debug.print("{s}: rank {d} ({s}): {d} expert calls\n", .{ name, r, rank_names[r], p.calls });
+        }
+    }
     if (opts.lookahead > 0)
     {
-        std.debug.print("{s}: lookahead: {d} prefetch hints sent to rank 1\n", .{ name, split.hints });
+        std.debug.print("{s}: lookahead: {d} prefetch hints sent to the peers\n", .{ name, sm.hints() });
     }
     if (box) |b|
     {
         reportCache(name, b.cache);
     }
-    reportGuards(opts, name, moe.capacity, &split);
+    reportGuards(opts, name, moe.capacity, &sm);
     return result;
 }
 
@@ -1567,8 +1069,8 @@ fn reportHeap() void
     }
 }
 
-/// Capacity drops and, for a split, rank 0's longest wait on rank 1.
-fn reportGuards(opts: Options, name: []const u8, cap: ?*olmoe.Capacity, split: ?*SplitMoe) void
+/// Capacity drops and, for a split, rank 0's longest wait on its peers.
+fn reportGuards(opts: Options, name: []const u8, cap: ?*olmoe.Capacity, sm: ?*SplitMoe) void
 {
     if (opts.capacity == 0 and opts.expert_capacity == 0 and opts.memory_budget == 0 and opts.spike == 0)
     {
@@ -1576,22 +1078,29 @@ fn reportGuards(opts: Options, name: []const u8, cap: ?*olmoe.Capacity, split: ?
     }
     if (cap) |cp|
     {
-        var bufs: [3][32]u8 = undefined;
-        std.debug.print("{s}: capacity over {d}-token steps: calls per layer at most {s} here and {s} on rank 1, per expert {s}; dropped {d} of {d} calls ({d:.3}%) in {d} layer passes\n", .{
+        var bufs: [2][32]u8 = undefined;
+        std.debug.print("{s}: capacity over {d}-token steps: calls per layer at most {s} here, per expert {s}; dropped {d} of {d} calls ({d:.3}%) in {d} layer passes\n", .{
             name,
             opts.chunk,
             limitText(&bufs[0], cp.rank_limit[0]),
-            if (split == null) "none" else limitText(&bufs[1], cp.rank_limit[1]),
-            limitText(&bufs[2], cp.expert_limit),
+            limitText(&bufs[1], cp.expert_limit),
             cp.dropped,
             cp.routed,
             pct(cp.dropped, cp.routed),
             cp.layers_over,
         });
+        if (sm) |s|
+        {
+            for (1..s.peers.len + 1) |r|
+            {
+                var buf: [32]u8 = undefined;
+                std.debug.print("{s}: capacity: at most {s} calls per layer on rank {d}\n", .{ name, limitText(&buf, cp.rank_limit[r]), r });
+            }
+        }
     }
-    if (split) |s|
+    if (sm) |s|
     {
-        std.debug.print("{s}: longest wait on rank 1 with nothing moving {d:.2} ms; {d} sends waited for rank 1 to grant ring slots\n", .{
+        std.debug.print("{s}: longest wait on the peers with nothing moving {d:.2} ms; {d} sends waited for a peer to grant ring slots\n", .{
             name, @as(f64, @floatFromInt(s.stall_max_ns)) / 1e6, s.credit_waits,
         });
     }
@@ -1611,123 +1120,304 @@ fn pct(a: u64, b: u64) f64
     return 100 * @as(f64, @floatFromInt(a)) / @max(@as(f64, @floatFromInt(b)), 1);
 }
 
-/// Says why rank 0 stopped routing: what the tracker reports for rank 1.
-fn reportRefusal(name: []const u8, sw: *const Swarm, sent: u64) void
+/// Says why rank 0 stopped routing: what the tracker reports for each peer.
+fn reportRefusal(name: []const u8, sw: *const Swarm, sm: *const SplitMoe) void
 {
     var v: tracker.View = .{};
     sw.client.snapshot(&v);
-    const why = if (sw.client.lost.load(.acquire)) "the tracker connection was lost" else if (v.find(sw.peer.id)) |e| @tagName(e.health) else "missing from the map";
     var t: [16]u8 = undefined;
-    std.debug.print("{s} {s}: refusing to route to rank 1 (tracker id {d}, pid {d} on {s}): {s} in map v{d}, received {d:.0} ms ago; {d} expert calls had been sent to it\n", .{
-        tracker.stamp(&t), name, sw.peer.id, sw.peer.info.pid, sw.peer.info.nodeName(), why, v.version, @as(f64, @floatFromInt(tracker.monoNs() - v.at_ns)) / 1e6, sent,
-    });
+    for (sw.peers, sm.peers, 1..) |peer, p, r|
+    {
+        const e = v.find(peer.id);
+        if (!sw.client.lost.load(.acquire) and e != null and e.?.health == .healthy)
+        {
+            continue;
+        }
+        const why = if (sw.client.lost.load(.acquire)) "the tracker connection was lost" else if (e) |x| @tagName(x.health) else "missing from the map";
+        std.debug.print("{s} {s}: refusing to route to rank {d} (tracker id {d}, pid {d} on {s}): {s} in map v{d}, received {d:.0} ms ago; {d} expert calls had been sent to it\n", .{
+            tracker.stamp(&t), name, r, peer.id, peer.info.pid, peer.info.nodeName(), why, v.version, @as(f64, @floatFromInt(tracker.monoNs() - v.at_ns)) / 1e6, p.calls,
+        });
+    }
 }
 
-/// Both ranks on this machine: rank 1 is a fork. Each loads only its own
+/// One process-to-process link (TASK-33): shared memory, TCP, or RDMA bootstrapped
+/// over TCP, with its receive ring and endpoint. It must not move once set up.
+const Link = struct {
+    kind: Kind = .shm,
+    ring_arena: ?Arena = null,
+    tcp: transport.tcp.Link = undefined,
+    rdma: RdmaLink = undefined,
+    ep: transport.Endpoint = undefined,
+
+    const Kind = enum { shm, tcp, rdma };
+    const RdmaLink = if (build_options.rdma) transport.rdma.Link else void;
+
+    fn initShm(self: *Link, side: *transport.shm.Side, rank: u6, slots: u16) void
+    {
+        self.* = .{ .kind = .shm };
+        self.ep = transport.Endpoint.init(side.backend(), rank, slots);
+    }
+
+    fn initSocket(self: *Link, opts: Options, fd: transport.tcp.Socket, rdma: bool, rank: u6, slots: u16) !void
+    {
+        self.* = .{ .kind = if (rdma) .rdma else .tcp };
+        self.ring_arena = try Arena.init(@as(usize, slots) * @sizeOf(wire.Packet));
+        errdefer
+        {
+            self.ring_arena.?.deinit();
+            self.ring_arena = null;
+        }
+        const ring = try self.ring_arena.?.alloc(wire.Packet, slots);
+        if (rdma)
+        {
+            if (!build_options.rdma)
+            {
+                unreachable;
+            }
+            self.rdma = try transport.rdma.Link.connect(fd, rank, ring, .{ .device = opts.device, .gid_index = opts.gid });
+            self.ep = transport.Endpoint.init(self.rdma.backend(), rank, slots);
+            return;
+        }
+        self.tcp = transport.tcp.Link.init(fd, ring);
+        self.ep = transport.Endpoint.init(self.tcp.backend(), rank, slots);
+    }
+
+    /// Tears the link down after the goodbye (`ep.finish`), or at once when its
+    /// peer turned unhealthy and may never close its side.
+    fn close(self: *Link, unhealthy: bool) void
+    {
+        switch (self.kind)
+        {
+            .shm => {},
+            .tcp =>
+            {
+                if (unhealthy)
+                {
+                    transport.tcp.closeSocket(self.tcp.fd);
+                }
+                else if (self.ep.rank == 0)
+                {
+                    self.tcp.close();
+                }
+                else
+                {
+                    self.tcp.closeAfterPeer();
+                }
+            },
+            .rdma =>
+            {
+                if (!build_options.rdma)
+                {
+                    unreachable;
+                }
+                if (unhealthy)
+                {
+                    self.rdma.abort();
+                }
+                else
+                {
+                    self.rdma.close();
+                }
+            },
+        }
+        if (self.ring_arena) |*a|
+        {
+            a.deinit();
+        }
+        self.ring_arena = null;
+    }
+};
+
+/// Runs `rank` over `links` (one per peer for rank 0, the link to rank 0 for an
+/// expert), then closes them.
+fn runLinks(gpa: std.mem.Allocator, opts: Options, links: []Link, rank: u8, name: []const u8, names: []const []const u8) !void
+{
+    var eps: [split.max_ranks]*transport.Endpoint = undefined;
+    for (links, 0..) |*l, i|
+    {
+        eps[i] = &l.ep;
+    }
+    const result = runRank(gpa, opts, eps[0..links.len], rank, name, names);
+    const unhealthy = if (result) |_| false else |err| err == error.PeerUnhealthy;
+    for (links) |*l|
+    {
+        l.close(unhealthy);
+    }
+    return result;
+}
+
+/// An expert rank forked by `runForked`: runs, then exits without returning.
+fn runChild(gpa: std.mem.Allocator, opts: Options, link: *Link, rank: u8, name: []const u8) noreturn
+{
+    runLinks(gpa, opts, link[0..1], rank, name, &.{}) catch |err|
+    {
+        std.debug.print("expert: rank {d}: {t}\n", .{ rank, err });
+        c._exit(1);
+    };
+    reportHeap();
+    c._exit(0);
+}
+
+/// Every rank on this machine (`--ranks N`, two by default): ranks 1 to N-1 are
+/// forks, linked to rank 0 by shared memory or RDMA. Each loads only its own
 /// weights after the fork.
 fn runForked(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool) !void {
     const name: []const u8 = if (is_rdma) "rdma" else "shm";
-    if (is_rdma) {
-        if (!build_options.rdma) unreachable;
-        const l = try transport.tcp.listen(0);
-        const pid = c.fork();
-        if (pid < 0) return error.ForkFailed;
-        if (pid == 0) {
-            transport.tcp.closeSocket(l.fd);
-            const fd = transport.tcp.connect("127.0.0.1", l.port, 50) catch c._exit(1);
-            runRdmaRank(gpa, opts, slots, fd, 1, name) catch |err| {
-                std.debug.print("expert: {t}\n", .{err});
-                c._exit(1);
-            };
-            reportHeap();
-            c._exit(0);
+    const peers = (try ranksOf(gpa, opts)) - 1;
+    // On the stack, so the forks inherit no heap allocations they would report as leaks.
+    var link_space: [split.max_ranks - 1]Link = undefined;
+    const links = link_space[0..peers];
+    var pids: [split.max_ranks]c.pid_t = undefined;
+    var forked: usize = 0;
+    var host_buf: [64]u8 = undefined;
+    const host = hostName(&host_buf);
+    var names: [split.max_ranks][]const u8 = undefined;
+    @memset(names[0..peers], host);
+    if (is_rdma)
+    {
+        if (!build_options.rdma)
+        {
+            unreachable;
         }
-        const fd = try transport.tcp.acceptOn(l.fd);
-        transport.tcp.closeSocket(l.fd);
-        const result = runRdmaRank(gpa, opts, slots, fd, 0, name);
-        return waitChild(pid, result);
-    }
-    var pair = try transport.shm.Pair.create(slots);
-    defer pair.deinit();
-    const pid = c.fork();
-    if (pid < 0) return error.ForkFailed;
-    if (pid == 0) {
-        var ep = transport.Endpoint.init(pair.side(1).backend(), 1, slots);
-        runRank(gpa, opts, &ep, 1, name) catch |err| {
-            std.debug.print("expert: {t}\n", .{err});
-            c._exit(1);
+        var listeners: [split.max_ranks]transport.tcp.Listener = undefined;
+        for (listeners[0..peers]) |*l|
+        {
+            l.* = try transport.tcp.listen(0);
+        }
+        for (0..peers) |i|
+        {
+            const pid = c.fork();
+            if (pid < 0)
+            {
+                return waitChildren(pids[0..forked], error.ForkFailed);
+            }
+            if (pid == 0)
+            {
+                for (listeners[0..peers]) |l|
+                {
+                    transport.tcp.closeSocket(l.fd);
+                }
+                const fd = transport.tcp.connect("127.0.0.1", listeners[i].port, 50) catch c._exit(1);
+                var link: Link = undefined;
+                link.initSocket(opts, fd, true, @intCast(i + 1), slots) catch c._exit(1);
+                runChild(gpa, opts, &link, @intCast(i + 1), name);
+            }
+            pids[i] = pid;
+            forked += 1;
+        }
+        const linked = for (0..peers) |i|
+        {
+            const fd = transport.tcp.acceptOn(listeners[i].fd) catch |err| break err;
+            transport.tcp.closeSocket(listeners[i].fd);
+            links[i].initSocket(opts, fd, true, 0, slots) catch |err| break err;
+        } else {};
+        linked catch |err|
+        {
+            return waitChildren(pids[0..forked], err);
         };
-        reportHeap();
-        c._exit(0);
+        return waitChildren(pids[0..forked], runLinks(gpa, opts, links, 0, name, names[0..peers]));
     }
-    var ep = transport.Endpoint.init(pair.side(0).backend(), 0, slots);
-    return waitChild(pid, runRank(gpa, opts, &ep, 0, name));
+    var pair_space: [split.max_ranks - 1]transport.shm.Pair = undefined;
+    const pairs = pair_space[0..peers];
+    var made: usize = 0;
+    defer for (pairs[0..made]) |*p|
+    {
+        p.deinit();
+    };
+    for (pairs) |*p|
+    {
+        p.* = try transport.shm.Pair.create(slots);
+        made += 1;
+    }
+    for (0..peers) |i|
+    {
+        const pid = c.fork();
+        if (pid < 0)
+        {
+            return waitChildren(pids[0..forked], error.ForkFailed);
+        }
+        if (pid == 0)
+        {
+            var link: Link = undefined;
+            link.initShm(pairs[i].side(1), @intCast(i + 1), slots);
+            runChild(gpa, opts, &link, @intCast(i + 1), name);
+        }
+        pids[i] = pid;
+        forked += 1;
+    }
+    for (links, pairs) |*l, *p|
+    {
+        l.initShm(p.side(0), 0, slots);
+    }
+    return waitChildren(pids[0..forked], runLinks(gpa, opts, links, 0, name, names[0..peers]));
 }
 
-fn waitChild(pid: c.pid_t, result: anyerror!void) !void {
-    if (result) |_| {} else |_| _ = c.kill(pid, c.SIG.TERM);
-    var status: c_int = 0;
-    _ = c.waitpid(pid, &status, 0);
+/// Waits for every forked rank, stopping them first if rank 0 failed.
+fn waitChildren(pids: []const c.pid_t, result: anyerror!void) !void {
+    if (result) |_| {} else |_|
+    {
+        for (pids) |pid|
+        {
+            _ = c.kill(pid, c.SIG.TERM);
+        }
+    }
+    var failed = false;
+    for (pids) |pid|
+    {
+        var status: c_int = 0;
+        _ = c.waitpid(pid, &status, 0);
+        failed = failed or status != 0;
+    }
     try result;
-    if (status != 0) return error.ExpertFailed;
+    if (failed)
+    {
+        return error.ExpertFailed;
+    }
 }
 
-/// One rank over an already-connected socket: TCP, or RDMA bootstrapped on it.
-fn runLinked(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool, fd: transport.tcp.Socket, rank: u8) !void {
-    if (is_rdma) {
-        if (!build_options.rdma) unreachable;
-        return runRdmaRank(gpa, opts, slots, fd, rank, "rdma");
-    }
-    var ring_arena = try Arena.init(@as(usize, slots) * @sizeOf(wire.Packet));
-    defer ring_arena.deinit();
-    const ring = try ring_arena.alloc(wire.Packet, slots);
-    var link = transport.tcp.Link.init(fd, ring);
-    var ep = transport.Endpoint.init(link.backend(), @intCast(rank), slots);
-    const result = runRank(gpa, opts, &ep, rank, "tcp");
-    if (result) |_| {} else |err|
+/// Rank 0 dialing each peer: TCP, or RDMA bootstrapped on the socket. Each link
+/// has its transport's ring size unless `--slots` sets one, as its expert does.
+fn runRouter(gpa: std.mem.Allocator, opts: Options, addrs: []const PeerAddr, names: []const []const u8) !void
+{
+    const links = try gpa.alloc(Link, addrs.len);
+    defer gpa.free(links);
+    var rdma_links: usize = 0;
+    for (addrs, links, 0..) |a, *l, i|
     {
-        // An unhealthy peer may never close its side, so do not wait for it.
-        if (err == error.PeerUnhealthy)
+        const fd = transport.tcp.connect(a.host, a.port, 300) catch |err|
         {
-            transport.tcp.closeSocket(link.fd);
+            for (links[0..i]) |*o|
+            {
+                o.close(true);
+            }
             return err;
-        }
-    }
-    if (rank == 0)
-    {
-        link.close();
-    }
-    else
-    {
-        link.closeAfterPeer();
-    }
-    return result;
-}
-
-fn runRdmaRank(gpa: std.mem.Allocator, opts: Options, slots: u16, fd: transport.tcp.Socket, rank: u8, name: []const u8) !void {
-    var ring_arena = try Arena.init(@as(usize, slots) * @sizeOf(wire.Packet));
-    defer ring_arena.deinit();
-    const ring = try ring_arena.alloc(wire.Packet, slots);
-    var link = try transport.rdma.Link.connect(fd, @intCast(rank), ring, .{ .device = opts.device, .gid_index = opts.gid });
-    var ep = transport.Endpoint.init(link.backend(), @intCast(rank), slots);
-    const result = runRank(gpa, opts, &ep, rank, name);
-    if (result) |_| {} else |err|
-    {
-        if (err == error.PeerUnhealthy)
+        };
+        var own = opts;
+        if (a.device) |d|
         {
-            link.abort();
-            return err;
+            own.device = d;
         }
+        l.initSocket(own, fd, a.rdma, 0, opts.slots orelse if (a.rdma) @as(u16, 256) else 64) catch |err|
+        {
+            transport.tcp.closeSocket(fd);
+            for (links[0..i]) |*o|
+            {
+                o.close(true);
+            }
+            return err;
+        };
+        rdma_links += @intFromBool(a.rdma);
     }
-    link.close();
-    return result;
+    const name: []const u8 = if (rdma_links == addrs.len) "rdma" else if (rdma_links == 0) "tcp" else "tcp+rdma";
+    return runLinks(gpa, opts, links, 0, name, names);
 }
 
 /// `--serve [IP:]PORT` (TASK-30): answers OpenAI chat completions with this
 /// rank's weights and `moe` (local experts or a split over any transport,
 /// wrapped by the telemetry tap), keeping one `--ctx` position KV cache whose
-/// shared prefix later requests reuse unless `--no-reuse`.
-fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, name: []const u8, bc: *telemetry.Broadcaster) !void
+/// shared prefix later requests reuse unless `--no-reuse`. Prompts go in steps of
+/// `--chunk` tokens, or of `step_limit` when `moe` takes no more at once (a split).
+fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, name: []const u8, bc: *telemetry.Broadcaster, step_limit: ?usize) !void
 {
     const spec = opts.serve.?;
     const colon = std.mem.lastIndexOfScalar(u8, spec, ':');
@@ -1749,7 +1439,7 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
         .addr = addr,
         .port = port,
         .model_id = model_id,
-        .chunk = opts.chunk,
+        .chunk = @min(opts.chunk, step_limit orelse opts.chunk),
         .reuse = opts.reuse,
         .clock = mf.nowNs,
         .name = name,
@@ -1845,12 +1535,6 @@ fn hostName(buf: *[64]u8) []const u8
     return std.mem.sliceTo(buf, 0);
 }
 
-fn cacheCounts(cache: *const ExpertCache) telemetry.CacheCounts
-{
-    const st = cache.stats;
-    return .{ .resident = st.resident, .hinted = st.hinted, .late = st.late, .missed = st.missed, .loads = st.loads };
-}
-
 /// A single process's experts, all loaded, as the live diagram's engine counter.
 fn sampleLocal(ctx: *anyopaque, out: *telemetry.Counters) void
 {
@@ -1863,7 +1547,7 @@ fn sampleCache(ctx: *anyopaque, out: *telemetry.Counters) void
 {
     const cache: *ExpertCache = @ptrCast(@alignCast(ctx));
     out.calls[0] = cache.stats.calls();
-    out.cache = cacheCounts(cache);
+    out.cache = split.cacheCounts(cache);
 }
 
 /// One phase of the spike test (TASK-17): before, during, or after the spike.
@@ -1927,7 +1611,7 @@ const SpikePhase = struct {
     {
         const names = [_][]const u8{ "before the spike", "during the spike", "after the spike" };
         const secs = @as(f64, @floatFromInt(self.ns)) / 1e9;
-        std.debug.print("{s}: {s}: {d} steps of up to {d} tokens, {d} tokens in {d:.2} s ({d:.0} tokens/s), longest step {d:.1} ms; capacity dropped {d} of {d} calls ({d:.3}%); longest wait on rank 1 {d:.2} ms (in step {d}), {d} sends waited for ring slots; memory at most {d:.0} MB\n", .{
+        std.debug.print("{s}: {s}: {d} steps of up to {d} tokens, {d} tokens in {d:.2} s ({d:.0} tokens/s), longest step {d:.1} ms; capacity dropped {d} of {d} calls ({d:.3}%); longest wait on the peers {d:.2} ms (in step {d}), {d} sends waited for ring slots; memory at most {d:.0} MB\n", .{
             name,
             names[i],
             self.steps,

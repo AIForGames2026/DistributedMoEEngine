@@ -131,7 +131,7 @@ body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px
       <button id="play" class="ghost" type="button">Pause</button>
       <select id="speed" aria-label="replay speed">
         <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
-        <option value="2">2×</option><option value="4">4×</option><option value="10">10×</option>
+        <option value="2">2×</option><option value="4">4×</option><option value="10">10×</option><option value="16">16×</option>
       </select>
       <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="replay position">
       <span id="clock">0.0 / 0.0 s</span>
@@ -202,7 +202,7 @@ function setConn(on) {
 function validHello(h) {
   const n = (v) => Number.isInteger(v) && v > 0 && v <= 4096;
   return h.schema === "tensorfold.live" && h.version === 0 && n(h.layers) && n(h.experts) && n(h.top_k) &&
-    Array.isArray(h.ranks) && h.ranks.length >= 1 && h.ranks.length <= 8 &&
+    Array.isArray(h.ranks) && h.ranks.length >= 1 && h.ranks.length <= 64 &&
     Array.isArray(h.owner) && h.owner.length === h.experts && h.owner.every((o) => Number.isInteger(o) && o >= 0 && o < h.ranks.length);
 }
 
@@ -225,7 +225,7 @@ function stepInRange(f, h) {
     const l = f.x[i], e = f.x[i + 1], c = f.x[i + 2];
     if (!(Number.isInteger(l) && l >= 0 && l < h.layers && Number.isInteger(e) && e >= 0 && e < h.experts && c > 0)) return false;
   }
-  return f.engine.length === 2;
+  return f.engine.length === Math.max(2, h.ranks.length);
 }
 
 // `rateNow` is the clock for rates: real time when live, the recording's time when replaying.
@@ -269,11 +269,12 @@ function onStep(f, rateNow = performance.now()) {
   } else {
     live.prefill = { n: f.n, ms: f.step_us / 1000 };
   }
-  if (ranks > 1 && byRank[1] > 0) {
-    const now = performance.now();
-    live.linkCalls.push({ t: rateNow, calls: byRank[1] });
-    const dots = Math.min(byRank[1], f.n > 1 ? 24 : 8);
-    for (let i = 0; i < dots; i++) live.packets.push({ t0: now + i * 12, lane: Math.random() });
+  const now = performance.now();
+  for (let r = 1; r < ranks; r++) {
+    if (byRank[r] === 0) continue;
+    live.linkCalls.push({ t: rateNow, r, calls: byRank[r] });
+    const dots = Math.min(byRank[r], f.n > 1 ? 24 : 8);
+    for (let i = 0; i < dots; i++) live.packets.push({ t0: now + i * 12, lane: Math.random(), r });
   }
 }
 
@@ -306,16 +307,8 @@ function draw(now) {
   const decay = Math.exp(-dt * speed / 0.35);
   for (const h of live.heat) for (let i = 0; i < h.length; i++) h[i] *= decay;
 
-  const pad = 20, gap = ranks > 1 ? Math.max(90, W * 0.12) : 0;
   const stacked = ranks > 1 && W < 640;
-  const boxes = [];
-  for (let r = 0; r < ranks; r++) {
-    const w = stacked ? W - 2 * pad : (W - 2 * pad - gap * (ranks - 1)) / ranks;
-    const h = stacked ? (H - 2 * pad - gap * (ranks - 1)) / ranks : H - 2 * pad;
-    const x = stacked ? pad : pad + r * (w + gap);
-    const y = stacked ? pad + r * (h + gap) : pad;
-    boxes.push({ x, y, w, h });
-  }
+  const boxes = layout(W, H, ranks, stacked);
   const cellBg = color("--cell");
   for (let r = 0; r < ranks; r++) {
     const b = boxes[r];
@@ -323,10 +316,12 @@ function draw(now) {
     const cols = live.cols[r].length || 1;
     ctx.fillStyle = color("--ink");
     ctx.font = "600 13px system-ui, sans-serif";
-    ctx.fillText(`rank ${r} · ${topo.ranks[r]}`, b.x, b.y + 4);
+    const fit = (long, short) => (ctx.measureText(long).width <= b.w ? long : short);
+    ctx.fillText(fit(`rank ${r} · ${topo.ranks[r]}`, `rank ${r}`), b.x, b.y + 4);
     ctx.fillStyle = color("--muted");
     ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(`${live.cols[r].length} experts per layer · ${live.drawn[r].toLocaleString()} calls`, b.x, b.y + 20);
+    const calls = `${live.drawn[r].toLocaleString()} calls`;
+    ctx.fillText(fit(`${live.cols[r].length} experts per layer · ${calls}`, calls), b.x, b.y + 20);
     const top = b.y + 32, avail = b.h - 40;
     const cell = Math.max(1, Math.min(b.w / cols, avail / topo.layers));
     const gw = cell * cols, gh = cell * topo.layers;
@@ -359,50 +354,96 @@ function draw(now) {
       ctx.restore();
     }
   }
-  if (ranks > 1) drawLink(boxes[0], boxes[1], stacked, now, rp ? rp.clock : now);
+  if (ranks > 1) drawLinks(boxes, stacked, now, rp ? rp.clock : now);
   requestAnimationFrame(draw);
 }
 
-function drawLink(a, b, stacked, now, rateNow) {
+// Rank 0 on the left (on top when narrow), its peers in a grid beside it.
+function layout(W, H, ranks, stacked) {
+  const pad = 20;
+  if (ranks === 1) return [{ x: pad, y: pad, w: W - 2 * pad, h: H - 2 * pad }];
+  const peers = ranks - 1;
+  const gap = Math.max(stacked ? 60 : 90, (stacked ? H : W) * 0.1);
+  const share = peers === 1 ? 0.5 : 0.42;
+  const along = (stacked ? H : W) - 2 * pad - gap;
+  const across = (stacked ? W : H) - 2 * pad;
+  const first = along * share;
+  const rest = along - first;
+  const boxes = [stacked ? { x: pad, y: pad, w: across, h: first } : { x: pad, y: pad, w: first, h: across }];
+  // The peers' grid, as square as the space allows.
+  const inner = 16;
+  const lines = Math.max(1, Math.min(peers, Math.round(Math.sqrt(peers * across / rest))));
+  const per = Math.ceil(peers / lines);
+  const cellAcross = (across - inner * (lines - 1)) / lines;
+  const cellAlong = (rest - inner * (per - 1)) / per;
+  for (let i = 0; i < peers; i++) {
+    const a = Math.floor(i / per), b = i % per;
+    const o = pad + first + gap + b * (cellAlong + inner);
+    const q = pad + a * (cellAcross + inner);
+    boxes.push(stacked ? { x: q, y: o, w: cellAcross, h: cellAlong } : { x: o, y: q, w: cellAlong, h: cellAcross });
+  }
+  return boxes;
+}
+
+function drawLinks(boxes, stacked, now, rateNow) {
+  const a = boxes[0];
   const x0 = stacked ? a.x + a.w / 2 : a.grid.ox + a.grid.gw + 6;
   const y0 = stacked ? a.grid.oy + a.grid.gh + 6 : a.grid.oy + a.grid.gh / 2;
-  const x1 = stacked ? x0 : b.grid.ox - 6;
-  const y1 = stacked ? b.grid.oy - 6 : y0;
+  const ends = boxes.map((b) => (stacked ? { x: b.x + b.w / 2, y: b.grid.oy - 6 } : { x: b.grid.ox - 6, y: b.grid.oy + b.grid.gh / 2 }));
   ctx.strokeStyle = color("--line");
-  ctx.lineWidth = 8;
+  ctx.lineWidth = boxes.length > 3 ? 4 : 8;
   ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(x0, y0);
-  ctx.lineTo(x1, y1);
-  ctx.stroke();
+  for (let r = 1; r < boxes.length; r++) {
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(ends[r].x, ends[r].y);
+    ctx.stroke();
+  }
   // A dot rides out with each dispatch and back with its combine.
   const flight = 420;
-  live.packets = live.packets.filter((p) => now - p.t0 < flight);
+  live.packets = live.packets.filter((p) => now - p.t0 < flight && p.r < boxes.length);
   for (const p of live.packets) {
     const t = (now - p.t0) / flight;
     if (t < 0) continue;
     const out = t < 0.5;
     const u = out ? t * 2 : 2 - t * 2;
+    const e = ends[p.r];
+    const len = Math.hypot(e.x - x0, e.y - y0) || 1;
     const off = (p.lane - 0.5) * 6;
-    const x = x0 + (x1 - x0) * u + (stacked ? off : 0);
-    const y = y0 + (y1 - y0) * u + (stacked ? 0 : off);
+    const x = x0 + (e.x - x0) * u - ((e.y - y0) / len) * off;
+    const y = y0 + (e.y - y0) * u + ((e.x - x0) / len) * off;
     ctx.fillStyle = `rgba(${color(out ? "--rank0" : "--rank1")}, 0.9)`;
     ctx.beginPath();
     ctx.arc(x, y, 2.5, 0, Math.PI * 2);
     ctx.fill();
   }
   live.linkCalls = live.linkCalls.filter((c) => rateNow - c.t < 1000);
-  const callsPerS = live.linkCalls.reduce((s, c) => s + c.calls, 0);
-  const pk = callsPerS * topo.chunks * 2;
+  const perLink = new Array(boxes.length).fill(0);
+  for (const c of live.linkCalls) perLink[c.r] += c.calls;
   const r0 = live.rtt[0], r1 = live.rtt[live.rtt.length - 1];
   const rtt = r0 && r1.layers > r0.layers ? (r1.us - r0.us) / (r1.layers - r0.layers) : null;
   ctx.fillStyle = color("--muted");
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "center";
-  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-  ctx.fillText(topo.transport, mx + (stacked ? 70 : 0), my - (stacked ? 0 : 18));
-  ctx.fillText(`${Math.round(pk).toLocaleString()} packets/s`, mx + (stacked ? 70 : 0), my + (stacked ? 14 : 22));
-  if (rtt !== null) ctx.fillText(`${rtt.toFixed(0)} µs per layer`, mx + (stacked ? 70 : 0), my + (stacked ? 28 : 36));
+  const label = (x, y, lines) => lines.forEach((t, i) => ctx.fillText(t, x, y + i * 14));
+  const pk = (calls) => `${Math.round(calls * topo.chunks * 2).toLocaleString()} packets/s`;
+  const rttText = rtt !== null ? [`${rtt.toFixed(0)} µs per layer`] : [];
+  if (boxes.length === 2) {
+    const mx = (x0 + ends[1].x) / 2 + (stacked ? 70 : 0), my = (y0 + ends[1].y) / 2;
+    label(mx, my - (stacked ? 0 : 18), [topo.transport]);
+    label(mx, my + (stacked ? 14 : 22), [pk(perLink[1]), ...rttText]);
+  } else {
+    // Many links: a summary in rank 0's header, and each link's rate near its peer when there is room.
+    const total = perLink.reduce((sum, v) => sum + v, 0);
+    ctx.textAlign = "right";
+    label(a.x + a.w, a.y + 4, [`${topo.transport} · ${pk(total)}`, ...rttText]);
+    ctx.textAlign = "center";
+    if (boxes.length <= 5 && !stacked) {
+      for (let r = 1; r < boxes.length; r++) {
+        label(x0 + (ends[r].x - x0) * 0.7, y0 + (ends[r].y - y0) * 0.7 - 8, [pk(perLink[r])]);
+      }
+    }
+  }
   ctx.textAlign = "left";
 }
 

@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #34 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, and #32 to #34 are TASK-30 to TASK-32, opened Nov 15). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, and #35 is TASK-33, opened Nov 16). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -411,6 +411,27 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 - **Description**: Added Nov 15, third step of the hybrid track. As reported by NVIDIA's model coverage page and hosting providers (to be checked against its `config.json`): 320B parameters with 18B active per token; 45 layers, the first 3 with dense feed-forward blocks and the other 42 with 288 experts, 8 routed plus 1 shared per token; 34 KDA layers (a delta-rule linear attention with per-channel gates, which generalizes TASK-29's Gated DeltaNet) and 11 sparse MLA-style attention layers with a token indexer. Its smallest 4-bit GGUF is about 200 GB, so it needs two Sparks in memory or one streaming experts from NVMe. New work on top of TASK-31: per-channel gating in the delta-rule kernel, MLA with sparse token selection, dense leading layers, and the router (likely sigmoid with a bias, to be confirmed). The vision encoder stays out. Generating transformers references for a 320B model may need the lazy expert loading TASK-12's reference script uses, or more memory than the lab has; settle that before scheduling.
 - **Acceptance Criteria**: To be written when it is scheduled. Minimum: the TASK-10 and TASK-24 checks against a reference, and a one-Spark run with experts streamed from NVMe, recorded in `bench/`.
 
+#### [TASK-33] Any Number of Expert Nodes
+- **Milestone**: None (after v1)
+- **Status**: Review (built Nov 16)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 16, before TASK-31. Rank 0 has always talked to exactly one expert process, so a model larger than two machines' free memory could not run in memory. TASK-31's Q8_0 GGUF (163 GB) needs about 115 GB on `gx10-02` plus more elsewhere: the desktop's free RAM, and whatever `gx10-01` and `gx10-03` have left once their owners agree. This task lets rank 0 route to any number of expert processes:
+  - Each peer is reached over TCP or RDMA, chosen per peer, and gets its own flow control, health check, capacity grant (TASK-17) and prefetch hints (TASK-11).
+  - The placement manifest covers any number of ranks, with an even split by default. `shm` and `rdma` take `--ranks N` to fork N-1 local expert processes.
+  - With the tracker (TASK-09), a router given no peers waits for `--ranks N` - 1 healthy experts (one by default, as before), takes each expert from the first of them that announced it (by announced rank, then tracker id), holds any expert none of them owns itself, and refuses to route once any of them turns unhealthy, as it does today with one. Moving a lost peer's experts elsewhere stays out.
+  - Recordings, the live diagram and the replay page (TASK-16, TASK-16b) show each machine's calls.
+- **Acceptance Criteria**:
+  - **Bit for bit:** on one machine with CPU experts, runs over 3 and 4 processes give logits and generated tokens bit-identical to the two-process run.
+  - **Goldens:** OLMoE and Qwen3-30B-A3B pass the TASK-10 and TASK-24 checks over shared memory with `--ranks 3` and `--ranks 4`, and over TCP across `gx10-02`, the desktop and a third process.
+  - **Tracker:** a tracked run gathers 3 experts by itself and refuses once one is stopped.
+  - **Unit test:** a 3-rank split runs in `zig build test`.
+- **Results (Nov 16)**: acceptance met (`bench/olmoe/2026-11-16-nodes.md`).
+  - **Bit for bit:** with CPU experts, Qwen3-30B-A3B over 2, 3 and 4 processes gives the 16 generated tokens and their logits of one process, bit for bit.
+  - **Goldens:** OLMoE and Qwen3-30B-A3B (plain and with YaRN) pass over shared memory with 3 and 4 processes, OLMoE over RDMA with 3 and 4, and all three over TCP with rank 0 and rank 1 on `gx10-02` and rank 2 on the desktop's CPU in WSL2.
+  - **Tracker:** a router given only `--tracker --ranks 4` gathered 3 experts and passed. A second run refused 63 ms after one of them was killed.
+  - **Chat replays (Nov 16):** Qwen3-30B-A3B over all three Sparks (RDMA, direct cables) and over the three Sparks plus the desktop's CPU (RDMA and TCP in one run) are on the public page (`bench/trace/2026-11-16-chats.md`). Both were recorded while `gx10-01`'s GPU was busy with a co-tenant's job; the three-Spark one plays at 16x, the speed the same setup measured with that GPU free.
+  - **Built:** `src/split.zig` (rank 0's split over any number of peers, and the expert side), `--ranks`, `--rank` and `--peer [tcp:|rdma:]IP:PORT`, per-peer capacity grants and hints, and the live diagram's N-rank layout. The split stays slow on the CPU at long prompts, since it runs one call at a time where one process batches.
+
 ---
 
 ## 4. Scope Tiers & Cut Lines
@@ -433,7 +454,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 TASK-20 is `should` but untagged: it is never cut, only reduced to a minimal build guide.
 
-**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends (AMD ROCm/HIP, Apple Metal, Intel; non-NVIDIA machines join only as CPU expert nodes, TASK-22), macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
+**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist; TASK-33 lets the engine use any number of nodes, but runs are limited to the machines available), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends (AMD ROCm/HIP, Apple Metal, Intel; non-NVIDIA machines join only as CPU expert nodes, TASK-22), macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
 
 ---
 
@@ -446,12 +467,12 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25, TASK-31, TASK-32 |
 | **To Do** | (none) |
 | **In Progress** | (none) |
-| **Review** | TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`) |
+| **Review** | TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32 | 20 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33 | 21 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b, 23, 25 | 5 |
@@ -461,7 +482,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 17 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 11 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, and 32 are post-v1; TASK-26 untagged |
+| `could` | 12 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, 32, and 33 are post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 
@@ -508,8 +529,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-28 | 03, 24 | (none) |
 | TASK-29 | 12 (Qwen3-MoE support) | 31 |
 | TASK-30 | 09 (split runs), 24, 28 | 16, 16b, 18 |
-| TASK-31 | 29 (Gated DeltaNet), 11 and 14 (expert cache) | 32 |
+| TASK-31 | 29 (Gated DeltaNet), 11 and 14 (expert cache), 33 (more than two nodes) | 32 |
 | TASK-32 | 31 (delta-rule kernels, sparse attention) | (none) |
+| TASK-33 | 09 (tracker), 10, 16b (live diagram), 17 (capacity) | 31 |
 
 **Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-24 → TASK-30 → TASK-16 → TASK-18 (TASK-15 feeds TASK-16 in parallel).
 

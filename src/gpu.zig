@@ -22,6 +22,7 @@ extern fn tf_gpu_matmuls(g: *Handle, count: c_int, w: [*]const u64, format: c_in
 extern fn tf_gpu_register(g: *Handle, host: *anyopaque, len: usize, dev: *u64) c_int;
 extern fn tf_gpu_unregister(g: *Handle, host: *anyopaque) void;
 extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int, hd: c_int) c_int;
+extern fn tf_gpu_qsa(g: *Handle, q: [*]const f32, iq: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, ih: c_int, dim: c_int, bsize: c_int, top: c_int, scale: f32, blocks: u64, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, out: [*]f32, kept: ?[*]i32) c_int;
 extern fn tf_gpu_delta_rule(g: *Handle, mixed: [*]const f32, beta: [*]const f32, decay: [*]const f32, n: c_int, cd: c_int, kh: c_int, dk: c_int, vh: c_int, dv: c_int, state: u64, core: [*]f32) c_int;
 extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
@@ -67,8 +68,34 @@ pub fn open() !void {
         olmoe.gpu_unregister = unregister;
         olmoe.gpu_attention = attention;
         olmoe.gpu_delta_rule = deltaRule;
+        olmoe.gpu_qsa = qsa;
     }
 }
+
+/// QSA attention (TASK-31) on the GPU, for 256-dim heads over an f32 cache.
+fn qsa(job: olmoe.QsaJob) bool
+{
+    if (qsa_failed)
+    {
+        return false;
+    }
+    const c = job.cfg;
+    if (c.head_dim != 256 or job.blocks_dev == 0)
+    {
+        return false;
+    }
+    const kept: ?[*]i32 = if (job.kept.len > 0) job.kept.ptr else null;
+    const rc = tf_gpu_qsa(handle.?, job.q.ptr, job.iq.ptr, @intCast(job.n), @intCast(job.pos0), @intCast(c.heads), @intCast(c.kv_heads), @intCast(c.kvDim()), @intCast(c.qsa_heads), @intCast(c.qsa_dim), @intCast(c.qsa_block), @intCast(c.qsaTop()), job.scale, job.blocks_dev, job.tiles_k.ptr, job.tiles_v.ptr, @intCast(job.tiles_k.len), job.out.ptr, kept);
+    if (rc != 0)
+    {
+        std.log.err("gpu: QSA attention failed ({d}); using the CPU from here on", .{-rc});
+        qsa_failed = true;
+        return false;
+    }
+    return true;
+}
+
+var qsa_failed = false;
 
 fn deltaRule(job: olmoe.DeltaJob) bool
 {
@@ -184,6 +211,8 @@ pub fn stop() void {
     olmoe.gpu_matmuls = null;
     olmoe.gpu_experts = null;
     olmoe.gpu_attention = null;
+    olmoe.gpu_delta_rule = null;
+    olmoe.gpu_qsa = null;
     olmoe.gpu_register = null;
     olmoe.gpu_unregister = null;
     if (handle) |h| tf_gpu_close(h);

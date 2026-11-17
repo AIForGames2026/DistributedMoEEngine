@@ -1989,3 +1989,303 @@ extern "C" __global__ void tf_rowscale(const float *__restrict__ x, float *__res
         up[row] = row_up(mx);
     }
 }
+
+/* QSA (TASK-31): each query's score against every complete block of keys, the sum over
+ * the indexer's heads of ReLU(q . k) times 1 / sqrt(dim); -1 for blocks it cannot see yet.
+ * One block of threads covers QS_Q queries and QS_B key blocks. */
+#define QS_Q 8
+#define QS_B 32
+#define QS_MAXHD 512
+#define QS_MAXD 128
+
+extern "C" __global__ void __launch_bounds__(256) tf_qsa_scores(const float *__restrict__ iq, const float *__restrict__ blocks,
+                                                                float *__restrict__ scores, int nq, int q0, int pos0, int ih,
+                                                                int dim, int bsize, int nb, float iscale)
+{
+    __shared__ float qs[QS_Q][QS_MAXHD];
+    __shared__ float ks[QS_B][QS_MAXD + 1];
+    const int tid = threadIdx.x;
+    const int qa = blockIdx.y * QS_Q, ba = blockIdx.x * QS_B;
+    const int hd = ih * dim;
+    for (int i = tid; i < QS_Q * hd; i += 256)
+    {
+        const int r = i / hd, c = i % hd;
+        qs[r][c] = qa + r < nq ? iq[(size_t)(q0 + qa + r) * hd + c] : 0.f;
+    }
+    for (int i = tid; i < QS_B * dim; i += 256)
+    {
+        const int r = i / dim, c = i % dim;
+        ks[r][c] = ba + r < nb ? blocks[(size_t)(ba + r) * dim + c] : 0.f;
+    }
+    __syncthreads();
+    const int r = tid / QS_B, b = tid % QS_B;
+    const int qi = qa + r, bi = ba + b;
+    if (qi >= nq || bi >= nb)
+    {
+        return;
+    }
+    const int full = (pos0 + q0 + qi + 1) / bsize;
+    float s = 0.f;
+    for (int h = 0; h < ih; h++)
+    {
+        float d = 0.f;
+        for (int i = 0; i < dim; i++)
+        {
+            d += qs[r][h * dim + i] * ks[b][i];
+        }
+        s += fmaxf(d, 0.f);
+    }
+    scores[(size_t)qi * nb + bi] = bi < full ? s * iscale : -1.f;
+}
+
+/* Exclusive prefix sum of `v` over the 256 threads; `*total` gets the sum. */
+__device__ __forceinline__ int qsa_scan(int v, int *total, int *ws)
+{
+    const int lane = threadIdx.x & 31, w = threadIdx.x >> 5;
+    int x = v;
+    for (int o = 1; o < 32; o <<= 1)
+    {
+        const int y = __shfl_up_sync(0xffffffffu, x, o);
+        if (lane >= o)
+        {
+            x += y;
+        }
+    }
+    if (lane == 31)
+    {
+        ws[w] = x;
+    }
+    __syncthreads();
+    if (w == 0)
+    {
+        int y = lane < 8 ? ws[lane] : 0;
+        for (int o = 1; o < 8; o <<= 1)
+        {
+            const int z = __shfl_up_sync(0xffffffffu, y, o);
+            if (lane >= o)
+            {
+                y += z;
+            }
+        }
+        if (lane < 8)
+        {
+            ws[lane] = y;
+        }
+    }
+    __syncthreads();
+    const int ex = (w ? ws[w - 1] : 0) + x - v;
+    *total = ws[7];
+    __syncthreads();
+    return ex;
+}
+
+/* The `top` blocks each query keeps, in ascending order: every block scoring above the cut,
+ * then the lowest-numbered of those scoring exactly at it, as the CPU path does. Scores are
+ * never negative, so their bits sort as unsigned integers and a radix select finds the cut.
+ * Queries with no more complete blocks than `top` keep them all and are skipped. */
+extern "C" __global__ void __launch_bounds__(256) tf_qsa_topk(const float *__restrict__ scores, int *__restrict__ sel, int q0,
+                                                              int pos0, int bsize, int top, int nb)
+{
+    __shared__ unsigned hist[256];
+    __shared__ int ws[8];
+    __shared__ unsigned s_prefix;
+    __shared__ int s_need;
+    const int qi = blockIdx.x, tid = threadIdx.x;
+    const int full = (pos0 + q0 + qi + 1) / bsize;
+    if (full <= top)
+    {
+        return;
+    }
+    const unsigned *row = (const unsigned *)(scores + (size_t)qi * nb);
+    unsigned prefix = 0, mask = 0;
+    int k = top;
+    for (int shift = 24; shift >= 0; shift -= 8)
+    {
+        hist[tid] = 0;
+        __syncthreads();
+        for (int b = tid; b < full; b += 256)
+        {
+            const unsigned u = row[b];
+            if ((u & mask) == prefix)
+            {
+                atomicAdd(&hist[(u >> shift) & 255u], 1u);
+            }
+        }
+        __syncthreads();
+        if (tid == 0)
+        {
+            int cum = 0;
+            int j = 255;
+            for (; j > 0; j--)
+            {
+                if (cum + (int)hist[j] >= k)
+                {
+                    break;
+                }
+                cum += (int)hist[j];
+            }
+            s_prefix = prefix | ((unsigned)j << shift);
+            s_need = k - cum;
+        }
+        __syncthreads();
+        prefix = s_prefix;
+        k = s_need;
+        mask |= 255u << shift;
+        __syncthreads();
+    }
+    int eq_carry = 0, sel_carry = 0;
+    for (int b0 = 0; b0 < full; b0 += 256)
+    {
+        const int b = b0 + tid;
+        const unsigned u = b < full ? row[b] : 0u;
+        const int gt = b < full && u > prefix;
+        const int eq = b < full && u == prefix;
+        int total;
+        const int eq_rank = qsa_scan(eq, &total, ws) + eq_carry;
+        eq_carry += total;
+        const int take = gt || (eq && eq_rank < k);
+        const int at = qsa_scan(take, &total, ws) + sel_carry;
+        sel_carry += total;
+        if (take)
+        {
+            sel[(size_t)qi * top + at] = b;
+        }
+    }
+}
+
+/* QSA attention for one query and one KV head over an f32 cache read through its tile
+ * table: the positions of the kept blocks and the unfinished last one (every position while
+ * the query keeps all blocks), in ascending order, with an online softmax. 256-dim heads,
+ * each thread owning one dimension of every query head in the group. */
+#define QA_HD 256
+#define QA_P 8
+#define QA_MAXG 16
+
+extern "C" __global__ void __launch_bounds__(256) tf_qsa_attention(const float *__restrict__ q,
+                                                                   const unsigned long long *__restrict__ tiles_k,
+                                                                   const unsigned long long *__restrict__ tiles_v,
+                                                                   const int *__restrict__ sel, float *__restrict__ out,
+                                                                   int pos0, int heads, int kv_heads, int kvd, int bsize, int top,
+                                                                   float scale)
+{
+    __shared__ float qs[QA_MAXG][QA_HD];
+    __shared__ float ks[QA_P][QA_HD];
+    __shared__ float vs[QA_P][QA_HD];
+    __shared__ float ps[QA_MAXG][QA_P];
+    __shared__ float corr[QA_MAXG];
+    __shared__ float lsum[QA_MAXG];
+    __shared__ int pos_s[QA_P];
+    const int t = blockIdx.x, g = blockIdx.y, tid = threadIdx.x;
+    const int lane = tid & 31, w = tid >> 5;
+    const int group = heads / kv_heads;
+    const int p = pos0 + t, full = (p + 1) / bsize;
+    const int dense = full <= top;
+    const int count = dense ? p + 1 : top * bsize + (p + 1 - full * bsize);
+    for (int i = tid; i < group * QA_HD; i += 256)
+    {
+        qs[i / QA_HD][i % QA_HD] = q[((size_t)t * heads + g * group + i / QA_HD) * QA_HD + i % QA_HD];
+    }
+    float acc[QA_MAXG];
+#pragma unroll
+    for (int h = 0; h < QA_MAXG; h++)
+    {
+        acc[h] = 0.f;
+    }
+    float m = -INFINITY, l = 0.f;
+    for (int c0 = 0; c0 < count; c0 += QA_P)
+    {
+        const int nv = min(QA_P, count - c0);
+        if (tid < QA_P)
+        {
+            const int i = c0 + tid;
+            int s = 0;
+            if (i < count)
+            {
+                s = dense ? i
+                          : (i < top * bsize ? sel[(size_t)t * top + i / bsize] * bsize + i % bsize : full * bsize + (i - top * bsize));
+            }
+            pos_s[tid] = s;
+        }
+        __syncthreads();
+        for (int i = tid; i < QA_P * QA_HD; i += 256)
+        {
+            const int j = i / QA_HD, d = i % QA_HD;
+            float kv = 0.f, vv = 0.f;
+            if (j < nv)
+            {
+                const int s = pos_s[j];
+                const size_t off = (size_t)(s % 32) * kvd + (size_t)g * QA_HD + d;
+                kv = ((const float *)tiles_k[s / 32])[off];
+                vv = ((const float *)tiles_v[s / 32])[off];
+            }
+            ks[j][d] = kv;
+            vs[j][d] = vv;
+        }
+        __syncthreads();
+        for (int idx = w; idx < group * QA_P; idx += 8)
+        {
+            const int h = idx / QA_P, j = idx % QA_P;
+            float s = 0.f;
+            for (int d = lane; d < QA_HD; d += 32)
+            {
+                s += qs[h][d] * ks[j][d];
+            }
+            for (int o = 16; o; o >>= 1)
+            {
+                s += __shfl_xor_sync(0xffffffffu, s, o);
+            }
+            if (lane == 0)
+            {
+                ps[h][j] = j < nv ? s * scale : -INFINITY;
+            }
+        }
+        __syncthreads();
+        if (tid < group)
+        {
+            float mx = m;
+            for (int j = 0; j < nv; j++)
+            {
+                mx = fmaxf(mx, ps[tid][j]);
+            }
+            const float cr = expf(m - mx);
+            float sum = 0.f;
+            for (int j = 0; j < QA_P; j++)
+            {
+                const float e = j < nv ? expf(ps[tid][j] - mx) : 0.f;
+                ps[tid][j] = e;
+                sum += e;
+            }
+            l = l * cr + sum;
+            m = mx;
+            corr[tid] = cr;
+        }
+        __syncthreads();
+#pragma unroll
+        for (int h = 0; h < QA_MAXG; h++)
+        {
+            if (h < group)
+            {
+                float a = acc[h] * corr[h];
+                for (int j = 0; j < nv; j++)
+                {
+                    a += ps[h][j] * vs[j][tid];
+                }
+                acc[h] = a;
+            }
+        }
+        __syncthreads();
+    }
+    if (tid < group)
+    {
+        lsum[tid] = l;
+    }
+    __syncthreads();
+#pragma unroll
+    for (int h = 0; h < QA_MAXG; h++)
+    {
+        if (h < group)
+        {
+            out[((size_t)t * heads + g * group + h) * QA_HD + tid] = acc[h] / lsum[h];
+        }
+    }
+}

@@ -1,0 +1,12 @@
+> In two or three sentences, what is a mixture-of-experts language model?
+A mixture-of-experts language model is a neural network architecture that contains multiple specialized subnetworks, or “experts,” along with a routing mechanism that decides which experts to use for each input. Instead of activating all parameters for every token, it typically activates only a smal
+  (114 tokens, first token 11057 ms, 7.0 tokens/s, finish stop)
+
+> Why does it matter which machine each expert lives on when the model is split across computers?
+It matters because MoE routing sends each token to specific experts, so if an expert is on another machine, the system must pay network communication costs in latency and bandwidth. Good placement can keep frequently used or related experts close together, balance load across machines, and avoid bot
+  (252 tokens, first token 6774 ms, 8.4 tokens/s, finish stop)
+
+> Give me a one-line summary of what we discussed.
+We discussed mixture-of-experts language models and why expert placement across machines affects communication, speed, load balance, and scalability.
+  (103 tokens, first token 10597 ms, 7.3 tokens/s, finish stop)
+

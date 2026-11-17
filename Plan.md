@@ -399,10 +399,49 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-31] Qwen3.8-Flash-Next (Hybrid Attention, Expert Streaming at Scale)
 - **Milestone**: None (after v1)
-- **Status**: Backlog
+- **Status**: Review (built Nov 16 to 17, ahead of v1)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 15, second step of the hybrid track. As reported in summaries of its paper (to be checked against its `config.json` before scheduling): 125B parameters with 6B active per token, plus 51B of n-gram embedding tables kept off the GPU and a 4B multi-token prediction module; 512 experts, 10 routed plus 1 shared per token; 48 layers, three Gated DeltaNet layers to every Qwen Sparse Attention (QSA) layer, which attends to selected blocks of tokens. At 4 bits the 125B core is roughly 65 to 70 GB, so it fits on two Sparks, or on one with experts streamed from NVMe (`--cache`). Its small experts (roughly 2 to 3 MB at 4 bits) stress the expert cache and lookahead (TASK-11, TASK-14) harder than any model so far, and its n-gram tables are a per-token lookup that could also stream from NVMe. New work on top of TASK-29: QSA, the n-gram tables, and whichever weight format its releases use (K-quant GGUFs need a new loader path; NVFP4 or Q8_0 would not). The MTP module stays out.
-- **Acceptance Criteria**: To be written when it is scheduled. Minimum: the TASK-10 and TASK-24 checks against transformers, split across two Sparks, and a one-Spark run with experts streamed from NVMe, with expert-cache hit rates and tokens per second recorded in `bench/`.
+- **Checked against the release (Nov 16)**: `config.json` (`qwen4_exp`), ggml-org's GGUF (`qwen4exp`, Q8_0, 163 GB in two parts) and transformers 5.23's `modeling_qwen4_exp.py`.
+  - **Layers:** 48, hidden size 2,560, with three Gated DeltaNet layers (16 key heads, 48 value heads of 128, sigmoid output gate) to every QSA layer (24 query heads, 2 KV heads of 256, partial rope over 64 dims, an output gate).
+  - **QSA:** an indexer (4 heads of 128, one shared key) scores blocks of 4 tokens by their mean key and keeps the best 512 blocks (2,048 tokens), plus the unfinished last block. Below 2,048 tokens of context it is dense attention.
+  - **Hyper-connections:** the residual is 4 streams of 2,560. Before each attention and MoE block, a low-rank gate (rank 320) mixes the streams into one input, and the block's output is added back to each stream with its own weight. A final mixer replaces the output norm.
+  - **N-gram embedding:** at layer 1, each token's bigram and trigram hash into 16 tables of about 20 million rows. The rows are 160 values each (28.8 GB in Q4_0), gated per stream and passed through a short dilated convolution.
+  - **MoE:** 512 experts of 640 (2.5 MB each in Q8_0, 128 GB in all), 10 routed plus 1 gated shared expert, softmax router.
+  - **Weights:** Q8_0, plus F32 norms, BF16 indexer projections and the Q4_0 n-gram table. The MTP head, the drafter and the vision encoder stay out.
+- **Acceptance Criteria** (Nov 16, following TASK-29):
+  - **Against transformers:** on ggml-org's Q8_0 GGUF, compared with transformers' `Qwen4ExpForCausalLM` in float32 on the GGUF's dequantized weights. A reference script loads experts and n-gram rows only when used, since the whole model in float32 would not fit in memory. The checks are TASK-10's (logits within 1e-2, top-1 identical, every routing choice identical) and TASK-24's greedy generation check.
+    - These run on short prompts, where every selected QSA block must match too, and on one longer than 2,048 tokens, so QSA's block selection is exercised.
+    - **The long prompt (amended Nov 16):** past QSA's budget, choosing 512 of some 650 blocks per query amplifies float rounding through the layers, so no implementation reproduces transformers' choices exactly. transformers rerun with 7 threads instead of 20 shares 99.912% of its own QSA blocks and 99.64% of its expert choices, with logits 1.96 apart. So the long prompt needs: the first QSA layer's choices identical, at least 99.9% of QSA blocks and 99.5% of expert choices shared, and every top-1 token identical. The 1e-2 logit bound applies to the short prompts.
+    - They run in one process, and split across two (experts on rank 1).
+  - **Unit test:** a tiny random model with the same layer mix, a QSA budget small enough to select, hyper-connections and the n-gram embedding checks the same in `zig build test`.
+  - **GPU and memory:** the new layers run on the GPU. The model runs on `gx10-02` alone, with experts streamed from NVMe (`--cache`). 32k and 128k prompts complete, with time to first token, decode speed and expert-cache hit rates recorded in `bench/`.
+  - **Chat replay:** a recorded chat with the model (the same scripted three-turn chat as the other replays) is added to the public page's list of recordings, with its setup and speeds written up in `bench/trace/`.
+  - **Later:** a split across two Sparks with every expert in memory waits for a second free Spark. Saving the recurrent state with `--prefix-cache` stays out, as in TASK-29.
+- **Results (Nov 17)**: acceptance met on `gx10-02` alone, experts streamed from NVMe through a 12,000-slot cache (`bench/olmoe/2026-11-17-qwen38.md`).
+  - **Against transformers:** the three short prompts' logits are within 9.73e-5, and all 18,720 routing choices are identical.
+    - The 2,600-token prompt shares 99.928% of QSA blocks and 99.698% of expert choices. Its first QSA layer is identical.
+    - Every top-1 and all 128 generated tokens equal `generate()`.
+    - This holds in one process on the GPU and split across two over shared memory (`--payload f32`), with identical numbers in both.
+    - Two router near-ties in transformers (gaps of 8.4e-9 and 3.6e-8) end the logit check at that step. The tokens still match.
+  - **Built:**
+    - hyper-connections, the n-gram embedding (Q4_0) and QSA, with three GPU kernels for QSA;
+    - split GGUF loading;
+    - lookahead through the hyper-connections;
+    - `--kv-offload` for hybrid models;
+    - the `qwen38` chat format with `reasoning_effort` (108 of 108 prompts identical to transformers);
+    - a tiny test model in `zig build test`.
+    - The tokenizer is identical to Hugging Face on 528 texts.
+  - **Long context:**
+    - 32k: first token in 1,211 s, decode at 5.71 tokens/s.
+    - 128k: first token in 4,971 s, decode at 4.22 tokens/s, peak memory 104 GB.
+    - Experts set the pace: 90 to 91% of calls hit the cache, and the 128k prefill read 6.8 TB from NVMe.
+  - **Chat replay:** on the public page (`bench/trace/2026-11-17-qwen38-chat.md`), at 7.0 to 8.4 tokens/s. The live diagram wraps a layer's experts onto several rows when there are too many for one.
+  - **Unexplained:** two early GPU runs, out of about 13, produced a non-finite value in the long prompt's prefill.
+    - `step()` now stops on one and names the layer.
+    - Every expert call is checked and rechecked on the CPU if bad.
+    - 20 traced runs and every later run were clean.
+  - **Not yet:** `--prefix-cache` and the server's prompt reuse still start a hybrid model over. The two-Spark in-memory split waits for a free Spark.
 
 #### [TASK-32] GLM-5.3-Flash (Hybrid Attention, 320B)
 - **Milestone**: None (after v1)
@@ -464,10 +503,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25, TASK-31, TASK-32 |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25, TASK-32 |
 | **To Do** | (none) |
 | **In Progress** | (none) |
-| **Review** | TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
+| **Review** | TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |

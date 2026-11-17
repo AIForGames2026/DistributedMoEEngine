@@ -63,6 +63,8 @@ SETTINGS = [
     {"add_generation_prompt": False},
     {"add_generation_prompt": True, "enable_thinking": False},
     {"add_generation_prompt": True, "enable_thinking": True},
+    {"add_generation_prompt": True, "reasoning_effort": "low"},
+    {"add_generation_prompt": True, "reasoning_effort": "medium"},
 ]
 
 
@@ -128,16 +130,32 @@ def main():
     lines = run.stdout.split("\n")
 
     bad = 0
+    refused = 0
     for (conv, st), line in zip(cases, lines):
+        try:
+            want = hf.apply_chat_template(conv, tokenize=True, **st)
+            # transformers 5 returns the encoding as a mapping.
+            want = list(want["input_ids"] if hasattr(want, "keys") else want)
+        except Exception as e:
+            # Templates may refuse a conversation (Qwen3.8's: a late system turn, no user query); so must the engine.
+            if not line.startswith("refused"):
+                bad += 1
+                print(f"MISMATCH {st} {conv}: transformers refused ({e}), the engine did not")
+            else:
+                refused += 1
+            continue
+        if line.startswith("refused"):
+            bad += 1
+            print(f"MISMATCH {st} {conv}: the engine refused ({line}), transformers did not")
+            continue
         got = [int(x) for x in line.split()]
-        want = list(hf.apply_chat_template(conv, tokenize=True, **st))
         if got != want:
             bad += 1
             if bad <= 5:
                 print(f"MISMATCH {st} {conv}")
                 print(f"  hf:     {hf.decode(want)!r}")
                 print(f"  engine: {hf.decode(got)!r}")
-    print(f"{len(cases) - bad}/{len(cases)} prompts identical")
+    print(f"{len(cases) - bad}/{len(cases)} prompts identical ({refused} refused by both)")
     sys.exit(1 if bad else 0)
 
 

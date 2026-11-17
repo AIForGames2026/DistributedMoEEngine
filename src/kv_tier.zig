@@ -87,9 +87,9 @@ pub const TierCache = struct {
 
     pub fn open(gpa: std.mem.Allocator, cfg: olmoe.Config, cap: usize, opts: Options) !*TierCache
     {
-        if (cfg.head_dim != olmoe.AttentionJob.head_dim or olmoe.gpu_register == null or olmoe.gpu_attention == null)
+        if (!olmoe.AttentionJob.gpuHeadDim(cfg.head_dim) or olmoe.gpu_register == null or olmoe.gpu_attention == null)
         {
-            std.debug.print("kv offload: needs GPU attention (--gpu) and 128-wide heads\n", .{});
+            std.debug.print("kv offload: needs GPU attention (--gpu) and 128- or 256-wide heads\n", .{});
             return error.OffloadNeedsGpu;
         }
         const pages = std.heap.page_allocator;
@@ -103,11 +103,11 @@ pub const TierCache = struct {
         const middle = max_tiles -| (sink_tiles + opts.window / tile_positions);
         const self = try gpa.create(TierCache);
         errdefer gpa.destroy(self);
-        const sinks_k = try pages.alloc(u8, cfg.layers * sink_tiles * tile_bytes);
+        const sinks_k = try pages.alloc(u8, cfg.attnLayers() * sink_tiles * tile_bytes);
         errdefer pages.free(sinks_k);
         const sinks_v = try pages.alloc(u8, sinks_k.len);
         errdefer pages.free(sinks_v);
-        const ring_k = try pages.alloc(u8, cfg.layers * ring_tiles * tile_bytes);
+        const ring_k = try pages.alloc(u8, cfg.attnLayers() * ring_tiles * tile_bytes);
         errdefer pages.free(ring_k);
         const ring_v = try pages.alloc(u8, ring_k.len);
         errdefer pages.free(ring_v);
@@ -121,7 +121,7 @@ pub const TierCache = struct {
             return error.OffloadFileFailed;
         }
         errdefer _ = c.close(fd);
-        const file_bytes = cfg.layers * 2 * max_tiles * tile_bytes;
+        const file_bytes = cfg.attnLayers() * 2 * max_tiles * tile_bytes;
         if (c.ftruncate(fd, @intCast(file_bytes)) != 0)
         {
             return error.OffloadFileFailed;
@@ -306,7 +306,7 @@ pub const TierCache = struct {
                 std.atomic.spinLoopHint();
             }
             self.stats.wait_ns += nowNs() - t0;
-            if (layer + 1 < self.cfg.layers)
+            if (layer + 1 < self.cfg.attnLayers())
             {
                 self.prefetch(layer + 1);
             }
@@ -340,7 +340,7 @@ pub const TierCache = struct {
             return;
         }
         const t0 = nowNs();
-        for (0..self.cfg.layers) |layer|
+        for (0..self.cfg.attnLayers()) |layer|
         {
             for (self.flushed..target) |ti|
             {
@@ -361,7 +361,7 @@ pub const TierCache = struct {
                 }
             }
         }
-        self.stats.write_bytes += (target - self.flushed) * self.cfg.layers * 2 * self.tile_bytes;
+        self.stats.write_bytes += (target - self.flushed) * self.cfg.attnLayers() * 2 * self.tile_bytes;
         self.stats.write_ns += nowNs() - t0;
         self.flushed = target;
     }

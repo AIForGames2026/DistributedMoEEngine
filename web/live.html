@@ -336,8 +336,19 @@ function draw(now) {
     const calls = `${live.drawn[r].toLocaleString()} calls`;
     addText(fit(sub, `${live.cols[r].length} experts per layer · ${calls}`, calls), b.x, b.y + 20, sub, "--muted");
     const top = b.y + 32, avail = b.h - 40;
-    const cell = Math.max(1, Math.min(b.w / cols, avail / topo.layers));
-    const gw = cell * cols, gh = cell * topo.layers;
+    // When one row per layer leaves tiny cells, wrap each layer onto the row count giving the largest cells.
+    let wrap = 1, best = Math.min(b.w / cols, avail / topo.layers);
+    for (let w = 2; w <= 16 && Math.min(b.w / cols, avail / topo.layers) < 4; w++) {
+      const g = w > 1 ? 2 : 0;
+      const c = Math.min(b.w / Math.ceil(cols / w), (avail - g * (topo.layers - 1)) / (topo.layers * w));
+      if (c > best + 0.01) {
+        best = c;
+        wrap = w;
+      }
+    }
+    const per = Math.ceil(cols / wrap), gap = wrap > 1 ? 2 : 0;
+    const cell = Math.max(1, best);
+    const gw = cell * per, gh = cell * wrap * topo.layers + gap * (topo.layers - 1);
     const ox = b.x + (b.w - gw) / 2, oy = top + (avail - gh) / 2;
     b.grid = { ox, oy, gw, gh };
     const inset = cell >= 6 ? 1 : 0;
@@ -347,7 +358,7 @@ function draw(now) {
         const i = l * live.cols[r].length + c;
         const base = total[i] > 0 ? floor + span * Math.sqrt(total[i] / live.totalMax) : 0;
         const a = Math.max(heat[i], base);
-        const cx = ox + c * cell + inset, cy = oy + l * cell + inset, cw = cell - 2 * inset;
+        const cx = ox + (c % per) * cell + inset, cy = oy + l * (wrap * cell + gap) + Math.floor(c / per) * cell + inset, cw = cell - 2 * inset;
         ctx.fillStyle = cellBg;
         ctx.fillRect(cx, cy, cw, cw);
         if (a > 0.01) {

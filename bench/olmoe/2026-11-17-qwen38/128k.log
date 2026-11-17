@@ -1,0 +1,41 @@
+load: non-expert weights and 512 of 512 experts (through the expert cache), 34.27 GB in 6.22 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (34.27 GB in 0.90 s)
+local: expert cache: 12000 slots (62.96 GB), 2 loader threads, 512 experts of layers below 1 loaded and kept in 3.92 s; cached experts run on the GPU
+local: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory, f32, 49152 bytes per token: 6.44 GB in memory (all of it would be 6.44 GB), GPU attention on
+local: prefill 14336 of 131040 positions, 532.1 s
+local: prefill 26624 of 131040 positions, 987.0 s
+local: prefill 40960 of 131040 positions, 1520.3 s
+local: prefill 53248 of 131040 positions, 1977.4 s
+local: prefill 65536 of 131040 positions, 2435.2 s
+local: prefill 79872 of 131040 positions, 2969.7 s
+local: prefill 92160 of 131040 positions, 3514.5 s
+local: prefill 106496 of 131040 positions, 4051.0 s
+local: prefill 118784 of 131040 positions, 4511.8 s
+local: prefill time: projections 124.7 s, QK norm and rope 54.4 s, attention 95.7 s, Gated DeltaNet 468.0 s, output 444.8 s, router 10.5 s, experts 3744.2 s, LM head 1.6 s
+local: decode time: projections 0.1 s, QK norm and rope 0.3 s, attention 1.0 s, Gated DeltaNet 0.8 s, output 0.3 s, router 0.4 s, experts 4.2 s, LM head 0.1 s
+local: time to first token 4970.912 s (26 tokens/s prefill); decode 0.237 s per token (4.22 tokens/s) over 31 steps from position 131040; resident memory 105205 MB
+local: expert cache: 62914080 expert calls: 90.9% already loaded, 0.0% loaded by a hint in time, 4.0% hinted but still loading, 5.2% missed; 61591101 calls set aside while others ran; 371273.2 ms with nothing to run but loads; 1295767 loads (0 for hints, 6767.01 GB, 2.15 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 491 allocations, 491 frees, peak 9953.2 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "src/engine/zig-out-q38k/bin/olmoe local models/qwen38-flash-next/Qwen3.8-Flash-Next-Q8_0-00002-of-00002.gguf --tokens models/qwen38-flash-next/repo.tokens --chunk 2048 --max-step 2048 --gpu --cache 12000 --context 131040 --generate 32"
+	User time (seconds): 6965.14
+	System time (seconds): 320.86
+	Percent of CPU this job got: 145%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:23:13
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 103872976
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 195984779
+	Voluntary context switches: 104335122
+	Involuntary context switches: 1340509
+	Swaps: 0
+	File system inputs: 13314852096
+	File system outputs: 88
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

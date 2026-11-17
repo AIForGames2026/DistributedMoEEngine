@@ -14,6 +14,9 @@ pub const Format = enum {
     bf16,
     /// 32 values: f16 scale, then 32 int8.
     q8_0,
+    /// 32 values: f16 scale, then 16 bytes of 4-bit values offset by 8; low nibbles
+    /// are values 0 to 15, high nibbles 16 to 31.
+    q4_0,
     /// 32 values (OCP MX): E8M0 power-of-two scale, then 16 bytes of E2M1;
     /// low nibbles are values 0 to 15, high nibbles 16 to 31.
     mxfp4,
@@ -26,7 +29,7 @@ pub const Format = enum {
     pub fn blockValues(self: Format) usize {
         return switch (self) {
             .f32, .f16, .bf16 => 1,
-            .q8_0, .mxfp4 => 32,
+            .q8_0, .q4_0, .mxfp4 => 32,
             .nvfp4 => 64,
         };
     }
@@ -36,6 +39,7 @@ pub const Format = enum {
             .f32 => 4,
             .f16, .bf16 => 2,
             .q8_0 => 34,
+            .q4_0 => 18,
             .mxfp4 => 17,
             .nvfp4 => 36,
         };
@@ -121,6 +125,20 @@ pub fn dequantize(fmt: Format, src: []const u8, out: []f32) error{ PartialBlock,
                 for (out[b * 32 ..][0..32], blk[2..34]) |*o, q| o.* = d * @as(f32, @floatFromInt(@as(i8, @bitCast(q))));
             }
         },
+        .q4_0 => {
+            var b: usize = 0;
+            while (b < out.len / 32) : (b += 1)
+            {
+                const blk = src[b * 18 ..][0..18];
+                const d = f16ToF32(std.mem.readInt(u16, blk[0..2], .little));
+                const o = out[b * 32 ..][0..32];
+                for (blk[2..18], 0..) |q, j|
+                {
+                    o[j] = d * @as(f32, @floatFromInt(@as(i32, q & 0xF) - 8));
+                    o[j + 16] = d * @as(f32, @floatFromInt(@as(i32, q >> 4) - 8));
+                }
+            }
+        },
         .mxfp4 => {
             var b: usize = 0;
             while (b < out.len / 32) : (b += 1) {
@@ -165,6 +183,18 @@ test "scale decoders" {
     try std.testing.expectEqual(@as(f32, 224.0), ue4m3Half(0x7E)); // 448, the largest
     try std.testing.expectEqual(@as(f32, 0x1p-10), ue4m3Half(0x01)); // smallest subnormal 2^-9
     try std.testing.expectEqual(@as(f32, 0), ue4m3Half(0x7F));
+}
+
+test "q4_0 block decodes nibbles in ggml order" {
+    var blk: [18]u8 = @splat(0x88); // every value 0
+    std.mem.writeInt(u16, blk[0..2], @bitCast(@as(f16, 0.5)), .little);
+    blk[2] = 0x0_F; // value 0: 15 - 8 = 7, value 16: 0 - 8 = -8
+    var out: [32]f32 = undefined;
+    try dequantize(.q4_0, &blk, &out);
+    try std.testing.expectEqual(@as(f32, 3.5), out[0]);
+    try std.testing.expectEqual(@as(f32, -4), out[16]);
+    try std.testing.expectEqual(@as(f32, 0), out[1]);
+    try std.testing.expectEqual(@as(u64, 18 * 4), try Format.q4_0.bytesFor(128));
 }
 
 test "mxfp4 block decodes nibbles in ggml order" {

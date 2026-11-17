@@ -76,36 +76,105 @@ pub const ModelState = struct {
     prefix: []u8,
     gguf_header: ?gguf.Header = null,
     st_header: ?safetensors.Header = null,
+    /// A split GGUF's first part, whose metadata the header's keys point into.
+    meta_prefix: ?[]u8 = null,
 
     pub fn deinit(self: *ModelState, gpa: std.mem.Allocator) void {
         self.model.deinit(gpa);
         if (self.gguf_header) |*h| h.deinit(gpa);
         if (self.st_header) |*h| h.deinit();
         gpa.free(self.prefix);
+        if (self.meta_prefix) |p|
+        {
+            gpa.free(p);
+        }
     }
 };
 
+/// Reads a GGUF header from the start of `file`, reading more until it fits.
+fn readGgufHeader(gpa: std.mem.Allocator, file: File) !struct { h: gguf.Header, prefix: []u8 } {
+    var want: u64 = 4 << 20;
+    while (true) {
+        const n = @min(want, file.bytes);
+        const prefix = try gpa.alloc(u8, @intCast(n));
+        try file.readAt(0, prefix);
+        const h = gguf.parse(gpa, prefix, file.bytes) catch |err| {
+            gpa.free(prefix);
+            if (err == error.Truncated and n < file.bytes) {
+                want *= 4;
+                continue;
+            }
+            return err;
+        };
+        return .{ .h = h, .prefix = prefix };
+    }
+}
+
+/// The path of part `part` of the split GGUF that `path` belongs to (`...-00002-of-00002.gguf`).
+fn splitPart(gpa: std.mem.Allocator, path: []const u8, part: u32) ![:0]u8 {
+    const at = std.mem.lastIndexOf(u8, path, "-of-") orelse return error.NotSplitName;
+    if (at < 5)
+    {
+        return error.NotSplitName;
+    }
+    const out = try gpa.dupeSentinel(u8, path, 0);
+    _ = std.fmt.bufPrint(out[at - 5 .. at], "{d:0>5}", .{part}) catch return error.NotSplitName;
+    return out;
+}
+
+/// llama.cpp splits a large GGUF so that the first part holds the metadata and
+/// later parts the tensors. Given the part holding every tensor, adds the
+/// first part's keys to `h`; the engine then reads weights from this one file.
+fn addSplitMetadata(gpa: std.mem.Allocator, path: []const u8, h: *gguf.Header) !?[]u8 {
+    const count = h.getInt("split.count") orelse return null;
+    if (count < 2 or h.getString("general.architecture") != null)
+    {
+        return null;
+    }
+    if (h.getInt("split.tensors.count")) |all|
+    {
+        if (all != h.tensors.len)
+        {
+            std.debug.print("{s}: holds {d} of the model's {d} tensors; the engine needs them all in one part\n", .{ path, h.tensors.len, all });
+            return error.SplitTensors;
+        }
+    }
+    const first = try splitPart(gpa, path, 1);
+    defer gpa.free(first);
+    const f = try File.open(first);
+    defer f.close();
+    var meta = try readGgufHeader(gpa, f);
+    defer meta.h.deinit(gpa);
+    errdefer gpa.free(meta.prefix);
+    if (meta.h.tensors.len != 0)
+    {
+        return error.SplitTensors;
+    }
+    const kvs = try gpa.alloc(gguf.KV, meta.h.kvs.len + h.kvs.len);
+    @memcpy(kvs[0..meta.h.kvs.len], meta.h.kvs);
+    @memcpy(kvs[meta.h.kvs.len..], h.kvs);
+    gpa.free(h.kvs);
+    h.kvs = kvs;
+    return meta.prefix;
+}
+
 /// Reads as much of the file start as the header needs and builds the model.
-pub fn openModel(gpa: std.mem.Allocator, file: File, config_path: ?[]const u8) !ModelState {
+/// For a split GGUF, `path` names the part with the tensors.
+pub fn openModel(gpa: std.mem.Allocator, path: []const u8, file: File, config_path: ?[]const u8) !ModelState {
     var magic: [8]u8 = undefined;
     try file.readAt(0, &magic);
     if (std.mem.eql(u8, magic[0..4], "GGUF")) {
-        var want: u64 = 4 << 20;
-        while (true) {
-            const n = @min(want, file.bytes);
-            const prefix = try gpa.alloc(u8, @intCast(n));
-            try file.readAt(0, prefix);
-            var h = gguf.parse(gpa, prefix, file.bytes) catch |err| {
-                gpa.free(prefix);
-                if (err == error.Truncated and n < file.bytes) {
-                    want *= 4;
-                    continue;
-                }
-                return err;
-            };
-            errdefer h.deinit(gpa);
-            return .{ .kind = "GGUF", .model = try loader.Model.fromGguf(gpa, h), .prefix = prefix, .gguf_header = h };
+        var got = try readGgufHeader(gpa, file);
+        errdefer gpa.free(got.prefix);
+        errdefer got.h.deinit(gpa);
+        if (got.h.tensors.len == 0 and (got.h.getInt("split.count") orelse 1) > 1)
+        {
+            std.debug.print("{s} is the metadata part of a split GGUF; pass the part with the tensors\n", .{path});
+            return error.SplitTensors;
         }
+        const meta = try addSplitMetadata(gpa, path, &got.h);
+        errdefer if (meta) |p| gpa.free(p);
+        return .{ .kind = "GGUF", .model = try loader.Model.fromGguf(gpa, got.h), .prefix = got.prefix, .gguf_header = got.h, .meta_prefix = meta };
     }
     const n = safetensors.headerBytes(&magic);
     if (n > file.bytes) return error.UnknownFormat;

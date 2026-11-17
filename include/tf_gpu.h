@@ -79,6 +79,15 @@ int tf_gpu_attention(tf_gpu *g, const float *q, int n, int pos0, int heads, int 
 int tf_gpu_delta_rule(tf_gpu *g, const float *mixed, const float *beta, const float *decay, int n, int cd, int kh, int dk,
                       int vh, int dv, uint64_t state, float *core);
 
+/* QSA attention (TASK-31) for n queries from pos0 over an f32 cache's tiles, 256-dim heads:
+ * q holds their n x heads x 256 queries and iq their n x ih x dim indexer queries; blocks is
+ * the device address of every complete block's pooled key (dim each). A query with more than
+ * `top` complete blocks keeps the `top` the indexer scores highest (ties to the lower block),
+ * written ascending to kept (n x top) when kept is not NULL; out gets n x heads x 256. */
+int tf_gpu_qsa(tf_gpu *g, const float *q, const float *iq, int n, int pos0, int heads, int kv_heads, int kvd, int ih, int dim,
+               int bsize, int top, float scale, uint64_t blocks, const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles,
+               float *out, int *kept);
+
 /* One layer's experts for n tokens, k calls each: expert e takes batch rows first[e]
  * on, row i is token src[i], and y[t] adds call j's row inv[t k + j] times w[t k + j]. */
 int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,

@@ -24,6 +24,17 @@
       "speed": 1
     },
     {
+      "id": "qwen38-chat",
+      "source": "bench/trace/2026-11-17/chat-qwen38-one-spark.jsonl.gz",
+      "title": "Chat: Qwen3.8-Flash-Next on one DGX Spark, experts streamed from NVMe",
+      "summary": "The same scripted three-turn chat with Qwen3.8-Flash-Next (TASK-31): 48 layers mixing Gated DeltaNet and attention, 512 experts chosen 10 at a time. The Q8_0 weights are larger than gx10-02's memory, so the experts stream from NVMe through a 12,000-slot cache on the GPU. It was recorded at 7 to 8 tokens/s with reasoning on.",
+      "results": "bench/trace/2026-11-17-qwen38-chat.md",
+      "ranks": [
+        "gx10-02"
+      ],
+      "speed": 1
+    },
+    {
       "id": "three-sparks-chat",
       "source": "bench/trace/2026-11-16/chat-three-sparks.jsonl.gz",
       "title": "Chat: Qwen3-30B-A3B split across three DGX Sparks over RDMA",

@@ -19,15 +19,23 @@
 //! output gate and rotary embeddings on part of each head. Every MoE block
 //! adds a gated shared expert.
 //!
+//! Qwen3.8-Flash-Next (TASK-31, matching Qwen4ExpForCausalLM) adds three
+//! things on top (`qwen38.zig`): a residual of several streams mixed by
+//! hyper-connections in place of the norms, QSA attention that keeps each
+//! query's highest-scoring blocks of tokens, and a hashed n-gram embedding
+//! at one layer.
+//!
 //! Weights stay in their GGUF block format and are dequantized one row at a
 //! time. The MoE block calls experts through `Moe`, so a process can run the
 //! experts it owns and send the rest to a peer (`olmoe_run.zig`).
 const std = @import("std");
+const builtin = @import("builtin");
 const quant = @import("quant.zig");
 const gguf = @import("gguf.zig");
 const loader = @import("loader.zig");
 const pool = @import("pool.zig");
 const kv_format = @import("kv_format.zig");
+const qwen38 = @import("qwen38.zig");
 pub const KvFormat = kv_format.KvFormat;
 
 /// The model families the engine runs.
@@ -38,6 +46,8 @@ pub const Arch = enum {
     qwen3moe,
     /// Qwen3.5-MoE (TASK-29): Qwen3-MoE plus Gated DeltaNet layers, gated attention, and a shared expert.
     qwen35moe,
+    /// Qwen3.8-Flash-Next (TASK-31): Qwen3.5-MoE with hyper-connections, QSA, and an n-gram embedding.
+    qwen4exp,
 };
 
 pub const Config = struct {
@@ -71,6 +81,24 @@ pub const Config = struct {
     ssm_dk: usize = 0,
     ssm_v_heads: usize = 0,
     ssm_dv: usize = 0,
+    /// The Gated DeltaNet's output gate is a sigmoid rather than SiLU (TASK-31).
+    ssm_sigmoid_gate: bool = false,
+    /// Residual streams mixed by hyper-connections (TASK-31), 1 for a plain residual, and the mix's rank.
+    streams: usize = 1,
+    hc_rank: usize = 0,
+    /// QSA (TASK-31): indexer heads (0 for dense attention), their size, tokens kept, and tokens per block.
+    qsa_heads: usize = 0,
+    qsa_dim: usize = 0,
+    qsa_budget: usize = 0,
+    qsa_block: usize = 0,
+    /// The n-gram embedding (TASK-31): its layer, longest n-gram, hash heads per n-gram size,
+    /// values per table row, convolution taps, and the token that starts n-grams over.
+    ple_layer: ?usize = null,
+    ple_ngram: usize = 0,
+    ple_heads_per: usize = 0,
+    ple_row: usize = 0,
+    ple_conv: usize = 0,
+    ple_eos: u32 = 0,
 
     pub fn qDim(self: Config) usize
     {
@@ -126,6 +154,30 @@ pub const Config = struct {
     pub fn kvDim(self: Config) usize
     {
         return self.kv_heads * self.head_dim;
+    }
+
+    /// Floats of one token's residual: every stream.
+    pub fn residual(self: Config) usize
+    {
+        return self.streams * self.d_model;
+    }
+
+    /// Complete blocks QSA keeps per query.
+    pub fn qsaTop(self: Config) usize
+    {
+        return self.qsa_budget / self.qsa_block;
+    }
+
+    /// The n-gram embedding's hash heads (each with its own table), across n-gram sizes 2 and up.
+    pub fn pleHeads(self: Config) usize
+    {
+        return (self.ple_ngram - 1) * self.ple_heads_per;
+    }
+
+    /// Past inputs its dilated convolution reads: taps apart by the n-gram size.
+    pub fn pleHeld(self: Config) usize
+    {
+        return (self.ple_conv - 1) * self.ple_ngram;
     }
 
     pub fn fromGguf(h: gguf.Header) !Config {
@@ -187,7 +239,7 @@ pub const Config = struct {
             .eps = g.float("attention.layer_norm_rms_epsilon", 1e-5),
             .rope_theta = g.float("rope.freq_base", 10000),
         };
-        if (arch == .qwen35moe)
+        if (arch == .qwen35moe or arch == .qwen4exp)
         {
             cfg.rope_dim = g.opt("rope.dimension_count") orelse 0;
             cfg.attn_interval = g.opt("full_attention_interval") orelse 4;
@@ -204,8 +256,56 @@ pub const Config = struct {
             }
             cfg.ssm_dv = inner / cfg.ssm_v_heads;
         }
+        if (arch == .qwen4exp)
+        {
+            cfg.ssm_sigmoid_gate = true;
+            cfg.streams = try g.int("hyper_connection.count");
+            cfg.hc_rank = try g.int("hyper_connection.low_rank");
+            cfg.qsa_heads = try g.int("attention.indexer.head_count");
+            cfg.qsa_dim = try g.int("attention.indexer.key_length");
+            cfg.qsa_budget = try g.int("attention.indexer.top_k");
+            // Every attention layer compresses by the same ratio, and no other layer does.
+            for (0..cfg.layers) |l|
+            {
+                const r: usize = @intCast(h.intAt(g.key("attention.compress_ratios"), l) orelse return error.MissingKey);
+                if (cfg.recurrent(l) != (r == 0) or (r != 0 and cfg.qsa_block != 0 and r != cfg.qsa_block))
+                {
+                    return error.Unsupported;
+                }
+                if (r != 0)
+                {
+                    cfg.qsa_block = r;
+                }
+            }
+            if (cfg.streams < 2 or cfg.qsa_block == 0 or cfg.qsa_budget % cfg.qsa_block != 0 or cfg.qsa_dim > max_head or cfg.qsa_dim > cfg.head_dim)
+            {
+                return error.Unsupported;
+            }
+            // One layer with the n-gram embedding, as in the released model.
+            if (h.intAt(g.key("ple.layers"), 1) != null)
+            {
+                return error.Unsupported;
+            }
+            if (h.intAt(g.key("ple.layers"), 0)) |pl|
+            {
+                cfg.ple_layer = @intCast(pl);
+                cfg.ple_ngram = try g.int("ple.ngram_size");
+                cfg.ple_heads_per = try g.int("ple.heads_per_ngram");
+                cfg.ple_conv = try g.int("ple.conv_kernel");
+                cfg.ple_eos = @intCast(try g.int("ple.eos_token_id"));
+                cfg.ple_row = try g.int("embedding_length_per_layer_input");
+                if (cfg.ple_ngram < 2 or cfg.ple_ngram > max_ngram or cfg.pleHeads() > max_ple_heads or cfg.ple_layer.? >= cfg.layers)
+                {
+                    return error.Unsupported;
+                }
+            }
+        }
         return cfg;
     }
+
+    /// Longest n-gram and most hash heads the n-gram embedding handles.
+    pub const max_ngram = 4;
+    pub const max_ple_heads = 64;
 
     /// Turns on YaRN with `factor` over `original` positions (Qwen uses 4 over 32,768 for 128k).
     pub fn withYarn(self: Config, factor: f32, original: usize) Config
@@ -270,6 +370,28 @@ pub const ExpertJob = struct {
 /// true, or false to use the CPU path.
 pub var gpu_attention: ?*const fn (job: AttentionJob) bool = null;
 
+/// Set with a GPU (TASK-31): QSA attention for one layer there (block scores, the kept
+/// blocks, and attention over them), or false to use the CPU path.
+pub var gpu_qsa: ?*const fn (job: QsaJob) bool = null;
+
+/// One QSA layer's attention for `n` new tokens from `pos0`: their queries (normalized and
+/// rotated), indexer queries, the device address of every complete block's pooled key, the
+/// cache's tiles, and the outputs; `kept` (n x qsaTop(), or empty) takes each selecting
+/// query's blocks, ascending.
+pub const QsaJob = struct {
+    cfg: Config,
+    q: []const f32,
+    iq: []const f32,
+    n: usize,
+    pos0: usize,
+    scale: f32,
+    blocks_dev: u64,
+    tiles_k: []const u64,
+    tiles_v: []const u64,
+    out: []f32,
+    kept: []i32,
+};
+
 /// Time spent in each part of `step`, summed over every call (TASK-12).
 pub const Profile = struct {
     projections: u64 = 0,
@@ -281,6 +403,9 @@ pub const Profile = struct {
     router: u64 = 0,
     experts: u64 = 0,
     head: u64 = 0,
+    /// QSA layer passes that chose blocks (TASK-31), on the GPU and on the CPU.
+    qsa_gpu: u64 = 0,
+    qsa_cpu: u64 = 0,
 
     /// Adds the time since `t` to `field` and moves `t` on.
     fn lap(field: *u64, t: *u64) void
@@ -345,6 +470,13 @@ pub const Mat = struct {
 
     pub fn rowBytes(self: Mat) usize {
         return self.cols / self.format.blockValues() * self.format.blockBytes();
+    }
+
+    /// Rows `first` to `first + count` - 1 as a matrix of their own (one part of a merged weight).
+    pub fn rowRange(self: Mat, first: usize, count: usize) Mat
+    {
+        const rb = self.rowBytes();
+        return .{ .format = self.format, .rows = count, .cols = self.cols, .bytes = self.bytes[first * rb ..][0 .. count * rb] };
     }
 
     /// One row, dequantized into `out` (`cols` values).
@@ -458,6 +590,86 @@ pub fn dot(a: []const f32, b: []const f32) f32 {
     var s = @reduce(.Add, acc);
     while (i < a.len) : (i += 1) s += a[i] * b[i];
     return s;
+}
+
+/// Whether every value is finite: x times 0 is 0 for those, NaN for infinities and NaNs.
+pub fn allFinite(x: []const f32) bool
+{
+    const V = @Vector(16, f32);
+    var acc: V = @splat(0);
+    var i: usize = 0;
+    while (i + 16 <= x.len) : (i += 16)
+    {
+        const v: V = x[i..][0..16].*;
+        acc += v * @as(V, @splat(0));
+    }
+    var s = @reduce(.Add, acc);
+    while (i < x.len) : (i += 1)
+    {
+        s += x[i] * 0;
+    }
+    return s == 0;
+}
+
+/// How many rows of `width` values hold a non-finite value.
+fn badRows(x: []const f32, width: usize) usize
+{
+    var bad: usize = 0;
+    for (0..x.len / width) |r|
+    {
+        bad += @intFromBool(!allFinite(x[r * width ..][0..width]));
+    }
+    return bad;
+}
+
+fn firstBadRow(x: []const f32, width: usize) usize
+{
+    for (0..x.len / width) |r|
+    {
+        if (!allFinite(x[r * width ..][0..width]))
+        {
+            return r;
+        }
+    }
+    return x.len / width;
+}
+
+/// The largest magnitude in `x`, or NaN if any value is NaN.
+pub fn maxAbs(x: []const f32) f32
+{
+    var m: f32 = 0;
+    for (x) |v|
+    {
+        if (std.math.isNan(v))
+        {
+            return v;
+        }
+        m = @max(m, @abs(v));
+    }
+    return m;
+}
+
+/// TF_NAN_TRACE=1 logs each layer's largest values and any expert call that comes out huge (TASK-31's rare NaN).
+pub fn nanTrace() bool
+{
+    const S = struct {
+        var on: ?bool = null;
+    };
+    if (S.on == null)
+    {
+        S.on = builtin.os.tag != .windows and if (std.c.getenv("TF_NAN_TRACE")) |v| v[0] == '1' else false;
+    }
+    return S.on.?;
+}
+
+test "allFinite catches NaN and infinities" {
+    var x: [37]f32 = @splat(1.5);
+    try std.testing.expect(allFinite(&x));
+    x[20] = std.math.nan(f32);
+    try std.testing.expect(!allFinite(&x));
+    x[20] = 1;
+    x[36] = -std.math.inf(f32);
+    try std.testing.expect(!allFinite(&x));
 }
 
 pub fn rmsnorm(x: []const f32, w: []const f32, eps: f32, out: []f32) void {
@@ -764,7 +976,7 @@ const Recurrent = struct {
                     const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(dv)) + self.cfg.eps);
                     for (o, zz, self.w) |*e, g, wt|
                     {
-                        e.* = wt * (e.* * inv) * silu(g);
+                        e.* = wt * (e.* * inv) * (if (self.cfg.ssm_sigmoid_gate) sigmoid(g) else silu(g));
                     }
                 }
             }
@@ -910,6 +1122,11 @@ pub const Expert = struct {
                 return;
             }
         }
+        self.forwardCpu(x, out, scratch);
+    }
+
+    /// `forward` without the GPU.
+    pub fn forwardCpu(self: Expert, x: []const f32, out: []f32, scratch: []f32) void {
         const f = self.gate.rows;
         const g = scratch[0..f];
         const u = scratch[f..][0..f];
@@ -1192,6 +1409,52 @@ pub const Layer = struct {
     /// The shared expert every token goes through, scaled by a sigmoid of `shared_gate` dotted with the input.
     shared: ?Expert = null,
     shared_gate: []f32 = &.{},
+    /// With hyper-connections (TASK-31), the mixes in place of `attn_norm` and `ffn_norm`.
+    hc_attn: ?Hyper = null,
+    hc_ffn: ?Hyper = null,
+    /// QSA's indexer, in an attention layer of a model with QSA.
+    indexer: ?Indexer = null,
+    /// The n-gram embedding, in its one layer.
+    ple: ?PleLayer = null,
+};
+
+/// A hyper-connection (TASK-31): an RMSNorm over each stream (`norm`, streams x d_model),
+/// a low-rank gate (`down`, then `up`) that mixes the streams into one input, and with
+/// `inject` rows after `down`'s, each stream's weight for the block's output.
+pub const Hyper = struct {
+    norm: []f32,
+    /// hc_rank rows, then `streams` inject rows unless this is the final mix.
+    down: Mat,
+    up: Mat,
+    inject: bool,
+};
+
+/// QSA's indexer (TASK-31): query heads and one key, each with an RMSNorm.
+pub const Indexer = struct {
+    q: Mat,
+    k: Mat,
+    q_norm: []f32,
+    k_norm: []f32,
+};
+
+/// The n-gram embedding's layer weights (TASK-31); the table itself is in `Weights.ple`.
+pub const PleLayer = struct {
+    key: Mat,
+    value: Mat,
+    norm_key: []f32,
+    norm_query: []f32,
+    norm_conv: []f32,
+    /// residual() rows of ple_conv taps, oldest input first.
+    conv: []f32,
+};
+
+/// The n-gram embedding's hashed tables (TASK-31): one table per hash head, stacked
+/// as `offsets` and `sizes` say, and each n-gram position's multiplier.
+pub const Ple = struct {
+    table: Mat,
+    mult: [Config.max_ngram]u64,
+    offsets: [Config.max_ple_heads]u64,
+    sizes: [Config.max_ple_heads]u64,
 };
 
 /// A Gated DeltaNet layer's weights, in llama.cpp's layout: value heads tiled,
@@ -1216,8 +1479,11 @@ pub const Weights = struct {
     cfg: Config,
     embed: Mat,
     layers: []Layer,
+    /// Empty with hyper-connections, which end in `out_hc` instead.
     out_norm: []f32,
     head: Mat,
+    out_hc: ?Hyper = null,
+    ple: ?Ple = null,
     arena: std.heap.ArenaAllocator,
 
     pub fn deinit(self: *Weights) void {
@@ -1284,9 +1550,53 @@ pub const Weights = struct {
         };
         const g: Get = .{ .hh = h, .p = plan, .reg = region, .al = a };
         const d = cfg.d_model;
+        const hyper = cfg.streams > 1;
+        const R = cfg.residual();
+        const Hc = struct {
+            fn get(gg: Get, c: Config, prefix: []const u8, inject: bool) !Hyper
+            {
+                var b: [64]u8 = undefined;
+                const fmt = std.fmt.bufPrint;
+                const r = c.residual();
+                return .{
+                    .norm = try gg.vec(fmt(&b, "{s}_norm.weight", .{prefix}) catch unreachable, r),
+                    .down = if (inject) try gg.mat(fmt(&b, "{s}_down_inject.weight", .{prefix}) catch unreachable, c.hc_rank + c.streams, r) else try gg.mat(fmt(&b, "{s}_down.weight", .{prefix}) catch unreachable, c.hc_rank, r),
+                    .up = try gg.mat(fmt(&b, "{s}_up.weight", .{prefix}) catch unreachable, r, c.hc_rank),
+                    .inject = inject,
+                };
+            }
+        };
         self.embed = try g.mat("token_embd.weight", cfg.vocab, d);
         self.head = try g.mat("output.weight", cfg.vocab, d);
-        self.out_norm = try g.vec("output_norm.weight", d);
+        if (hyper)
+        {
+            self.out_norm = &.{};
+            self.out_hc = try Hc.get(g, cfg, "output_hc", false);
+        }
+        else
+        {
+            self.out_norm = try g.vec("output_norm.weight", d);
+        }
+        if (cfg.ple_layer != null)
+        {
+            const t = try g.info("per_layer_token_embd.weight");
+            var p: Ple = .{ .table = undefined, .mult = @splat(0), .offsets = @splat(0), .sizes = @splat(0) };
+            p.table = try g.mat("per_layer_token_embd.weight", @intCast(t.dims[1]), cfg.ple_row);
+            for (0..cfg.ple_ngram) |i|
+            {
+                p.mult[i] = @bitCast(h.intAt("qwen4exp.ple.layer_multipliers", i) orelse return error.MissingKey);
+            }
+            for (0..cfg.pleHeads()) |i|
+            {
+                p.offsets[i] = @bitCast(h.intAt("qwen4exp.ple.head_offsets", i) orelse return error.MissingKey);
+                p.sizes[i] = @bitCast(h.intAt("qwen4exp.ple.head_vocab_sizes", i) orelse return error.MissingKey);
+                if (p.sizes[i] == 0 or p.offsets[i] + p.sizes[i] > p.table.rows)
+                {
+                    return error.BadShape;
+                }
+            }
+            self.ple = p;
+        }
         self.layers = try a.alloc(Layer, cfg.layers);
         for (self.layers, 0..) |*l, i| {
             var buf: [64]u8 = undefined;
@@ -1299,11 +1609,48 @@ pub const Weights = struct {
             const qn = if (cfg.arch == .olmoe) cfg.qDim() else cfg.head_dim;
             const kn = if (cfg.arch == .olmoe) cfg.kvDim() else cfg.head_dim;
             l.* = .{
-                .attn_norm = try g.vec(n(&buf, i, "attn_norm"), d),
-                .ffn_norm = try g.vec(n(&buf, i, if (cfg.arch == .qwen35moe) "post_attention_norm" else "ffn_norm"), d),
+                .attn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, "attn_norm"), d),
+                .ffn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, if (cfg.arch == .qwen35moe) "post_attention_norm" else "ffn_norm"), d),
                 .router = try g.mat(n(&buf, i, "ffn_gate_inp"), cfg.experts, d),
             };
-            if (cfg.recurrent(i))
+            if (hyper)
+            {
+                var b2: [64]u8 = undefined;
+                l.hc_attn = try Hc.get(g, cfg, std.fmt.bufPrint(&b2, "blk.{d}.hc_attn", .{i}) catch unreachable, true);
+                l.hc_ffn = try Hc.get(g, cfg, std.fmt.bufPrint(&b2, "blk.{d}.hc_ffn", .{i}) catch unreachable, true);
+            }
+            if (cfg.ple_layer == i)
+            {
+                const e = cfg.pleHeads() * cfg.ple_row;
+                l.ple = .{
+                    .key = try g.mat(n(&buf, i, "ple_key"), R, e),
+                    .value = try g.mat(n(&buf, i, "ple_value"), d, e),
+                    .norm_key = try g.vec(n(&buf, i, "ple_norm_key"), R),
+                    .norm_query = try g.vec(n(&buf, i, "ple_norm_query"), R),
+                    .norm_conv = try g.vec(n(&buf, i, "ple_norm_conv"), R),
+                    .conv = try g.flat(n(&buf, i, "ple_conv1d"), R * cfg.ple_conv),
+                };
+            }
+            if (cfg.recurrent(i) and cfg.arch == .qwen4exp)
+            {
+                // llama.cpp merges weights that read the same input: [qkv; z] and [beta; alpha].
+                var b2: [64]u8 = undefined;
+                const inner = cfg.ssm_v_heads * cfg.ssm_dv;
+                const qkvz = try g.mat(n(&buf, i, "attn_qkv_gate"), cfg.convDim() + inner, d);
+                const ba = try g.mat(n(&buf, i, "ssm_beta_alpha"), 2 * cfg.ssm_v_heads, d);
+                l.lin = .{
+                    .qkv = qkvz.rowRange(0, cfg.convDim()),
+                    .z = qkvz.rowRange(cfg.convDim(), inner),
+                    .beta = ba.rowRange(0, cfg.ssm_v_heads),
+                    .alpha = ba.rowRange(cfg.ssm_v_heads, cfg.ssm_v_heads),
+                    .a = try g.flat(std.fmt.bufPrint(&b2, "blk.{d}.ssm_a", .{i}) catch unreachable, cfg.ssm_v_heads),
+                    .dt_bias = try g.flat(std.fmt.bufPrint(&b2, "blk.{d}.ssm_dt.bias", .{i}) catch unreachable, cfg.ssm_v_heads),
+                    .conv = try g.flat(std.fmt.bufPrint(&b2, "blk.{d}.ssm_conv1d.weight", .{i}) catch unreachable, cfg.convDim() * cfg.ssm_conv),
+                    .norm = try g.vec(n(&buf, i, "ssm_norm"), cfg.ssm_dv),
+                    .out = try g.mat(n(&buf, i, "ssm_out"), d, inner),
+                };
+            }
+            else if (cfg.recurrent(i))
             {
                 var b2: [64]u8 = undefined;
                 const inner = cfg.ssm_v_heads * cfg.ssm_dv;
@@ -1329,6 +1676,15 @@ pub const Weights = struct {
                 l.o = try g.mat(n(&buf, i, "attn_output"), d, cfg.qDim());
                 l.q_norm = try g.vec(n(&buf, i, "attn_q_norm"), qn);
                 l.k_norm = try g.vec(n(&buf, i, "attn_k_norm"), kn);
+                if (cfg.qsa_heads > 0)
+                {
+                    l.indexer = .{
+                        .q = try g.mat(n(&buf, i, "indexer.q_proj"), cfg.qsa_heads * cfg.qsa_dim, d),
+                        .k = try g.mat(n(&buf, i, "indexer.k_proj"), cfg.qsa_dim, d),
+                        .q_norm = try g.vec(n(&buf, i, "indexer.q_norm"), cfg.qsa_dim),
+                        .k_norm = try g.vec(n(&buf, i, "indexer.k_norm"), cfg.qsa_dim),
+                    };
+                }
             }
             if (cfg.shared_ff != 0)
             {
@@ -1348,8 +1704,12 @@ pub const Weights = struct {
 /// reference: hidden state after each layer (layers x n x d_model) and the
 /// chosen experts (layers x n x top_k).
 pub const Trace = struct {
+    /// layers x n x residual(): with hyper-connections, every stream.
     hidden: []f32,
     topk: []u32,
+    /// With QSA (TASK-31): per attention layer and token, the blocks it kept in
+    /// ascending order (attention layers x n x qsaTop()), or -1s where it kept every block.
+    qsa: []i32 = &.{},
 };
 
 /// Top-k of `p` by value, largest first; ties go to the lower index (as
@@ -1393,6 +1753,17 @@ pub const KvCache = struct {
     state_floats: usize = 0,
     /// Device address of `state` when a GPU updates it in place, else 0.
     dev_state: u64 = 0,
+    /// QSA (TASK-31), per attention layer: each position's indexer key, then each complete block's
+    /// pooled key, `qsa_floats` apiece.
+    qsa: []f32 = &.{},
+    qsa_floats: usize = 0,
+    qsa_dim: usize = 0,
+    /// Device address of `qsa` when a GPU reads it in place, else 0.
+    dev_qsa: u64 = 0,
+    /// The n-gram embedding's state (TASK-31): the last tokens before `len`, and its convolution's past inputs.
+    ple_ctx: [Config.max_ngram]u32 = @splat(0),
+    ple_eos: u32 = 0,
+    ple_conv: []f32 = &.{},
 
     /// Where a tiered cache keeps its positions (`kv_tier.zig`). Attention
     /// on it runs on the GPU only.
@@ -1408,9 +1779,74 @@ pub const KvCache = struct {
     };
 
     /// A cache that keeps its positions through `tier`, in `format`, with room for `cap`.
-    pub fn tiered(cfg: Config, cap: usize, format: KvFormat, tier: Tier) KvCache
+    /// What is not keys and values (Gated DeltaNet state, QSA keys, n-gram state) stays in memory.
+    pub fn tiered(cfg: Config, cap_in: usize, format: KvFormat, tier: Tier) !KvCache
     {
-        return .{ .cap = cap, .d = cfg.kvDim(), .kv_heads = cfg.kv_heads, .format = format, .row = format.rows(cfg.kvDim(), cfg.kv_heads), .k = &.{}, .v = &.{}, .tier = tier };
+        // Rounded up to whole tiles, as `initAs` does, so QSA's block keys line up with it.
+        const cap = (cap_in + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions * AttentionJob.tile_positions;
+        var self: KvCache = .{ .cap = cap, .d = cfg.kvDim(), .kv_heads = cfg.kv_heads, .format = format, .row = format.rows(cfg.kvDim(), cfg.kv_heads), .k = &.{}, .v = &.{}, .tier = tier };
+        try self.addExtras(cfg);
+        return self;
+    }
+
+    /// Everything but the keys and values, for `cap` positions: allocated, reset, and mapped for a GPU.
+    fn addExtras(self: *KvCache, cfg: Config) !void
+    {
+        if (cfg.recurrentLayers() > 0)
+        {
+            self.state_floats = cfg.stateFloats();
+            self.state = try big_allocator.alloc(f32, cfg.recurrentLayers() * self.state_floats);
+            @memset(self.state, 0);
+        }
+        errdefer big_allocator.free(self.state);
+        if (cfg.qsa_heads > 0)
+        {
+            self.qsa_dim = cfg.qsa_dim;
+            self.qsa_floats = self.cap * cfg.qsa_dim + self.cap / cfg.qsa_block * cfg.qsa_dim;
+            self.qsa = try big_allocator.alloc(f32, cfg.attnLayers() * self.qsa_floats);
+        }
+        errdefer big_allocator.free(self.qsa);
+        if (cfg.ple_layer != null)
+        {
+            self.ple_eos = cfg.ple_eos;
+            self.ple_conv = try big_allocator.alloc(f32, cfg.pleHeld() * cfg.residual());
+        }
+        self.resetPle();
+        if (gpu_register) |reg|
+        {
+            if (self.state.len > 0 and gpu_delta_rule != null)
+            {
+                self.dev_state = reg(std.mem.sliceAsBytes(self.state)) orelse 0;
+            }
+            if (self.qsa.len > 0 and gpu_qsa != null)
+            {
+                self.dev_qsa = reg(std.mem.sliceAsBytes(self.qsa)) orelse 0;
+            }
+        }
+    }
+
+    fn freeExtras(self: *KvCache) void
+    {
+        if (gpu_unregister) |un|
+        {
+            if (self.dev_state != 0)
+            {
+                un(std.mem.sliceAsBytes(self.state));
+            }
+            if (self.dev_qsa != 0)
+            {
+                un(std.mem.sliceAsBytes(self.qsa));
+            }
+        }
+        big_allocator.free(self.state);
+        big_allocator.free(self.qsa);
+        big_allocator.free(self.ple_conv);
+    }
+
+    /// Device address of an attention layer's complete blocks' pooled keys, or 0 without a GPU.
+    pub fn qsaBlocksDev(self: KvCache, layer: usize) u64
+    {
+        return if (self.dev_qsa == 0) 0 else self.dev_qsa + (layer * self.qsa_floats + self.cap * self.qsa_dim) * @sizeOf(f32);
     }
 
     /// Room for `cap` positions in every layer, in f32.
@@ -1438,19 +1874,10 @@ pub const KvCache = struct {
         const v = try allocPages(cfg.attnLayers() * layer_bytes[1]);
         errdefer freePages(v);
         var self: KvCache = .{ .cap = room, .d = d, .kv_heads = cfg.kv_heads, .format = format, .row = row, .layer_bytes = layer_bytes, .k = k, .v = v };
-        if (cfg.recurrentLayers() > 0)
-        {
-            self.state_floats = cfg.stateFloats();
-            self.state = try big_allocator.alloc(f32, cfg.recurrentLayers() * self.state_floats);
-            @memset(self.state, 0);
-        }
-        errdefer big_allocator.free(self.state);
+        try self.addExtras(cfg);
+        errdefer self.freeExtras();
         if (gpu_register) |reg|
         {
-            if (self.state.len > 0 and gpu_delta_rule != null)
-            {
-                self.dev_state = reg(std.mem.sliceAsBytes(self.state)) orelse 0;
-            }
             if (AttentionJob.gpuHeadDim(cfg.head_dim))
             {
                 if (reg(k)) |dk|
@@ -1473,6 +1900,7 @@ pub const KvCache = struct {
     pub fn deinit(self: *KvCache, a: std.mem.Allocator) void
     {
         _ = a;
+        self.freeExtras();
         if (self.tier != null)
         {
             self.* = undefined;
@@ -1486,16 +1914,8 @@ pub const KvCache = struct {
                 un(self.v);
             }
         }
-        if (self.dev_state != 0)
-        {
-            if (gpu_unregister) |un|
-            {
-                un(std.mem.sliceAsBytes(self.state));
-            }
-        }
         freePages(self.k);
         freePages(self.v);
-        big_allocator.free(self.state);
         self.* = undefined;
     }
 
@@ -1504,6 +1924,26 @@ pub const KvCache = struct {
     {
         self.len = 0;
         @memset(self.state, 0);
+        self.resetPle();
+    }
+
+    /// Before the first token, n-grams look back on end-of-text tokens and the convolution on zeros.
+    fn resetPle(self: *KvCache) void
+    {
+        self.ple_ctx = @splat(self.ple_eos);
+        @memset(self.ple_conv, 0);
+    }
+
+    /// One attention layer's QSA indexer keys, `qsa_dim` per position.
+    pub fn qsaKeys(self: KvCache, layer: usize) []f32
+    {
+        return self.qsa[layer * self.qsa_floats ..][0 .. self.cap * self.qsa_dim];
+    }
+
+    /// Its complete blocks' pooled keys, normalized and rotated, `qsa_dim` per block.
+    pub fn qsaBlocks(self: KvCache, layer: usize) []f32
+    {
+        return self.qsa[layer * self.qsa_floats + self.cap * self.qsa_dim ..][0 .. self.qsa_floats - self.cap * self.qsa_dim];
     }
 
     /// Keeps the first `len` positions and returns how many it kept. A Gated
@@ -1678,7 +2118,12 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const kvd = cfg.kvDim();
     const group = cfg.heads / cfg.kv_heads;
     const rope: Rope = .init(cfg);
-    const h = try a.alloc(f32, n * d);
+    // With hyper-connections, each token's residual is several streams, and `inj` weighs a block's output per stream.
+    const R = cfg.residual();
+    const h = try a.alloc(f32, n * R);
+    const inj = try a.alloc(f32, n * cfg.streams);
+    const hc_bufs = try qwen38.Buffers.init(a, cfg, n);
+    const iq = try a.alloc(f32, n * cfg.qsa_heads * cfg.qsa_dim);
     const x = try a.alloc(f32, n * d);
     const q = try a.alloc(f32, n * qd);
     // With an output gate, the query projection gives each head's query then its gate.
@@ -1719,9 +2164,15 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         {
             return error.BadToken;
         }
-        w.embed.row(tok, h[t * d ..][0..d]);
+        const ht = h[t * R ..][0..R];
+        w.embed.row(tok, ht[0..d]);
+        for (1..cfg.streams) |s|
+        {
+            @memcpy(ht[s * d ..][0..d], ht[0..d]);
+        }
     }
-    const ahead: Guesser = .{ .w = w, .moe = moe, .n = n, .kx = kx, .out = guess, .val = guess_val, .votes = votes, .wanted_list = wanted_list };
+    const guess_inj = try a.alloc(f32, if (la != null) n * cfg.streams else 0);
+    const ahead: Guesser = .{ .w = w, .moe = moe, .n = n, .kx = kx, .out = guess, .val = guess_val, .votes = votes, .wanted_list = wanted_list, .hc = &hc_bufs, .inj = guess_inj };
     if (cache.tier) |tr|
     {
         try tr.begin(tr.ctx, pos0);
@@ -1744,7 +2195,18 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     {
         const layer_t0 = if (la != null) nowNs() else 0;
         var pt = nowNs();
-        pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.attn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
+        if (l.ple) |pl|
+        {
+            try qwen38.ple(a, cfg, w.ple.?, pl, &hc_bufs, &cache.ple_ctx, cache.ple_conv, tokens, h);
+        }
+        if (l.hc_attn) |hy|
+        {
+            qwen38.mix(cfg, hy, &hc_bufs, h, n, x, inj);
+        }
+        else
+        {
+            pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.attn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
+        }
         if (l.lin) |lin|
         {
             const ri = cfg.recurrentIndex(li);
@@ -1769,9 +2231,63 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             Profile.lap(&profile.projections, &pt);
             pool.parallelFor(threads, n, TokenLoops.QkRope{ .cfg = cfg, .rope = &rope, .q = q, .k = kn, .q_norm = l.q_norm, .k_norm = l.k_norm, .cs = rope_cs, .sn = rope_sn }, TokenLoops.QkRope.run);
             cache.store(ai, pos0, n, kn, vn);
+            // QSA keeps only some blocks once there are more than its budget; until then attention is dense.
+            const sparse = if (l.indexer) |ix| blk: {
+                qwen38.index(cfg, ix, &rope, rope_cs, rope_sn, x, n, pos0, cache.qsaKeys(ai), cache.qsaBlocks(ai), iq, scratch);
+                break :blk !qwen38.dense(cfg, pos0, n);
+            } else false;
+            const kept: []i32 = if (trace) |tr| (if (tr.qsa.len > 0) tr.qsa[ai * n * cfg.qsaTop() ..][0 .. n * cfg.qsaTop()] else &.{}) else &.{};
+            if (l.indexer != null and !sparse)
+            {
+                @memset(kept, -1);
+            }
             Profile.lap(&profile.qk_rope, &pt);
             var on_gpu = false;
-            if (gpu_attention != null and (cache.dev_k != 0 or cache.tier != null))
+            if (sparse)
+            {
+                var done = false;
+                if (gpu_qsa) |f|
+                {
+                    if (cache.dev_qsa != 0 and cache.format == .f32 and (cache.dev_k != 0 or cache.tier != null))
+                    {
+                        if (cache.tier) |tr|
+                        {
+                            try tr.tiles(tr.ctx, ai, pos0 + n, tiles_k, tiles_v);
+                        }
+                        else
+                        {
+                            cache.tiles(ai, pos0 + n, tiles_k, tiles_v);
+                        }
+                        const count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
+                        done = f(.{ .cfg = cfg, .q = q, .iq = iq, .n = n, .pos0 = pos0, .scale = scale, .blocks_dev = cache.qsaBlocksDev(ai), .tiles_k = tiles_k[0..count], .tiles_v = tiles_v[0..count], .out = att, .kept = kept });
+                        profile.qsa_gpu += @intFromBool(done);
+                        // The GPU writes only the queries that choose; the others keep every block.
+                        for (0..if (done and kept.len > 0) n else 0) |t|
+                        {
+                            if ((pos0 + t + 1) / cfg.qsa_block <= cfg.qsaTop())
+                            {
+                                @memset(kept[t * cfg.qsaTop() ..][0..cfg.qsaTop()], -1);
+                            }
+                        }
+                    }
+                }
+                if (!done)
+                {
+                    if (cache.tier != null)
+                    {
+                        return error.OffloadNeedsGpu;
+                    }
+                    if (cache.format != .f32)
+                    {
+                        return error.Unsupported;
+                    }
+                    profile.qsa_cpu += 1;
+                    pool.parallelFor(threads, n, qwen38.Attend{ .cfg = cfg, .q = q, .iq = iq, .keys = cache.keysF32(ai), .values = cache.valuesF32(ai), .blocks = cache.qsaBlocks(ai), .pos0 = pos0, .scale = scale, .out = att, .kept = kept }, qwen38.Attend.run);
+                }
+                on_gpu = true; // `att` is done, so the dense loops below are skipped
+
+            }
+            else if (gpu_attention != null and (cache.dev_k != 0 or cache.tier != null))
             {
                 if (cache.tier) |tr|
                 {
@@ -1857,7 +2373,15 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             Profile.lap(&profile.attention, &pt);
             l.o.matmul(att, n, tmp, scratch);
         }
-        pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
+        const attn_max = if (nanTrace()) maxAbs(tmp[0 .. n * d]) else 0;
+        if (l.hc_attn != null)
+        {
+            qwen38.inject(cfg, h, tmp, inj, n);
+        }
+        else
+        {
+            pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
+        }
 
         if (la) |p|
         {
@@ -1869,7 +2393,14 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             p.predict_ns += nowNs() - t0;
         }
 
-        pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.ffn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
+        if (l.hc_ffn) |hy|
+        {
+            qwen38.mix(cfg, hy, &hc_bufs, h, n, x, inj);
+        }
+        else
+        {
+            pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.ffn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
+        }
         Profile.lap(&profile.output, &pt);
         l.router.matmul(x, n, probs, scratch);
         pool.parallelFor(threads, n, TokenLoops.Route{ .cfg = cfg, .probs = probs, .idx = idx, .wts = wts }, TokenLoops.Route.run);
@@ -1889,15 +2420,37 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             try sharedExpert(&mix_bufs, se, l.shared_gate, x, n, tmp[0 .. n * d], scratch);
         }
         Profile.lap(&profile.experts, &pt);
-        pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
+        if (nanTrace())
+        {
+            std.debug.print("trace: layer {d} at {d}+{d}: input {e:.3}, attention out {e:.3}, experts out {e:.3}, residual {e:.3}\n", .{ li, pos0, n, maxAbs(x[0 .. n * d]), attn_max, maxAbs(tmp[0 .. n * d]), maxAbs(h) });
+        }
+        if (l.hc_ffn != null)
+        {
+            qwen38.inject(cfg, h, tmp, inj, n);
+        }
+        else
+        {
+            pool.parallelFor(threads, n, TokenLoops.Add{ .h = h, .y = tmp, .d = d }, TokenLoops.Add.run);
+        }
         if (la) |p|
         {
             p.layer_ns += nowNs() - layer_t0;
         }
 
+        // A non-finite value would spread to every later token and layer; stop where it first shows (TASK-31).
+        if (!allFinite(h))
+        {
+            std.log.err("step: a non-finite value in the residual after layer {d} (positions {d} to {d}); non-finite rows: expert input {d}, expert output {d}, residual {d}, first at token {d}", .{
+                li, pos0, pos0 + n - 1, badRows(x[0 .. n * d], d), badRows(tmp[0 .. n * d], d), badRows(h, R), firstBadRow(h, R),
+            });
+            return error.NonFinite;
+        }
         if (trace) |tr|
         {
-            @memcpy(tr.hidden[li * n * d ..][0 .. n * d], h);
+            if (tr.hidden.len > 0)
+            {
+                @memcpy(tr.hidden[li * n * R ..][0 .. n * R], h);
+            }
             @memcpy(tr.topk[li * n * k ..][0 .. n * k], idx);
         }
     }
@@ -1908,7 +2461,21 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     }
     var head_t = nowNs();
     defer Profile.lap(&profile.head, &head_t);
-    if (all_logits)
+    if (w.out_hc) |hy|
+    {
+        // The streams' final mix takes the place of the output norm.
+        if (all_logits)
+        {
+            qwen38.mix(cfg, hy, &hc_bufs, h, n, x, inj);
+            w.head.matmul(x, n, logits, scratch);
+        }
+        else
+        {
+            qwen38.mix(cfg, hy, &hc_bufs, h[(n - 1) * R ..][0..R], 1, x, inj);
+            w.head.matmul(x, 1, logits, scratch);
+        }
+    }
+    else if (all_logits)
     {
         pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = w.out_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
         w.head.matmul(x, n, logits, scratch);
@@ -2105,6 +2672,9 @@ const Guesser = struct {
     /// Per expert: how many tokens guessed it.
     votes: []u32,
     wanted_list: []u32,
+    /// With hyper-connections (TASK-31): the mix's buffers and stream weights, free between a block's inject and the next mix.
+    hc: *const qwen38.Buffers,
+    inj: []f32,
 
     /// Guesses layer `target`'s experts from the hidden states `h`, `hz` layers
     /// early, and passes them to `moe.prefetch`. `x` and `logits` are scratch
@@ -2116,9 +2686,17 @@ const Guesser = struct {
         const n = self.n;
         const tl = &self.w.layers[target];
         const out = self.out[((hz - 1) * cfg.layers + target) * n * self.kx ..][0 .. n * self.kx];
-        for (0..n) |t|
+        if (tl.hc_ffn) |hy|
         {
-            rmsnorm(h[t * d ..][0..d], tl.ffn_norm, cfg.eps, x[t * d ..][0..d]);
+            // The target layer's own mix of the streams as they are now, in place of its norm.
+            qwen38.mix(cfg, hy, self.hc, h, n, x, self.inj);
+        }
+        else
+        {
+            for (0..n) |t|
+            {
+                rmsnorm(h[t * d ..][0..d], tl.ffn_norm, cfg.eps, x[t * d ..][0..d]);
+            }
         }
         tl.router.matmul(x, n, logits, scratch);
         for (0..n) |t|
@@ -3043,6 +3621,226 @@ test "tiny Qwen3.5-MoE (Gated DeltaNet, gated attention, shared expert) matches 
             try std.testing.expectApproxEqAbs(exp, got, 1e-5);
         }
     }
+}
+
+test "tiny Qwen3.8-Flash-Next (hyper-connections, QSA, n-gram embedding) matches transformers (tools/ref/ref_qwen38.py --tiny)" {
+    const tfref = @import("tfref.zig");
+    const gpa = std.testing.allocator;
+    const file = @embedFile("qwen38_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    try std.testing.expectEqual(Arch.qwen4exp, cfg.arch);
+    try std.testing.expectEqual(@as(usize, 4), cfg.streams);
+    try std.testing.expectEqual(@as(usize, 2), cfg.qsaTop());
+    try std.testing.expectEqual(@as(?usize, 1), cfg.ple_layer);
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [16]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+    defer local.deinit();
+
+    const golden = try tfref.File.parse(@embedFile("qwen38_tiny.tfref"));
+    const prompts: usize = @intCast((try golden.get("config")).i32s()[0]);
+    const R = cfg.residual();
+    const top = cfg.qsaTop();
+    var checked_blocks: usize = 0;
+    for (0..prompts) |p|
+    {
+        var buf: [64]u8 = undefined;
+        const ids = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
+        const n = ids.len;
+        const tokens = try gpa.alloc(u32, n);
+        defer gpa.free(tokens);
+        for (tokens, ids) |*t, id|
+        {
+            t.* = @intCast(id);
+        }
+        const logits = try gpa.alloc(f32, n * cfg.vocab);
+        defer gpa.free(logits);
+        const trace: Trace = .{
+            .hidden = try gpa.alloc(f32, cfg.layers * n * R),
+            .topk = try gpa.alloc(u32, cfg.layers * n * cfg.top_k),
+            .qsa = try gpa.alloc(i32, cfg.attnLayers() * n * top),
+        };
+        defer gpa.free(trace.hidden);
+        defer gpa.free(trace.topk);
+        defer gpa.free(trace.qsa);
+        try forward(gpa, &w, local.moe(), tokens, logits, trace);
+        // Each layer's output, every stream (all but the last, which transformers reports after the final mix).
+        for (0..cfg.layers - 1) |l|
+        {
+            const hw = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.hidden", .{ p, l }))).f32s();
+            for (trace.hidden[l * n * R ..][0 .. n * R], hw, 0..) |a, b, i|
+            {
+                if (@abs(a - b) > 1e-4)
+                {
+                    std.debug.print("layer {d}, token {d}, value {d}: {d} against {d}\n", .{ l, i / R, i % R, a, b });
+                    return error.TestHiddenMismatch;
+                }
+            }
+        }
+        for (0..cfg.layers) |l|
+        {
+            const gi = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.topk_idx", .{ p, l }))).i32s();
+            for (trace.topk[l * n * cfg.top_k ..][0 .. n * cfg.top_k], gi) |got, exp|
+            {
+                try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+            }
+            if (cfg.recurrent(l))
+            {
+                continue;
+            }
+            // Every block QSA kept, for each query with more complete blocks than its budget.
+            const kept = trace.qsa[cfg.attnIndex(l) * n * top ..][0 .. n * top];
+            const from_t = golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.qsa_from", .{ p, l })) catch
+            {
+                for (kept) |b|
+                {
+                    try std.testing.expectEqual(@as(i32, -1), b);
+                }
+                continue;
+            };
+            const from: usize = @intCast(from_t.i32s()[0]);
+            const gb = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.qsa_blocks", .{ p, l }))).i32s();
+            for (kept[0 .. from * top]) |b|
+            {
+                try std.testing.expectEqual(@as(i32, -1), b);
+            }
+            for (kept[from * top ..], gb, 0..) |got, exp, i|
+            {
+                if (got != exp)
+                {
+                    std.debug.print("layer {d}, token {d}: kept block {d}, transformers {d}\n", .{ l, from + i / top, got, exp });
+                    return error.TestQsaMismatch;
+                }
+            }
+            checked_blocks += gb.len;
+        }
+        const want = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits", .{p}))).f32s();
+        for (logits, want) |a, b|
+        {
+            try std.testing.expectApproxEqAbs(b, a, 1e-4);
+        }
+
+        // Generation steps one token at a time, so the recurrent, n-gram and QSA state carries across steps.
+        const want_tokens = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_tokens", .{p}))).i32s();
+        const want_logits = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_logits", .{p}))).f32s();
+        const g = want_tokens.len;
+        const all = try gpa.alloc(u32, n + g);
+        defer gpa.free(all);
+        @memcpy(all[0..n], tokens);
+        var cache = try KvCache.init(gpa, cfg, n + g);
+        defer cache.deinit(gpa);
+        var sampler: Sampler = .{};
+        const step_logits = try gpa.alloc(f32, g * cfg.vocab);
+        defer gpa.free(step_logits);
+        try generate(gpa, &w, local.moe(), &cache, all[0..n], &sampler, all[n..], step_logits);
+        for (all[n..], want_tokens) |got, exp|
+        {
+            try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+        }
+        for (step_logits, want_logits) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-4);
+        }
+
+        // A prompt fed in pieces gives the same last logits as in one pass.
+        cache.reset();
+        const half = n / 2;
+        const piece = try gpa.alloc(f32, cfg.vocab);
+        defer gpa.free(piece);
+        try step(gpa, &w, local.moe(), &cache, tokens[0..half], piece, null);
+        try step(gpa, &w, local.moe(), &cache, tokens[half..], piece, null);
+        for (piece, logits[(n - 1) * cfg.vocab ..][0..cfg.vocab]) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-5);
+        }
+    }
+    try std.testing.expect(checked_blocks > 0);
+}
+
+test "lookahead on hyper-connections leaves every logit bit-identical" {
+    const gpa = std.testing.allocator;
+    const file = @embedFile("qwen38_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [16]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+    const Log = struct {
+        calls: usize = 0,
+        fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
+        {
+            _ = layer;
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.calls += @intFromBool(experts.len > 0);
+        }
+    };
+    var log: Log = .{};
+    var la: Lookahead = .{ .horizon = 2, .extra = 1 };
+    // Experts run through `local`; prefetch hints go to the log.
+    const Moe2 = struct {
+        local: *LocalExperts,
+        log: *Log,
+        fn run(ctx: *anyopaque, layer: usize, x: []const f32, n: usize, idx: []const u32, wt: []const f32, out: []f32) anyerror!void
+        {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return LocalExperts.runAll(self.local, layer, x, n, idx, wt, out);
+        }
+        fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
+        {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return Log.prefetch(self.log, layer, experts);
+        }
+    };
+    var both: Moe2 = .{ .local = &local, .log = &log };
+    const with: Moe = .{ .ctx = &both, .run = Moe2.run, .ahead = &la, .prefetch = Moe2.prefetch };
+
+    const tokens = [_]u32{ 11, 12, 13, 14, 15, 16, 17, 18, 2, 19, 20, 21, 22, 23, 24, 25 };
+    const plain = try gpa.alloc(f32, tokens.len * cfg.vocab);
+    defer gpa.free(plain);
+    const guessed = try gpa.alloc(f32, tokens.len * cfg.vocab);
+    defer gpa.free(guessed);
+    try forward(gpa, &w, local.moe(), &tokens, plain, null);
+    try forward(gpa, &w, with, &tokens, guessed, null);
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(plain), std.mem.sliceAsBytes(guessed));
+    try std.testing.expectEqual(@as(usize, cfg.layers), log.calls);
+    try std.testing.expect(la.recall(1) > 0 and la.recall(1) <= 1);
+}
+
+test "the n-gram hash starts over after an end-of-text token" {
+    var cfg: Config = .{ .layers = 1, .d_model = 1, .heads = 1, .kv_heads = 1, .head_dim = 1, .d_ff = 1, .experts = 1, .top_k = 1, .vocab = 16, .eps = 1e-6, .rope_theta = 1 };
+    cfg.ple_ngram = 3;
+    cfg.ple_heads_per = 1;
+    cfg.ple_eos = 2;
+    var p: Ple = .{ .table = Mat.empty, .mult = .{ 3, 5, 7, 0 }, .offsets = @splat(0), .sizes = @splat(1 << 40) };
+    p.offsets[1] = 1000;
+    var out: [8]u64 = undefined;
+    // Tokens 9, 2 (end of text), 4: the bigram and trigram at 4 see end-of-text before it,
+    // and the trigram at 9 reads the two held end-of-text tokens.
+    qwen38.ngramRows(cfg, p, &.{ 2, 2 }, &.{ 9, 2, 4, 6 }, &out);
+    try std.testing.expectEqual(@as(u64, (9 * 3) ^ (2 * 5)), out[0]);
+    try std.testing.expectEqual(@as(u64, ((9 * 3) ^ (2 * 5) ^ (2 * 7)) + 1000), out[1]);
+    try std.testing.expectEqual(@as(u64, (4 * 3) ^ (2 * 5)), out[4]);
+    try std.testing.expectEqual(@as(u64, ((4 * 3) ^ (2 * 5) ^ (2 * 7)) + 1000), out[5]);
+    try std.testing.expectEqual(@as(u64, ((6 * 3) ^ (4 * 5) ^ (2 * 7)) + 1000), out[7]);
 }
 
 test "lookahead guesses leave every logit bit-identical and arrive before their layer" {

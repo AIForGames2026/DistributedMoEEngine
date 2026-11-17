@@ -60,6 +60,7 @@ pub fn formatOf(ggml_type: u32) ?quant.Format {
     return switch (ggml_type) {
         0 => .f32,
         1 => .f16,
+        2 => .q4_0,
         8 => .q8_0,
         30 => .bf16,
         39 => .mxfp4,

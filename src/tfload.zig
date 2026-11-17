@@ -45,7 +45,7 @@ pub fn main(init: std.process.Init) !void {
 
     const file = try File.open(opts.model);
     defer file.close();
-    var model_state = try mf.openModel(gpa, file, opts.config);
+    var model_state = try mf.openModel(gpa, opts.model, file, opts.config);
     defer model_state.deinit(gpa);
     const m = model_state.model;
     mf.describe(m, opts.model, model_state.kind);

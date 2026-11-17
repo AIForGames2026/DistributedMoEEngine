@@ -54,7 +54,14 @@ pub fn main(init: std.process.Init) !void {
             const format = chat.detect(&tok) orelse return error.UnknownChatTemplate;
             var ids: std.ArrayList(u32) = .empty;
             defer ids.deinit(gpa);
-            try renderChat(gpa, io, &tok, format, it.next() orelse return error.MissingValue, &ids);
+            renderChat(gpa, io, &tok, format, it.next() orelse return error.MissingValue, &ids) catch |err| switch (err) {
+                // The template refuses this conversation; check_chat.py expects the same refusal.
+                error.SystemNotFirst, error.NoUserQuery => {
+                    try out.print("refused {t}\n", .{err});
+                    continue;
+                },
+                else => return err,
+            };
             for (ids.items, 0..) |id, i|
             {
                 try out.print("{s}{d}", .{ if (i == 0) "" else " ", id });
@@ -103,7 +110,7 @@ fn setTemplate(gpa: std.mem.Allocator, io: std.Io, tok: *tokenizer.Tokenizer, pa
 
 /// Renders a conversation file and tokenizes it. The file holds `messages`
 /// (role, content, optional reasoning_content), `add_generation_prompt`, and
-/// optionally `enable_thinking`.
+/// optionally `enable_thinking` and `reasoning_effort`.
 fn renderChat(gpa: std.mem.Allocator, io: std.Io, tok: *const tokenizer.Tokenizer, format: chat.Format, path: []const u8, ids: *std.ArrayList(u32)) !void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1 << 30));
     defer gpa.free(bytes);
@@ -111,6 +118,7 @@ fn renderChat(gpa: std.mem.Allocator, io: std.Io, tok: *const tokenizer.Tokenize
         messages: []const struct { role: chat.Role, content: []const u8, reasoning_content: ?[]const u8 = null },
         add_generation_prompt: bool = true,
         enable_thinking: ?bool = null,
+        reasoning_effort: chat.Effort = .xhigh,
     };
     const parsed = try std.json.parseFromSlice(Conversation, gpa, bytes, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
@@ -122,7 +130,7 @@ fn renderChat(gpa: std.mem.Allocator, io: std.Io, tok: *const tokenizer.Tokenize
     }
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(gpa);
-    try chat.render(gpa, format, msgs, .{ .add_generation_prompt = parsed.value.add_generation_prompt, .thinking = parsed.value.enable_thinking }, &text);
+    try chat.render(gpa, format, msgs, .{ .add_generation_prompt = parsed.value.add_generation_prompt, .thinking = parsed.value.enable_thinking, .effort = parsed.value.reasoning_effort }, &text);
     try tok.encode(gpa, text.items, ids);
 }
 

@@ -141,6 +141,8 @@ pub const ExpertCache = struct {
     where: []std.atomic.Value(u32),
     /// Per (layer, expert): checksum already verified once.
     checked: []bool,
+    /// Verify every load, not just each expert's first (TF_CACHE_VERIFY=1), to catch a bad reload.
+    verify_all: bool = false,
     slots: []Slot,
     region: []u8,
     part_cap: [3]usize,
@@ -217,6 +219,7 @@ pub const ExpertCache = struct {
             .index = index,
             .where = where,
             .checked = try a.alloc(bool, where.len),
+            .verify_all = builtin.os.tag != .windows and if (std.c.getenv("TF_CACHE_VERIFY")) |v| v[0] == '1' else false,
             .slots = slots,
             .region = region,
             .part_cap = cap,
@@ -580,7 +583,7 @@ pub const ExpertCache = struct {
             const bytes = dst[at..][0..@intCast(r.len)];
             if (self.index) |idx|
             {
-                if (!self.checked[key])
+                if (!self.checked[key] or self.verify_all)
                 {
                     const entry = idx.map.get(r.offset) orelse return error.MissingChecksum;
                     if (entry.len != r.len or loader.crc32c(bytes) != entry.crc)

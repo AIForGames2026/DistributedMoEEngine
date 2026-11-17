@@ -1,0 +1,7 @@
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, zig 0.17.0
+engine: v0.2.0-alpha-42-g1b78bb4-q38k
+transformers: 5.23.0 2.15.0+cpu
+f4ad75b0b71b50c63359a3f3a36b4886e74a8ed464eb7d1f6c5680c742825f2e  models/qwen38-flash-next/Qwen3.8-Flash-Next-Q8_0-00001-of-00002.gguf
+f83d260b401e8ae5e64bd1ed5b9ec5017521e0804364bac844dbeae244fc8c64  models/qwen38-flash-next/Qwen3.8-Flash-Next-Q8_0-00002-of-00002.gguf
+               total        used        free      shared  buff/cache   available
+Mem:             121           5           0           0         116         116

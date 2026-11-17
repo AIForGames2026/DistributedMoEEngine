@@ -1,0 +1,13 @@
+== default 1
+local: prompt 3 (2600 tokens, 98305 ms): logits max err 8.75e-1 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 1244233/1248000 same (99.698%), QSA blocks 3370615/3373056 same (99.928%) ok
+== default 2
+local: prompt 3 (2600 tokens, 97768 ms): logits max err 8.75e-1 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 1244233/1248000 same (99.698%), QSA blocks 3370615/3373056 same (99.928%) ok
+== default 3
+local: prompt 3 (2600 tokens, 98211 ms): logits max err 8.75e-1 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 1244233/1248000 same (99.698%), QSA blocks 3370615/3373056 same (99.928%) ok
+== verify every load 1
+local: prompt 3 (2600 tokens, 98673 ms): logits max err 8.75e-1 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 1244233/1248000 same (99.698%), QSA blocks 3370615/3373056 same (99.928%) ok
+== verify every load 2
+local: prompt 3 (2600 tokens, 98193 ms): logits max err 8.75e-1 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 1244233/1248000 same (99.698%), QSA blocks 3370615/3373056 same (99.928%) ok
+== GPU matmuls checked on the CPU
+local: prompt 3 (2600 tokens, 2740099 ms): logits max err 8.09e-1 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 1244131/1248000 same (99.690%), QSA blocks 3370615/3373056 same (99.928%) ok
+DONE

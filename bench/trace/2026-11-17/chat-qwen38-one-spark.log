@@ -1,0 +1,9 @@
+load: non-expert weights and 512 of 512 experts (through the expert cache), 34.27 GB in 6.21 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (34.27 GB in 0.90 s)
+local: expert cache: 12000 slots (62.96 GB), 2 loader threads, 512 experts of layers below 1 loaded and kept in 3.65 s; cached experts run on the GPU
+local: recording every step to /home/admin/lukehinojosa/bench-chat38/chat-qwen38-one-spark.jsonl
+local: OpenAI-compatible API at http://127.0.0.1:8093/v1 (model "Qwen3.8-Flash-Next-Q8_0-00002-of-00002", chat format qwen38, context 8192 tokens, reusing shared prompt prefixes)
+local: chat page with the live diagram at http://127.0.0.1:8093/
+local: request 1: 68 prompt tokens (0 reused), 114 generated in 27.32 s, first token 11057 ms, 7.0 tokens/s decoding, finish stop
+local: request 2: 172 prompt tokens (0 reused), 252 generated in 36.76 s, first token 6774 ms, 8.4 tokens/s decoding, finish stop
+local: request 3: 272 prompt tokens (0 reused), 103 generated in 24.58 s, first token 10597 ms, 7.3 tokens/s decoding, finish stop

@@ -4,7 +4,7 @@
 //! clients work unchanged.
 //!
 //! Beyond OpenAI's fields it accepts `top_k`, vLLM's
-//! `chat_template_kwargs.enable_thinking` and assistant `reasoning_content`,
+//! `chat_template_kwargs.enable_thinking` (and Qwen3.8's `reasoning_effort`) and assistant `reasoning_content`,
 //! and `return_tokens`, which adds the prompt and completion token ids to the
 //! `tensorfold` object every response carries (with timings and reuse).
 const std = @import("std");
@@ -22,6 +22,7 @@ pub const Request = struct {
     seed: ?u64 = null,
     stop: []const []const u8 = &.{},
     thinking: ?bool = null,
+    effort: chat.Effort = .xhigh,
     return_tokens: bool = false,
 };
 
@@ -127,6 +128,12 @@ pub fn parseChat(a: std.mem.Allocator, body: []const u8, why: *Invalid) !Request
         if (k == .object)
         {
             req.thinking = try optBool(k.object, "enable_thinking", why);
+            if (k.object.get("reasoning_effort")) |e|
+            {
+                const name = if (e == .string) e.string else "";
+                req.effort = std.meta.stringToEnum(chat.Effort, name) orelse
+                    return invalid(why, "'reasoning_effort' must be \"xhigh\", \"medium\" or \"low\".", "reasoning_effort");
+            }
         }
     }
     req.return_tokens = try optBool(o, "return_tokens", why) orelse false;

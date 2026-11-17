@@ -1,0 +1,17 @@
+/home/admin/lukehinojosa/src/engine/tools/ref/ref_qwen38.py:78: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/utils/tensor_numpy.cpp:208.)
+  return torch.from_numpy(np.ascontiguousarray(tensors[name]))
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `fused_recurrent_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+prompt 0: 5 tokens; next token after the prompt: ' Paris'
+  greedy: ' Paris. Paris is a city. Therefore, what is Paris?\n\n<think>\nThe user is asking a simple logical question based on the premises provided. Let me'
+prompt 1: 19 tokens; next token after the prompt: ' fibonacci'
+  greedy: ' fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef main():\n    print(fibonacci(10))\n\n\nif __name__'
+prompt 2: 15 tokens; next token after the prompt: ' the'
+  greedy: ' the number of active parameters is much smaller than the total. This sparsity makes the model efficient, but it also creates a problem: the experts are not used'
+prompt 3: 2600 tokens; next token after the prompt: 'arena'
+  greedy: 'arena.zig`, 10 tests).\n  - [x] Implement `Ring` (single-producer single-consumer, cache-line padded) ('
+smallest gap between the k-th and (k+1)-th router probability: 0.00e+00
+QSA block choices with a tie at the cut: 0 of 64536 (kept the lower block)
+wrote models/qwen38-flash-next/qwen38_golden.tfref (296419648 bytes, 571 tensors)

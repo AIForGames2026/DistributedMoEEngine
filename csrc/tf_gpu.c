@@ -1,5 +1,6 @@
 /* GPU matmuls (TASK-10) and attention (TASK-12) on the CUDA driver API. See include/tf_gpu.h. */
 #include <cuda.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,6 +44,11 @@ struct tf_gpu {
      * t256_ok once their shared memory is granted. */
     CUfunction attention256[4], attention_tc256[4], attention_merge256, delta_rule;
     int a256_ok, t256_ok;
+    /* QSA (TASK-31): block scores, the kept blocks, and attention over them; with their inputs
+     * (queries, indexer queries, tile tables, kept blocks), outputs, and scores. */
+    CUfunction qsa_scores, qsa_topk, qsa_attention;
+    CUdeviceptr qsa_in, qsa_out, qsa_sc;
+    size_t qsa_in_bytes, qsa_out_bytes, qsa_sc_bytes;
     CUfunction tm_q8, rowscale, silu_rows;
     /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
@@ -159,7 +165,10 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
         }
     }
     if ((r = cuModuleGetFunction(&g->attention_merge256, g->mod, "tf_attention_merge256")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->delta_rule, g->mod, "tf_delta_rule")) != CUDA_SUCCESS)
+        (r = cuModuleGetFunction(&g->delta_rule, g->mod, "tf_delta_rule")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->qsa_scores, g->mod, "tf_qsa_scores")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->qsa_topk, g->mod, "tf_qsa_topk")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->qsa_attention, g->mod, "tf_qsa_attention")) != CUDA_SUCCESS)
     {
         tf_gpu_close(g);
         return fail(r, "loading kernels", err, err_len);
@@ -736,6 +745,60 @@ int tf_gpu_delta_rule(tf_gpu *g, const float *mixed, const float *beta, const fl
     return 0;
 }
 
+/* Queries scored and their blocks chosen per pass, which bounds the score scratch. */
+#define QSA_BATCH 256
+
+int tf_gpu_qsa(tf_gpu *g, const float *q, const float *iq, int n, int pos0, int heads, int kv_heads, int kvd, int ih, int dim,
+               int bsize, int top, float scale, uint64_t blocks, const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles,
+               float *out, int *kept)
+{
+    if (n <= 0 || kv_heads <= 0 || heads % kv_heads || heads / kv_heads > 16 || kvd != kv_heads * 256 || ih * dim > 512 ||
+        dim > 128 || bsize <= 0 || top <= 0 || !blocks || tiles <= 0)
+        return -1;
+    const int nb = (pos0 + n) / bsize;
+    const size_t qb = (size_t)n * heads * 256 * sizeof(float), iqb = (size_t)n * ih * dim * sizeof(float);
+    const size_t tb = (size_t)tiles * sizeof(uint64_t), sb = (size_t)n * top * sizeof(int);
+    const size_t scb = (size_t)QSA_BATCH * (nb > 0 ? nb : 1) * sizeof(float);
+    CUresult r;
+    if ((r = grow(&g->qsa_in, &g->qsa_in_bytes, align16(qb) + align16(iqb) + 2 * align16(tb) + align16(sb))) != CUDA_SUCCESS ||
+        (r = grow(&g->qsa_out, &g->qsa_out_bytes, qb)) != CUDA_SUCCESS || (r = grow(&g->qsa_sc, &g->qsa_sc_bytes, scb)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    CUdeviceptr dq = g->qsa_in, diq = dq + align16(qb), dtk = diq + align16(iqb), dtv = dtk + align16(tb), dsel = dtv + align16(tb);
+    if ((r = cuMemcpyHtoD(dq, q, qb)) != CUDA_SUCCESS || (r = cuMemcpyHtoD(diq, iq, iqb)) != CUDA_SUCCESS ||
+        (r = cuMemcpyHtoD(dtk, tiles_k, tb)) != CUDA_SUCCESS || (r = cuMemcpyHtoD(dtv, tiles_v, tb)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    CUdeviceptr bl = (CUdeviceptr)blocks;
+    const float iscale = 1.0f / sqrtf((float)dim);
+    for (int q0 = 0; q0 < n; q0 += QSA_BATCH)
+    {
+        int nq = n - q0 < QSA_BATCH ? n - q0 : QSA_BATCH;
+        /* A batch whose last query keeps every block needs no scores. */
+        if ((pos0 + q0 + nq) / bsize <= top)
+            continue;
+        void *sargs[] = {&diq, &bl, &g->qsa_sc, &nq, &q0, &pos0, &ih, &dim, &bsize, (void *)&nb, (void *)&iscale};
+        if ((r = cuLaunchKernel(g->qsa_scores, (unsigned)((nb + 31) / 32), (unsigned)((nq + 7) / 8), 1, 256, 1, 1, 0, 0, sargs,
+                                NULL)) != CUDA_SUCCESS)
+            return -(int)r;
+        CUdeviceptr ds = dsel + (size_t)q0 * top * sizeof(int);
+        void *targs[] = {&g->qsa_sc, &ds, &q0, &pos0, &bsize, &top, (void *)&nb};
+        if ((r = cuLaunchKernel(g->qsa_topk, (unsigned)nq, 1, 1, 256, 1, 1, 0, 0, targs, NULL)) != CUDA_SUCCESS)
+            return -(int)r;
+    }
+    void *aargs[] = {&dq, &dtk, &dtv, &dsel, &g->qsa_out, &pos0, &heads, &kv_heads, &kvd, &bsize, &top, &scale};
+    if ((r = cuLaunchKernel(g->qsa_attention, (unsigned)n, (unsigned)kv_heads, 1, 256, 1, 1, 0, 0, aargs, NULL)) != CUDA_SUCCESS ||
+        (r = cuMemcpyDtoH(out, g->qsa_out, qb)) != CUDA_SUCCESS)
+    {
+        return -(int)r;
+    }
+    if (kept && (r = cuMemcpyDtoH(kept, dsel, sb)) != CUDA_SUCCESS)
+        return -(int)r;
+    return 0;
+}
+
 int tf_gpu_set_attention_kernel(tf_gpu *g, int which)
 {
     const int old = g->att_kernel;
@@ -763,7 +826,8 @@ void tf_gpu_close(tf_gpu *g)
         cuMemFree(g->x);
     if (g->y)
         cuMemFree(g->y);
-    CUdeviceptr att[] = {g->aq, g->aout, g->tiles, g->pm, g->pl, g->pacc, g->ex, g->eg, g->eu, g->ey, g->exg, g->eo, g->meta, g->up, g->up2};
+    CUdeviceptr att[] = {g->aq, g->aout, g->tiles, g->pm, g->pl, g->pacc, g->ex, g->eg, g->eu, g->ey, g->exg, g->eo, g->meta, g->up, g->up2,
+                         g->qsa_in, g->qsa_out, g->qsa_sc};
     for (size_t i = 0; i < sizeof att / sizeof att[0]; i++)
         if (att[i])
             cuMemFree(att[i]);

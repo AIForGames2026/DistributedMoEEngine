@@ -1,0 +1,35 @@
+load: non-expert weights and 512 of 512 experts (through the expert cache), 34.27 GB in 6.23 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (34.27 GB in 0.90 s)
+local: expert cache: 12000 slots (62.96 GB), 2 loader threads, 512 experts of layers below 1 loaded and kept in 12.52 s; cached experts run on the GPU
+local: prompt 0 (5 tokens, 2373 ms): logits max err 5.11e-5 (last 5 positions), top-1 5/5, hidden max err 8.01e-5, experts chosen 2400/2400 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (19 tokens, 4335 ms): logits max err 5.15e-5 (last 19 positions), top-1 19/19, hidden max err 3.62e-5, experts chosen 9120/9120 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 3548 ms): logits max err 9.73e-5 (last 15 positions), top-1 15/15, hidden max err 4.77e-5, experts chosen 7200/7200 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 3, layer 11: QSA blocks 281087/281088 same
+local: prompt 3, layer 19: QSA blocks 281075/281088 same
+local: prompt 3, layer 23: QSA blocks 281064/281088 same
+local: prompt 3, layer 27: QSA blocks 281037/281088 same
+local: prompt 3, layer 31: QSA blocks 280878/281088 same
+local: prompt 3, layer 35: QSA blocks 280660/281088 same
+local: prompt 3, layer 39: QSA blocks 280586/281088 same
+local: prompt 3, layer 43: QSA blocks 280482/281088 same
+local: prompt 3, layer 47: QSA blocks 280482/281088 same
+local: prompt 3 (2600 tokens, 97328 ms): logits max err 8.75e-1 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 1244233/1248000 same (99.698%), QSA blocks 3370615/3373056 same (99.928%) ok
+local: QSA layer passes that chose blocks: 12 on the GPU, 0 on the CPU
+local: PASS: Qwen3.8-Flash-Next logits within 1e-2 of the PyTorch reference (worst 9.73e-5), every top-1 token identical
+local: generate prompt 0: 32 tokens in 7.08 s (4.5 tokens/s, prompt included)
+local:   tokens: 11751 13 11751 369 264 3177 13 14833 11 1092 369 11751 30 271 248068 198 760 1156 369 9859 264 4145 19214 3296 3018 383 279 32800 3766 13 6558 728
+local:   step 13: logits max err 6.31e-1 at a router near-tie (gap 8.38e-9 in transformers); logits held up to here
+local:   same as transformers' generate(): 32/32 tokens, logits max err 6.82e-5 at step 11 (before the near-tie) ok
+local: generate prompt 1: 32 tokens in 8.66 s (3.7 tokens/s, prompt included)
+local:   tokens: 73111 1393 471 220 16 8 478 73111 1393 471 220 17 8 1358 727 1822 4406 198 262 1133 925 564 38044 7 16 15 578 1358 331 1259 591 548
+local:   same as transformers' generate(): 32/32 tokens, logits max err 7.08e-5 at step 31 ok
+local: generate prompt 2: 32 tokens in 6.62 s (4.8 tokens/s, prompt included)
+local:   tokens: 279 1324 314 4393 4868 369 1691 8882 1056 279 2702 13 1061 947 68476 3520 279 1558 10727 11 694 424 1048 11121 264 3377 25 279 11312 513 524 1429
+local:   same as transformers' generate(): 32/32 tokens, logits max err 8.49e-5 at step 29 ok
+local: generate prompt 3: 32 tokens in 103.25 s (0.3 tokens/s, prompt included)
+local:   tokens: 29531 3805 339 7561 220 16 15 6813 553 198 220 471 498 87 60 30057 1510 42029 63 318 14892 43745 3700 3074 14429 11424 11 6297 8187 42417 8 318
+local:   step 8: logits max err 2.31e-1 at a router near-tie (gap 3.59e-8 in transformers); logits held up to here
+local:   same as transformers' generate(): 32/32 tokens, logits max err 5.92e-1 at step 4, not held to 1e-2 (before the near-tie) ok
+local: PASS: every generated token matches transformers' generate(), logits within 1e-2
+local: expert cache: 2592960 expert calls: 94.1% already loaded, 0.0% loaded by a hint in time, 1.4% hinted but still loading, 4.6% missed; 1231275 calls set aside while others ran; 26022.6 ms with nothing to run but loads; 50006 loads (0 for hints, 261.15 GB, 2.39 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 791 allocations, 791 frees, peak 6380.1 MB, 0 bytes still allocated at exit (balanced)

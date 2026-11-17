@@ -298,7 +298,12 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
     const fd = job.fd;
 
     var text: std.ArrayList(u8) = .empty;
-    try chat.render(a, format, req.messages, .{ .thinking = req.thinking }, &text);
+    const chat_opts: chat.Options = .{ .thinking = req.thinking, .effort = req.effort };
+    chat.render(a, format, req.messages, chat_opts, &text) catch |err| switch (err) {
+        error.SystemNotFirst => return sendError(fd, 400, "A system message must come first.", "invalid_request_error", "messages"),
+        error.NoUserQuery => return sendError(fd, 400, "The messages need a user turn that is not a tool response.", "invalid_request_error", "messages"),
+        else => return err,
+    };
     var prompt: std.ArrayList(u32) = .empty;
     tok.encode(a, text.items, &prompt) catch |err| {
         if (err == error.InvalidUtf8)
@@ -324,6 +329,7 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
         .stop = req.stop,
         .stop_ids = chat.stopIds(format, tok, &stop_buf),
         .think = if (format != .tulu and think_open != null and think_close != null) .{ .open = think_open.?, .close = think_close.? } else null,
+        .reasoning_first = chat.opensReasoning(format, chat_opts),
         .chunk = opts.chunk,
         .reuse = opts.reuse,
         .clock = opts.clock,

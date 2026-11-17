@@ -37,6 +37,8 @@ pub const Params = struct {
     stop_ids: []const u32 = &.{},
     /// Qwen3's reasoning markers, which switch the channel and print nothing.
     think: ?struct { open: u32, close: u32 } = null,
+    /// The prompt opened the reasoning itself (Qwen3.8), so the reply starts on that channel.
+    reasoning_first: bool = false,
     /// Prefill this many positions per engine call.
     chunk: usize = 2048,
     /// Start from the longest prefix the cache shares with the prompt.
@@ -93,7 +95,7 @@ pub fn run(gpa: std.mem.Allocator, engine: Engine, session: *Session, tok: *cons
     }
 
     var stats: openai.Stats = .{ .prompt_tokens = prompt.len, .cached_tokens = common, .ttft_ns = p.clock() - t0 };
-    var text: Text = .{ .sink = sink, .stop = p.stop };
+    var text: Text = .{ .sink = sink, .stop = p.stop, .channel = if (p.reasoning_first and p.think != null) .reasoning else .content, .trim = p.reasoning_first and p.think != null };
     defer text.pending.deinit(gpa);
     var sampler = p.sampler;
     const budget = @min(p.max_tokens orelse std.math.maxInt(usize), engine.cap - prompt.len);
@@ -335,6 +337,11 @@ fn expectRun(script: []const u32, p: Params, want_content: []const u8, want_reas
 test "splits reasoning from content and stops on a stop token" {
     const script = [_]u32{ 256, '\n', 'h', 'm', 257, '\n', '\n', 'H', 259, 'i', 258, 'x' };
     try expectRun(&script, .{ .stop_ids = &.{258}, .think = .{ .open = 256, .close = 257 }, .clock = fakeClock }, "Hi", "hm", .stop, 11);
+}
+
+test "a prompt that opened the reasoning starts the reply on that channel" {
+    const script = [_]u32{ '\n', 'h', 'm', 257, '\n', '\n', 'H', 'i', 258 };
+    try expectRun(&script, .{ .stop_ids = &.{258}, .think = .{ .open = 256, .close = 257 }, .reasoning_first = true, .clock = fakeClock }, "Hi", "hm", .stop, 9);
 }
 
 test "stop strings end the reply before them, and a partial one is sent at the end" {

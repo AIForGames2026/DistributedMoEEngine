@@ -1,0 +1,19 @@
+/home/admin/lukehinojosa/src/engine/tools/ref/ref_qwen38.py:78: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/utils/tensor_numpy.cpp:208.)
+  return torch.from_numpy(np.ascontiguousarray(tensors[name]))
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+layer 3: QSA blocks 281088/281088 same
+layer 7: QSA blocks 281088/281088 same
+layer 11: QSA blocks 281087/281088 same
+layer 15: QSA blocks 281088/281088 same
+layer 19: QSA blocks 281071/281088 same
+layer 23: QSA blocks 281024/281088 same
+layer 27: QSA blocks 280991/281088 same
+layer 31: QSA blocks 280783/281088 same
+layer 35: QSA blocks 280588/281088 same
+layer 39: QSA blocks 280501/281088 same
+layer 43: QSA blocks 280378/281088 same
+layer 47: QSA blocks 280398/281088 same
+all QSA layers: 3370085/3373056 same (99.912%)
+experts chosen: 1243526/1248000 same (99.642%)
+logits max err (last 32 positions): 1.962e+00; top-1 32/32

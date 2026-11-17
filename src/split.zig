@@ -209,6 +209,7 @@ pub const Experts = struct {
             if (try self.poll(&w)) |h|
             {
                 h.expert.forward(x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], self.local.scratch);
+                self.checkCall(layer, idx[s], s / k, h, x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], "ready");
                 self.put(h);
                 ran += 1;
                 continue;
@@ -233,6 +234,7 @@ pub const Experts = struct {
                 };
                 const s = self.pending[i];
                 h.expert.forward(x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], self.local.scratch);
+                self.checkCall(layer, idx[s], s / k, h, x[(s / k) * d ..][0..d], contrib[s * d ..][0..d], "waited");
                 cache.release(h);
                 ran += 1;
                 waiting -= 1;
@@ -255,6 +257,19 @@ pub const Experts = struct {
             }
         }
         return ran;
+    }
+
+    /// Reports a call whose output is not finite (or, with TF_NAN_TRACE=1, huge), and the CPU's answer from the same slot.
+    fn checkCall(self: *Experts, layer: usize, expert: u32, token: usize, h: ExpertCache.Held, x: []const f32, y: []const f32, how: []const u8) void
+    {
+        if (olmoe.allFinite(y) and !(olmoe.nanTrace() and olmoe.maxAbs(y) >= 1e4))
+        {
+            return;
+        }
+        const got = olmoe.maxAbs(y);
+        var again: [8192]f32 = undefined;
+        h.expert.forwardCpu(x, again[0..y.len], self.local.scratch);
+        std.debug.print("trace: layer {d} expert {d} token {d} slot {d} ({s}): output {e:.3}, CPU from the same slot {e:.3}, input {e:.3}\n", .{ layer, expert, token, h.slot, how, got, olmoe.maxAbs(again[0..y.len]), olmoe.maxAbs(x) });
     }
 
     /// One process with every expert, through the cache.

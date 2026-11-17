@@ -50,6 +50,7 @@ struct tf_gpu {
     CUdeviceptr qsa_in, qsa_out, qsa_sc;
     size_t qsa_in_bytes, qsa_out_bytes, qsa_sc_bytes;
     CUfunction tm_q8, rowscale, silu_rows;
+    CUfunction q4k_grouped, q4k_grouped_wide, silu_mul_clamp;
     /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
     int tc_ok;
@@ -129,7 +130,10 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
         (r = cuModuleGetFunction(&g->combine, g->mod, "tf_combine")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->tm_q8, g->mod, "tf_tm_q8")) != CUDA_SUCCESS ||
         (r = cuModuleGetFunction(&g->rowscale, g->mod, "tf_rowscale")) != CUDA_SUCCESS ||
-        (r = cuModuleGetFunction(&g->silu_rows, g->mod, "tf_silu_rows")) != CUDA_SUCCESS) {
+        (r = cuModuleGetFunction(&g->silu_rows, g->mod, "tf_silu_rows")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->q4k_grouped, g->mod, "tf_q4k_grouped")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->q4k_grouped_wide, g->mod, "tf_q4k_grouped_wide")) != CUDA_SUCCESS ||
+        (r = cuModuleGetFunction(&g->silu_mul_clamp, g->mod, "tf_silu_mul_clamp")) != CUDA_SUCCESS) {
         tf_gpu_close(g);
         return fail(r, "loading kernels", err, err_len);
     }
@@ -458,9 +462,15 @@ int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const in
 
 int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
                    const int *first, const int *src, const int *inv, const float *w, const float *x, int n, int k,
-                   int d, int f, float *y)
+                   int d, int f, float *y, int fmt, float limit)
 {
     if (groups <= 0 || n <= 0 || k <= 0 || d <= 0 || f <= 0 || d % 32 || f % 32)
+    {
+        return -1;
+    }
+    // Q8_0 experts have no SwiGLU clamp here; Q4_K ones (TASK-32) need whole 256-value blocks.
+    if ((fmt == TF_GPU_Q8_0 && limit > 0) || (fmt == TF_GPU_Q4_K && (d % 256 || f % 256)) ||
+        (fmt != TF_GPU_Q8_0 && fmt != TF_GPU_Q4_K))
     {
         return -1;
     }
@@ -530,7 +540,29 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
     {
         return -(int)r;
     }
-    if (g->mm_kernel == 1)
+    if (fmt == TF_GPU_Q4_K)
+    {
+        int count = rows * f;
+        void *ga[] = {&gt, &dfirst, &g->exg, &g->eg, &f, &d};
+        void *ua[] = {&ut, &dfirst, &g->exg, &g->eu, &f, &d};
+        void *sa[] = {&g->eg, &g->eu, &count, &limit};
+        void *da[] = {&dt, &dfirst, &g->eg, &g->ey, &d, &f};
+        CUfunction act = limit > 0 ? g->silu_mul_clamp : g->silu_mul;
+        // Past 8 inputs per expert, the wide kernel's blocks cover 32 rows instead of 8.
+        const CUfunction mm = most > 8 ? g->q4k_grouped_wide : g->q4k_grouped;
+        const int span = most > 8 ? 32 : 8;
+        if ((r = cuLaunchKernel(mm, (unsigned)((f + span - 1) / span), 1, (unsigned)groups, 256, 1, 1, 0, 0, ga, NULL)) !=
+                CUDA_SUCCESS ||
+            (r = cuLaunchKernel(mm, (unsigned)((f + span - 1) / span), 1, (unsigned)groups, 256, 1, 1, 0, 0, ua, NULL)) !=
+                CUDA_SUCCESS ||
+            (r = cuLaunchKernel(act, (unsigned)((count + 255) / 256), 1, 1, 256, 1, 1, 0, 0, sa, NULL)) != CUDA_SUCCESS ||
+            (r = cuLaunchKernel(mm, (unsigned)((d + span - 1) / span), 1, (unsigned)groups, 256, 1, 1, 0, 0, da, NULL)) !=
+                CUDA_SUCCESS)
+        {
+            return -(int)r;
+        }
+    }
+    else if (g->mm_kernel == 1)
     {
         for (int e = 0; e < groups; e++)
         {

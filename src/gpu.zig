@@ -24,7 +24,7 @@ extern fn tf_gpu_unregister(g: *Handle, host: *anyopaque) void;
 extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int, hd: c_int) c_int;
 extern fn tf_gpu_qsa(g: *Handle, q: [*]const f32, iq: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, ih: c_int, dim: c_int, bsize: c_int, top: c_int, scale: f32, blocks: u64, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, out: [*]f32, kept: ?[*]i32) c_int;
 extern fn tf_gpu_delta_rule(g: *Handle, mixed: [*]const f32, beta: [*]const f32, decay: [*]const f32, n: c_int, cd: c_int, kh: c_int, dk: c_int, vh: c_int, dv: c_int, state: u64, core: [*]f32) c_int;
-extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32) c_int;
+extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32, fmt: c_int, limit: f32) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
 extern fn tf_gpu_device_bytes() usize;
 
@@ -48,6 +48,11 @@ var dev_base: u64 = 0;
 var live_base: usize = 0;
 var live_len: usize = 0;
 var live_dev: u64 = 0;
+/// Other buffers kernels read weights from (TASK-32's widened BF16 matrices).
+var extra_base: [8]usize = @splat(0);
+var extra_len: [8]usize = @splat(0);
+var extra_dev: [8]u64 = @splat(0);
+var extras: usize = 0;
 var failed = false;
 
 /// Opens the GPU and loads the kernels. Call before loading weights: on a
@@ -66,6 +71,7 @@ pub fn open() !void {
     {
         olmoe.gpu_register = register;
         olmoe.gpu_unregister = unregister;
+        olmoe.gpu_adopt = adopt;
         olmoe.gpu_attention = attention;
         olmoe.gpu_delta_rule = deltaRule;
         olmoe.gpu_qsa = qsa;
@@ -135,6 +141,21 @@ fn register(buf: []u8) ?u64
 fn unregister(buf: []u8) void
 {
     tf_gpu_unregister(handle orelse return, buf.ptr);
+}
+
+/// Maps `buf` for the rest of the run so matmuls read the weights in it in place.
+fn adopt(buf: []u8) bool
+{
+    if (extras == extra_base.len)
+    {
+        return false;
+    }
+    const dev = register(buf) orelse return false;
+    extra_base[extras] = @intFromPtr(buf.ptr);
+    extra_len[extras] = buf.len;
+    extra_dev[extras] = dev;
+    extras += 1;
+    return true;
 }
 
 fn attention(job: olmoe.AttentionJob) bool
@@ -215,6 +236,7 @@ pub fn stop() void {
     olmoe.gpu_qsa = null;
     olmoe.gpu_register = null;
     olmoe.gpu_unregister = null;
+    olmoe.gpu_adopt = null;
     if (handle) |h| tf_gpu_close(h);
     handle = null;
 }
@@ -225,6 +247,11 @@ const format_f32: c_int = 1;
 /// The kernel format code for `m`, if a kernel reads it.
 fn formatOf(m: olmoe.Mat) ?c_int
 {
+    // The kernels take widths in whole blocks of 32; narrower matrices stay on the CPU.
+    if (m.cols % 32 != 0)
+    {
+        return null;
+    }
     return switch (m.format)
     {
         .q8_0 => format_q8_0,
@@ -233,10 +260,10 @@ fn formatOf(m: olmoe.Mat) ?c_int
     };
 }
 
-/// Where kernels read `m`, if it is a Q8_0 or f32 weight in a mapped region.
+/// Where kernels read `m`, if it is a Q8_0, f32 or (for experts) Q4_K weight in a mapped region.
 fn devAddr(m: olmoe.Mat) ?u64
 {
-    if (formatOf(m) == null)
+    if (m.format != .q4_k and formatOf(m) == null)
     {
         return null;
     }
@@ -249,6 +276,13 @@ fn devAddr(m: olmoe.Mat) ?u64
     {
         return live_dev + (p - live_base);
     }
+    for (0..extras) |i|
+    {
+        if (p >= extra_base[i] and p + m.bytes.len <= extra_base[i] + extra_len[i])
+        {
+            return extra_dev[i] + (p - extra_base[i]);
+        }
+    }
     return null;
 }
 
@@ -256,7 +290,8 @@ fn devAddr(m: olmoe.Mat) ?u64
 /// and SiLU queued, outputs combined on the GPU. TF_GPU_CHECK uses the CPU.
 fn experts(job: olmoe.ExpertJob) bool
 {
-    if (failed or check or job.experts.len > max_group)
+    // The Q8_0 kernels have no SwiGLU clamp (TASK-32), so a clamped Q8_0 model stays on the CPU.
+    if (failed or check or job.experts.len > max_group or (job.experts[0].gate.format == .q8_0 and olmoe.swiglu_limit > 0))
     {
         return false;
     }
@@ -266,7 +301,8 @@ fn experts(job: olmoe.ExpertJob) bool
     var first: [max_group + 1]c_int = undefined;
     for (job.experts, 0..) |e, i|
     {
-        if (e.gate.format != .q8_0 or e.up.format != .q8_0 or e.down.format != .q8_0)
+        const f0 = job.experts[0].gate.format;
+        if ((f0 != .q8_0 and f0 != .q4_k) or e.gate.format != f0 or e.up.format != f0 or e.down.format != f0)
         {
             return false;
         }
@@ -277,7 +313,7 @@ fn experts(job: olmoe.ExpertJob) bool
     }
     first[job.experts.len] = @intCast(job.first[job.experts.len]);
     const e0 = job.experts[0];
-    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, @ptrCast(job.src.ptr), @ptrCast(job.inv.ptr), job.w.ptr, job.x.ptr, @intCast(job.n), @intCast(job.k), @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr);
+    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, @ptrCast(job.src.ptr), @ptrCast(job.inv.ptr), job.w.ptr, job.x.ptr, @intCast(job.n), @intCast(job.k), @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr, if (e0.gate.format == .q4_k) 2 else 0, olmoe.swiglu_limit);
     if (rc != 0)
     {
         std.log.err("gpu: expert batch failed ({d}); using the CPU from here on", .{-rc});
@@ -296,8 +332,9 @@ fn matmul(m: olmoe.Mat, x: []const f32, n: usize, y: []f32) bool
     {
         return false;
     }
+    const format = formatOf(m) orelse return false;
     const dev = devAddr(m) orelse return false;
-    const rc = tf_gpu_matmul(handle.?, dev, formatOf(m).?, x.ptr, @intCast(n), @intCast(m.rows), @intCast(m.cols), y.ptr);
+    const rc = tf_gpu_matmul(handle.?, dev, format, x.ptr, @intCast(n), @intCast(m.rows), @intCast(m.cols), y.ptr);
     if (rc != 0)
     {
         // Fall back to the CPU for the rest of the run rather than abort.

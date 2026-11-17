@@ -1967,6 +1967,7 @@ fn modelName(cfg: olmoe.Config) []const u8
         .qwen3moe => if (cfg.yarn > 0) "Qwen3-MoE (YaRN)" else "Qwen3-MoE",
         .qwen35moe => "Qwen3.5-MoE",
         .qwen4exp => "Qwen3.8-Flash-Next",
+        .glm5next => "GLM-5.3-Flash",
     };
 }
 
@@ -2009,7 +2010,9 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         // A long prompt's golden keeps no hidden states (TASK-31), so none are traced for it.
         const has_hidden = if (golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer0.hidden", .{p}))) |_| true else |_| false;
         const R = cfg.residual();
-        const top = if (cfg.qsa_heads > 0) cfg.qsaTop() else 0;
+        // QSA's blocks (TASK-31) or DSA's pools (TASK-32): kept per query, compared the same way.
+        const top = if (cfg.qsa_heads > 0) cfg.qsaTop() else if (cfg.dsa_heads > 0) cfg.dsaTop() else 0;
+        const dsa = cfg.dsa_heads > 0;
         const trace: olmoe.Trace = .{
             .hidden = try gpa.alloc(f32, if (has_hidden) cfg.layers * n * R else 0),
             .topk = try gpa.alloc(u32, cfg.layers * n * cfg.top_k),
@@ -2045,10 +2048,10 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
             // QSA's kept blocks, for the queries with more complete blocks than its budget (TASK-31).
             if (top > 0 and !cfg.recurrent(l))
             {
-                if (golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.qsa_from", .{ p, l }))) |gf|
+                if (golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.{s}", .{ p, l, if (dsa) "dsa_from" else "qsa_from" }))) |gf|
                 {
                     const from: usize = @intCast(gf.i32s()[0]);
-                    const gb = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.qsa_blocks", .{ p, l }))).i32s();
+                    const gb = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.{s}", .{ p, l, if (dsa) "dsa_pools" else "qsa_blocks" }))).i32s();
                     const kept = trace.qsa[cfg.attnIndex(l) * n * top ..][0 .. n * top];
                     // Blocks both kept, per query; the lists are ascending, so one swap would shift every later position.
                     var same: usize = 0;
@@ -2085,9 +2088,14 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
                     }
                     if (same != gb.len)
                     {
-                        std.debug.print("{s}: prompt {d}, layer {d}: QSA blocks {d}/{d} same\n", .{ name, p, l, same, gb.len });
+                        std.debug.print("{s}: prompt {d}, layer {d}: {s} {d}/{d} same\n", .{ name, p, l, if (dsa) "DSA pools" else "QSA blocks", same, gb.len });
                     }
                 } else |_| {}
+            }
+            // Dense leading layers (TASK-32) route nothing.
+            if (l < cfg.dense_layers)
+            {
+                continue;
             }
             const gi = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.topk_idx", .{ p, l }))).i32s();
             // Compare chosen sets per token (order within ties may differ).
@@ -2126,11 +2134,12 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
             worst_logit = @max(worst_logit, lerr);
         }
         ok = ok and pass;
-        std.debug.print("{s}: prompt {d} ({d} tokens, {d:.0} ms): logits max err {e:.2} (last {d} positions{s}), top-1 {d}/{d}, hidden max err {e:.2}, experts chosen {d}/{d} same ({d:.3}%), QSA blocks {d}/{d} same ({d:.3}%{s}) {s}\n", .{
+        const unit = if (dsa) "DSA pools" else "QSA blocks";
+        std.debug.print("{s}: prompt {d} ({d} tokens, {d:.0} ms): logits max err {e:.2} (last {d} positions{s}), top-1 {d}/{d}, hidden max err {e:.2}, experts chosen {d}/{d} same ({d:.3}%), {s} {d}/{d} same ({d:.3}%{s}) {s}\n", .{
             name,                                 p,                               n,                  ms,          lerr, ln,
             if (long) ", not held to 1e-2" else "", top1,                          ln,                 hidden_err,  routing_same,
-            routing_total,                        100 * share(routing_same, routing_total), blocks_same, blocks_total, 100 * share(blocks_same, blocks_total),
-            if (first_exact orelse true) "" else ", first QSA layer differs", if (pass) "ok" else "FAIL",
+            routing_total,                        100 * share(routing_same, routing_total), unit, blocks_same, blocks_total, 100 * share(blocks_same, blocks_total),
+            if (first_exact orelse true) "" else ", first selecting layer differs", if (pass) "ok" else "FAIL",
         });
     }
     if (cfg.qsa_heads > 0)

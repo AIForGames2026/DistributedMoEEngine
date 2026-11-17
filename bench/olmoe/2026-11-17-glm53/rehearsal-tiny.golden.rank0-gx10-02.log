@@ -1,0 +1,43 @@
+load: non-expert weights and 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+rdma: prompt 0 (5 tokens, 9 ms): logits max err 5.54e-6 (last 5 positions), top-1 5/5, hidden max err 8.88e-6, experts chosen 80/80 same (100.000%), DSA pools 0/0 same (100.000%) ok
+rdma: prompt 1 (20 tokens, 8 ms): logits max err 1.14e-5 (last 20 positions), top-1 20/20, hidden max err 1.66e-5, experts chosen 320/320 same (100.000%), DSA pools 18/18 same (100.000%) ok
+rdma: prompt 2 (14 tokens, 6 ms): logits max err 1.15e-5 (last 14 positions), top-1 14/14, hidden max err 1.74e-5, experts chosen 224/224 same (100.000%), DSA pools 6/6 same (100.000%) ok
+rdma: PASS: GLM-5.3-Flash logits within 1e-2 of the PyTorch reference (worst 1.15e-5), every top-1 token identical
+rdma: generate prompt 0: 32 tokens in 0.06 s (535.3 tokens/s, prompt included)
+rdma:   tokens: 180 149 102 156 134 172 133 53 154 0 206 123 63 110 202 153 101 153 202 148 30 172 133 10 105 203 35 47 199 195 186 248
+rdma:   same as transformers' generate(): 16/16 tokens, logits max err 1.16e-5 at step 5 ok
+rdma: generate prompt 1: 32 tokens in 0.07 s (463.9 tokens/s, prompt included)
+rdma:   tokens: 187 202 143 244 183 0 253 105 16 110 225 12 181 36 30 187 89 132 156 134 195 153 154 217 215 10 209 152 190 9 183 8
+rdma:   same as transformers' generate(): 16/16 tokens, logits max err 4.83e-6 at step 13 ok
+rdma: generate prompt 2: 32 tokens in 0.07 s (468.9 tokens/s, prompt included)
+rdma:   tokens: 213 102 10 246 220 234 137 238 209 173 246 70 72 99 17 213 194 23 188 128 239 172 192 30 187 176 139 193 200 220 86 220
+rdma:   same as transformers' generate(): 16/16 tokens, logits max err 1.31e-5 at step 2 ok
+rdma: PASS: every generated token matches transformers' generate(), logits within 1e-2
+rdma: 1811 expert calls sent to 2 peers, 925 run locally; payload f32
+rdma: rank 1 (192.168.197.13): 1076 expert calls
+rdma: rank 2 (192.168.177.11): 735 expert calls
+rdma: heap: 467 allocations, 467 frees, peak 10.9 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "src/engine/zig-out-g32/bin/olmoe rdma-router models/glm53-tiny/tiny.gguf --peer rdma:192.168.197.13:48235@rocep1s0f0 --peer rdma:192.168.177.11:48235@rocep1s0f1 --gpu --golden models/glm53-tiny/tiny.tfref --generate 32 --max-step 4096 --payload f32"
+	User time (seconds): 0.11
+	System time (seconds): 0.51
+	Percent of CPU this job got: 90%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.69
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 128704
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 2
+	Minor (reclaiming a frame) page faults: 23386
+	Voluntary context switches: 9846
+	Involuntary context switches: 4
+	Swaps: 0
+	File system inputs: 3656
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

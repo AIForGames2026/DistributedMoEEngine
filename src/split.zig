@@ -85,6 +85,64 @@ pub fn cacheCounts(cache: *const ExpertCache) telemetry.CacheCounts
 }
 
 /// This process's experts: all loaded at startup, or held in an expert cache.
+/// Buffers for running a layer's calls grouped by expert (TASK-32): per expert, its calls'
+/// count, first index and fill point in `order`; per batch row, its input, output and call.
+const Grouped = struct {
+    count: []u32,
+    start: []u32,
+    fill: []u32,
+    want: []Want,
+    want_expert: []u32,
+    held: []ExpertCache.Held,
+    held_expert: []u32,
+    batch: []olmoe.Expert,
+    first: []u32,
+    order: []u32,
+    row_call: []u32,
+    iota: []u32,
+    ones: []f32,
+    xg: []f32,
+    yg: []f32,
+
+    fn init(gpa: std.mem.Allocator, cfg: olmoe.Config, calls: usize) !*Grouped
+    {
+        const ne = cfg.experts;
+        const g = try gpa.create(Grouped);
+        g.* = .{
+            .count = try gpa.alloc(u32, ne),
+            .start = try gpa.alloc(u32, ne + 1),
+            .fill = try gpa.alloc(u32, ne),
+            .want = try gpa.alloc(Want, ne),
+            .want_expert = try gpa.alloc(u32, ne),
+            .held = try gpa.alloc(ExpertCache.Held, ne),
+            .held_expert = try gpa.alloc(u32, ne),
+            .batch = try gpa.alloc(olmoe.Expert, ne),
+            .first = try gpa.alloc(u32, ne + 1),
+            .order = try gpa.alloc(u32, calls),
+            .row_call = try gpa.alloc(u32, calls),
+            .iota = try gpa.alloc(u32, calls),
+            .ones = try gpa.alloc(f32, calls),
+            .xg = try gpa.alloc(f32, calls * cfg.d_model),
+            .yg = try gpa.alloc(f32, calls * cfg.d_model),
+        };
+        for (g.iota, 0..) |*v, i|
+        {
+            v.* = @intCast(i);
+        }
+        @memset(g.ones, 1);
+        return g;
+    }
+
+    fn deinit(g: *Grouped, gpa: std.mem.Allocator) void
+    {
+        inline for (.{ "count", "start", "fill", "want", "want_expert", "held", "held_expert", "batch", "first", "order", "row_call", "iota", "ones", "xg", "yg" }) |f|
+        {
+            gpa.free(@field(g, f));
+        }
+        gpa.destroy(g);
+    }
+};
+
 pub const Experts = struct {
     local: *olmoe.LocalExperts,
     cache: ?*ExpertCache = null,
@@ -97,6 +155,9 @@ pub const Experts = struct {
     pending_want: []Want = &.{},
     /// The most tokens one step may bring (`--max-step`).
     max_tokens: usize = default_max_tokens,
+    /// With a GPU (TASK-32): room to run each expert's calls as one job, every ready expert at once.
+    grouped: ?*Grouped = null,
+    gpa: ?std.mem.Allocator = null,
 
     pub const default_max_tokens = 64;
 
@@ -106,6 +167,19 @@ pub const Experts = struct {
         self.contrib = try gpa.alloc(f32, self.max_tokens * cfg.top_k * cfg.d_model);
         self.pending = try gpa.alloc(u32, self.max_tokens * cfg.top_k);
         self.pending_want = try gpa.alloc(Want, self.max_tokens * cfg.top_k);
+        self.gpa = gpa;
+    }
+
+    /// The grouped buffers once the GPU runs experts, made on first use: a rank with an
+    /// expert cache maps its slots for the GPU only after `alloc`.
+    fn groupedRoom(self: *Experts) !?*Grouped
+    {
+        if (self.grouped == null and olmoe.gpu_experts != null)
+        {
+            const cfg = self.local.cfg;
+            self.grouped = try Grouped.init(self.gpa.?, cfg, self.max_tokens * cfg.top_k);
+        }
+        return self.grouped;
     }
 
     pub fn free(self: *Experts, gpa: std.mem.Allocator) void
@@ -113,6 +187,10 @@ pub const Experts = struct {
         gpa.free(self.contrib);
         gpa.free(self.pending);
         gpa.free(self.pending_want);
+        if (self.grouped) |g|
+        {
+            g.deinit(gpa);
+        }
     }
 
     fn pos(self: *Experts, layer: usize) u64
@@ -188,6 +266,10 @@ pub const Experts = struct {
     /// ready experts first and the rest as they load. Returns how many ran.
     fn runCalls(self: *Experts, layer: usize, x: []const f32, n: usize, idx: []const u32, contrib: []f32, owner: ?[]const u8) !usize
     {
+        if (try self.groupedRoom()) |g|
+        {
+            return self.runGrouped(g, layer, x, n, idx, self.local.cfg.top_k, contrib, owner);
+        }
         const d = self.local.cfg.d_model;
         const k = self.local.cfg.top_k;
         var ran: usize = 0;
@@ -260,6 +342,162 @@ pub const Experts = struct {
     }
 
     /// Reports a call whose output is not finite (or, with TF_NAN_TRACE=1, huge), and the CPU's answer from the same slot.
+    /// `runCalls` with a GPU: the calls grouped by expert, and every expert that is ready
+    /// run in one job, then the rest as they load.
+    fn runGrouped(self: *Experts, g: *Grouped, layer: usize, x: []const f32, n: usize, idx: []const u32, k: usize, contrib: []f32, owner: ?[]const u8) !usize
+    {
+        const ne = self.local.cfg.experts;
+        @memset(g.count, 0);
+        for (0..n * k) |s|
+        {
+            if (mine(idx[s], owner))
+            {
+                g.count[idx[s]] += 1;
+            }
+        }
+        var at: u32 = 0;
+        for (0..ne) |e|
+        {
+            g.start[e] = at;
+            g.fill[e] = at;
+            at += g.count[e];
+        }
+        g.start[ne] = at;
+        for (0..n * k) |s|
+        {
+            if (mine(idx[s], owner))
+            {
+                g.order[g.fill[idx[s]]] = @intCast(s);
+                g.fill[idx[s]] += 1;
+            }
+        }
+        var waiting: usize = 0;
+        for (0..ne) |e|
+        {
+            if (g.count[e] > 0)
+            {
+                g.want[waiting] = try self.want(layer, e);
+                g.want_expert[waiting] = @intCast(e);
+                waiting += 1;
+            }
+        }
+        var ran: usize = 0;
+        var first_round = true;
+        var t0: u64 = 0;
+        while (waiting > 0)
+        {
+            var m: usize = 0;
+            var i: usize = 0;
+            while (i < waiting)
+            {
+                const h = (try self.poll(&g.want[i])) orelse
+                {
+                    i += 1;
+                    continue;
+                };
+                g.held[m] = h;
+                g.held_expert[m] = g.want_expert[i];
+                m += 1;
+                waiting -= 1;
+                g.want[i] = g.want[waiting];
+                g.want_expert[i] = g.want_expert[waiting];
+            }
+            if (first_round)
+            {
+                first_round = false;
+                if (self.cache) |cache|
+                {
+                    for (g.want_expert[0..waiting]) |e|
+                    {
+                        cache.stats.deferred += g.count[e];
+                    }
+                }
+            }
+            if (m == 0)
+            {
+                if (t0 == 0)
+                {
+                    t0 = mf.nowNs();
+                }
+                std.atomic.spinLoopHint();
+                continue;
+            }
+            if (t0 != 0)
+            {
+                if (self.cache) |cache|
+                {
+                    cache.stats.wait_ns += mf.nowNs() - t0;
+                }
+                t0 = 0;
+            }
+            ran += self.runBatch(g, layer, x, idx, k, contrib, m);
+        }
+        return ran;
+    }
+
+    fn mine(expert: u32, owner: ?[]const u8) bool
+    {
+        if (expert == olmoe.Capacity.skip)
+        {
+            return false;
+        }
+        if (owner) |o|
+        {
+            return o[expert] == 0;
+        }
+        return true;
+    }
+
+    /// One GPU job for the `m` held experts' calls; each output goes to its call's row of `contrib`.
+    fn runBatch(self: *Experts, g: *Grouped, layer: usize, x: []const f32, idx: []const u32, k: usize, contrib: []f32, m: usize) usize
+    {
+        const d = self.local.cfg.d_model;
+        var rows: usize = 0;
+        for (0..m) |j|
+        {
+            const e = g.held_expert[j];
+            g.first[j] = @intCast(rows);
+            g.batch[j] = g.held[j].expert;
+            for (g.order[g.start[e]..g.start[e + 1]]) |s|
+            {
+                @memcpy(g.xg[rows * d ..][0..d], x[(s / k) * d ..][0..d]);
+                g.row_call[rows] = s;
+                rows += 1;
+            }
+        }
+        g.first[m] = @intCast(rows);
+        const on_gpu = olmoe.gpu_experts.?(.{
+            .experts = g.batch[0..m],
+            .first = g.first[0 .. m + 1],
+            .src = g.iota[0..rows],
+            .inv = g.iota[0..rows],
+            .w = g.ones[0..rows],
+            .x = g.xg[0 .. rows * d],
+            .n = rows,
+            .k = 1,
+            .y = g.yg[0 .. rows * d],
+        });
+        for (0..m) |j|
+        {
+            for (g.first[j]..g.first[j + 1]) |r|
+            {
+                const s = g.row_call[r];
+                const out = contrib[s * d ..][0..d];
+                if (on_gpu)
+                {
+                    @memcpy(out, g.yg[r * d ..][0..d]);
+                }
+                else
+                {
+                    g.held[j].expert.forwardCpu(g.xg[r * d ..][0..d], out, self.local.scratch);
+                }
+                self.checkCall(layer, idx[s], s / k, g.held[j], x[(s / k) * d ..][0..d], out, "batched");
+            }
+            self.put(g.held[j]);
+        }
+        return rows;
+    }
+
     fn checkCall(self: *Experts, layer: usize, expert: u32, token: usize, h: ExpertCache.Held, x: []const f32, y: []const f32, how: []const u8) void
     {
         if (olmoe.allFinite(y) and !(olmoe.nanTrace() and olmoe.maxAbs(y) >= 1e4))
@@ -766,6 +1004,12 @@ pub const Server = struct {
                 check();
             }
         }
+        try self.reply(hdr, y, out);
+    }
+
+    /// Sends a call's result back in as many chunks as it came in.
+    fn reply(self: *Server, hdr: wire.Header, y: []const f32, out: *wire.Packet) !void
+    {
         const enc = wire.encodingOf(hdr);
         for (0..wire.chunkCount(enc, self.experts.local.cfg.d_model)) |ch|
         {
@@ -779,6 +1023,10 @@ pub const Server = struct {
     /// still loading waits while later calls run.
     pub fn serve(self: *Server) !void
     {
+        if (try self.experts.groupedRoom()) |g|
+        {
+            return self.serveGrouped(g);
+        }
         const ep = self.ep;
         const experts = self.experts;
         const cfg = experts.local.cfg;
@@ -911,6 +1159,150 @@ pub const Server = struct {
                 @as(f64, @floatFromInt(hints.lead_ns)) / @as(f64, @floatFromInt(@max(hints.starts, 1))) / 1e3,
                 @as(f64, @floatFromInt(if (hints.starts > 0) hints.lead_min_ns else 0)) / 1e3,
             });
+        }
+    }
+
+    /// How long the queue stays empty before gathered calls run.
+    const gather_ns = 200 * std.time.ns_per_us;
+
+    /// `serve` with a GPU (TASK-32): calls that arrive back to back are gathered, one layer at
+    /// a time, and run grouped by expert before their answers go back.
+    fn serveGrouped(self: *Server, g: *Grouped) !void
+    {
+        const ep = self.ep;
+        const experts = self.experts;
+        const cfg = experts.local.cfg;
+        const d = cfg.d_model;
+        const big = olmoe.big_allocator;
+        const cap = g.order.len;
+        const xs = try big.alloc(f32, cap * d);
+        defer big.free(xs);
+        const ys = try big.alloc(f32, cap * d);
+        defer big.free(ys);
+        const hdrs = try big.alloc(wire.Header, cap);
+        defer big.free(hdrs);
+        const idx = try big.alloc(u32, cap);
+        defer big.free(idx);
+        var hint_arena: std.heap.ArenaAllocator = .init(big);
+        defer hint_arena.deinit();
+        var hints = try HintLog.init(hint_arena.allocator(), cfg.layers, cfg.experts);
+        const out = try big.create(wire.Packet);
+        defer big.destroy(out);
+        out.* = std.mem.zeroes(wire.Packet);
+        std.debug.print("expert: rank {d} serving (calls gathered and run grouped by expert on the GPU), resident memory {d:.0} MB\n", .{ ep.rank, mb(budget.residentBytes()) });
+        var n: usize = 0;
+        var batches: u64 = 0;
+        var have: usize = 0;
+        var first: wire.Header = undefined;
+        var idle_since: u64 = 0;
+        while (true)
+        {
+            const r = (try ep.tryRecv()) orelse
+            {
+                if (have == 0 and n > 0)
+                {
+                    const now = mf.nowNs();
+                    if (idle_since == 0)
+                    {
+                        idle_since = now;
+                    }
+                    else if (now - idle_since >= gather_ns)
+                    {
+                        try self.flush(g, xs, ys, hdrs, idx, n, out);
+                        batches += 1;
+                        n = 0;
+                        idle_since = 0;
+                    }
+                }
+                else if (ep.peer_done and n == 0)
+                {
+                    break;
+                }
+                std.atomic.spinLoopHint();
+                continue;
+            };
+            idle_since = 0;
+            const hdr = r.packet.header;
+            if (r.kind == .dispatch and wire.isPrefetch(hdr) and have == 0)
+            {
+                try hints.hint(r.packet, mf.nowNs());
+                for (0..try wire.prefetchCount(r.packet)) |j|
+                {
+                    experts.hintAt(hdr.token_id * cfg.layers + hdr.layer, hdr.layer, wire.prefetchExpert(r.packet, j));
+                }
+                try ep.release();
+                continue;
+            }
+            if (r.kind != .dispatch or hdr.layer >= cfg.layers or hdr.expert >= cfg.experts or !self.owned[hdr.expert])
+            {
+                return error.BadDispatch;
+            }
+            const chunks = wire.chunkCount(wire.encodingOf(hdr), d);
+            if (have == 0)
+            {
+                // A call of another layer, or no room: run the gathered ones first.
+                if (n > 0 and (hdr.layer != hdrs[0].layer or n == cap))
+                {
+                    try self.flush(g, xs, ys, hdrs, idx, n, out);
+                    batches += 1;
+                    n = 0;
+                }
+                first = hdr;
+                hints.call(hdr.layer, mf.nowNs());
+                if (hints.position(hdr.layer)) |at|
+                {
+                    experts.enterAt(at);
+                }
+            }
+            if (hdr.token_id != first.token_id or hdr.layer != first.layer or hdr.expert != first.expert or
+                try wire.decodeChunk(r.packet, xs[n * d ..][0..d]) != have)
+            {
+                return error.BadDispatch;
+            }
+            try ep.release();
+            have += 1;
+            if (have < chunks)
+            {
+                continue;
+            }
+            have = 0;
+            hdrs[n] = first;
+            idx[n] = first.expert;
+            n += 1;
+        }
+        try ep.finish();
+        std.debug.print("expert: rank {d} ran {d} expert FFNs for rank 0 in {d} grouped jobs, {d:.0} us each on average (max {d:.0} us), {d:.2} s in all; resident memory {d:.0} MB\n", .{
+            ep.rank,
+            self.answered,
+            batches,
+            @as(f64, @floatFromInt(self.ffn_ns)) / @as(f64, @floatFromInt(@max(batches, 1))) / 1e3,
+            @as(f64, @floatFromInt(self.ffn_max_ns)) / 1e3,
+            @as(f64, @floatFromInt(self.ffn_ns)) / 1e9,
+            mb(budget.residentBytes()),
+        });
+    }
+
+    /// Runs `n` gathered calls of one layer and sends each answer back.
+    fn flush(self: *Server, g: *Grouped, xs: []f32, ys: []f32, hdrs: []const wire.Header, idx: []const u32, n: usize, out: *wire.Packet) !void
+    {
+        const d = self.experts.local.cfg.d_model;
+        const t0 = mf.nowNs();
+        _ = try self.experts.runGrouped(g, hdrs[0].layer, xs[0 .. n * d], n, idx[0..n], 1, ys, null);
+        const took = mf.nowNs() - t0;
+        self.ffn_ns += took;
+        self.ffn_max_ns = @max(self.ffn_max_ns, took);
+        for (0..n) |i|
+        {
+            try self.reply(hdrs[i], ys[i * d ..][0..d], out);
+        }
+        const before = self.answered;
+        self.answered += n;
+        if (self.answered / 256 != before / 256)
+        {
+            if (self.check_memory) |check|
+            {
+                check();
+            }
         }
     }
 };

@@ -33,6 +33,8 @@ pub fn build(b: *std.Build) void {
     engine.addAnonymousImport("qwen35_tiny.tfref", .{ .root_source_file = b.path("tests/golden/qwen35_tiny.tfref") });
     engine.addAnonymousImport("qwen38_tiny.gguf", .{ .root_source_file = b.path("tests/golden/qwen38_tiny.gguf") });
     engine.addAnonymousImport("qwen38_tiny.tfref", .{ .root_source_file = b.path("tests/golden/qwen38_tiny.tfref") });
+    engine.addAnonymousImport("glm53_tiny.gguf", .{ .root_source_file = b.path("tests/golden/glm53_tiny.gguf") });
+    engine.addAnonymousImport("glm53_tiny.tfref", .{ .root_source_file = b.path("tests/golden/glm53_tiny.tfref") });
     // The TCP transport uses Winsock on Windows.
     if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 

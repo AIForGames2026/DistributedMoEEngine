@@ -120,10 +120,21 @@ pub const Model = struct {
                 h.getInt(key(&key_buf, arch, "feed_forward_length")) orelse return error.NotMoe,
         );
         errdefer m.deinit(gpa);
+        // Leading dense layers (GLM-5.3-Flash, TASK-32) have no experts: their entries stay empty.
+        const dense = h.getInt(key(&key_buf, arch, "leading_dense_block_count")) orelse 0;
         for (0..m.layers) |l| {
             for ([_]Projection{ .gate, .up, .down }) |p| {
                 var name_buf: [64]u8 = undefined;
                 const name = std.fmt.bufPrint(&name_buf, "blk.{d}.ffn_{t}_exps.weight", .{ l, p }) catch unreachable;
+                if (l < dense and h.tensor(name) == null)
+                {
+                    const s = m.shapeOf(p);
+                    for (0..m.experts) |e|
+                    {
+                        m.weights[(l * 3 + @backingInt(p)) * m.experts + e] = .{ .layer = @intCast(l), .proj = p, .expert = @intCast(e), .rows = s[0], .cols = s[1], .layout = .gguf, .format = .f32, .parts = .{ .{}, .{}, .{} } };
+                    }
+                    continue;
+                }
                 const t = h.tensor(name) orelse return error.BadShape;
                 const s = m.shapeOf(p);
                 const want = [3]u64{ s[1], s[0], m.experts };

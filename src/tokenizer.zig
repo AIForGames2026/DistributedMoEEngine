@@ -11,11 +11,14 @@
 //!                  ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
 //!   qwen35 (Qwen3.5, TASK-29): qwen2 with combining marks (\p{M}) counted
 //!                  with letters, and so left out of the punctuation runs.
+//!   glm4 (GLM-5.3-Flash, TASK-32): qwen2 with numbers in runs of up to three
+//!                  digits. Its BPE also ignores merges: a piece that is a whole
+//!                  vocabulary token is that token.
 const std = @import("std");
 const gguf = @import("gguf.zig");
 const unicode = @import("unicode.zig");
 
-pub const Pattern = enum { gpt2, qwen2, qwen35 };
+pub const Pattern = enum { gpt2, qwen2, qwen35, glm4 };
 
 pub const Error = error{ UnsupportedTokenizer, BadTokenizer, InvalidUtf8, OutOfMemory };
 
@@ -24,6 +27,7 @@ const Merge = struct { rank: u32, id: u32 };
 
 const qwen2_regex = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const qwen35_regex = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const glm4_regex = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 
 pub const Tokenizer = struct {
     arena: std.heap.ArenaAllocator,
@@ -37,6 +41,10 @@ pub const Tokenizer = struct {
     bos: ?u32 = null,
     eos: ?u32 = null,
     chat_template: ?[]const u8 = null,
+    /// With `ignore_merges`, each vocabulary token's bytes to its id: a piece found here skips BPE.
+    whole: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Whether text is NFC-normalized before splitting; GLM-5.3-Flash's tokenizer has no normalizer.
+    nfc: bool = true,
 
     pub fn deinit(self: *Tokenizer) void {
         self.arena.deinit();
@@ -58,10 +66,14 @@ pub const Tokenizer = struct {
             .qwen2
         else if (std.mem.eql(u8, pre, "qwen35"))
             .qwen35
+        else if (std.mem.eql(u8, pre, "glm4"))
+            .glm4
         else
             return error.UnsupportedTokenizer;
 
         var b = try Builder.init(gpa, pattern);
+        // A GGUF does not record ignore_merges; GLM-5.3-Flash's tokenizer.json sets it.
+        b.ignore_merges = pattern == .glm4;
         errdefer b.arena.deinit();
         const a = b.arena.allocator();
         var toks = h.strings("tokenizer.ggml.tokens") orelse return error.BadTokenizer;
@@ -88,6 +100,8 @@ pub const Tokenizer = struct {
             rank += 1;
         }
         var tok = try b.finish();
+        // A GGUF does not record the normalizer: GLM-5.3-Flash has none, the others NFC.
+        tok.nfc = pattern != .glm4;
         tok.bos = if (h.getInt("tokenizer.ggml.bos_token_id")) |v| @intCast(v) else null;
         tok.eos = if (h.getInt("tokenizer.ggml.eos_token_id")) |v| @intCast(v) else null;
         if (h.getString("tokenizer.chat_template")) |t|
@@ -106,12 +120,14 @@ pub const Tokenizer = struct {
         defer parsed.deinit();
         const root = asObject(parsed.value) orelse return error.BadTokenizer;
 
+        var nfc = false;
         if (root.get("normalizer")) |n|
         {
             if (n != .null and !std.mem.eql(u8, typeOf(n) orelse "", "NFC"))
             {
                 return error.UnsupportedTokenizer;
             }
+            nfc = n != .null;
         }
         const pattern = jsonPattern(root.get("pre_tokenizer") orelse return error.UnsupportedTokenizer) orelse return error.UnsupportedTokenizer;
         const model = asObject(root.get("model") orelse return error.BadTokenizer) orelse return error.BadTokenizer;
@@ -122,6 +138,7 @@ pub const Tokenizer = struct {
 
         var b = try Builder.init(gpa, pattern);
         errdefer b.arena.deinit();
+        b.ignore_merges = asBool(model.get("ignore_merges")) orelse false;
         const a = b.arena.allocator();
         const vocab = asObject(model.get("vocab") orelse return error.BadTokenizer) orelse return error.BadTokenizer;
         var it = vocab.iterator();
@@ -182,7 +199,9 @@ pub const Tokenizer = struct {
                 else => return error.BadTokenizer,
             }
         }
-        return b.finish();
+        var tok = try b.finish();
+        tok.nfc = nfc;
+        return tok;
     }
 
     pub fn vocabSize(self: *const Tokenizer) usize {
@@ -230,7 +249,14 @@ pub const Tokenizer = struct {
             if (end > pos)
             {
                 norm.clearRetainingCapacity();
-                try unicode.nfc(gpa, text[pos..end], &norm);
+                if (self.nfc)
+                {
+                    try unicode.nfc(gpa, text[pos..end], &norm);
+                }
+                else
+                {
+                    try norm.appendSlice(gpa, text[pos..end]);
+                }
                 var npos: usize = 0;
                 while (npos < norm.items.len)
                 {
@@ -299,6 +325,10 @@ pub const Tokenizer = struct {
     }
 
     fn bpe(self: *const Tokenizer, gpa: std.mem.Allocator, word: []const u8, s: *Scratch, out: *std.ArrayList(u32)) Error!void {
+        if (self.whole.get(word)) |id|
+        {
+            return out.append(gpa, id);
+        }
         const none = std.math.maxInt(u32);
         s.ids.clearRetainingCapacity();
         s.next.clearRetainingCapacity();
@@ -498,6 +528,7 @@ fn split(gpa: std.mem.Allocator, pattern: Pattern, text: []const u8, s: *Scratch
             .gpt2 => matchGpt2(cps, i),
             .qwen2 => matchQwen(cps, i, class_letter),
             .qwen35 => matchQwen(cps, i, class_letter | class_mark),
+            .glm4 => matchQwenDigits(cps, i, class_letter, 3),
         };
         std.debug.assert(end > i);
         i = end;
@@ -608,6 +639,11 @@ fn matchGpt2(cps: []const u21, i: usize) usize {
 
 /// The qwen2 and qwen35 patterns, which differ only in what counts as a letter (`letters`).
 fn matchQwen(cps: []const u21, i: usize, letters: u8) usize {
+    return matchQwenDigits(cps, i, letters, 1);
+}
+
+/// The qwen2 family with numbers in runs of up to `digits` (1 for qwen2, 3 for glm4).
+fn matchQwenDigits(cps: []const u21, i: usize, letters: u8, digits: usize) usize {
     if (contraction(cps, i, true)) |end|
     {
         return end;
@@ -623,7 +659,7 @@ fn matchQwen(cps: []const u21, i: usize, letters: u8) usize {
     }
     if (c & class_number != 0)
     {
-        return i + 1;
+        return @min(runOf(cps, i, class_number), i + digits);
     }
     const s = if (cps[i] == ' ') i + 1 else i;
     if (isOtherThan(cps, s, letters))
@@ -655,6 +691,7 @@ const Builder = struct {
     by_text: std.StringHashMapUnmanaged(u32) = .empty,
     merges: std.AutoHashMapUnmanaged(u64, Merge) = .empty,
     joined: std.ArrayList(u8) = .empty,
+    ignore_merges: bool = false,
 
     fn init(gpa: std.mem.Allocator, pattern: Pattern) !Builder {
         return .{ .arena = std.heap.ArenaAllocator.init(gpa), .pattern = pattern };
@@ -735,6 +772,17 @@ const Builder = struct {
             id.* = self.by_text.get(enc[0..len]) orelse
                 if (byte == 0xC0 or byte == 0xC1 or byte >= 0xF5) std.math.maxInt(u32) else return error.BadTokenizer;
         }
+        var whole: std.StringHashMapUnmanaged(u32) = .empty;
+        if (self.ignore_merges)
+        {
+            for (self.vocab.items, 0..) |v, id|
+            {
+                if (v != null and pieces[id].len > 0)
+                {
+                    try whole.put(a, pieces[id], @intCast(id));
+                }
+            }
+        }
         return .{
             .arena = self.arena,
             .pattern = self.pattern,
@@ -743,6 +791,7 @@ const Builder = struct {
             .byte_ids = byte_ids,
             .merges = self.merges,
             .added = self.added.items,
+            .whole = whole,
         };
     }
 };
@@ -928,7 +977,7 @@ fn jsonPattern(v: std.json.Value) ?Pattern {
         .string => |s| s,
         else => return null,
     };
-    const which: Pattern = if (std.mem.eql(u8, re, qwen2_regex)) .qwen2 else if (std.mem.eql(u8, re, qwen35_regex)) .qwen35 else return null;
+    const which: Pattern = if (std.mem.eql(u8, re, qwen2_regex)) .qwen2 else if (std.mem.eql(u8, re, qwen35_regex)) .qwen35 else if (std.mem.eql(u8, re, glm4_regex)) .glm4 else return null;
     if (!std.mem.eql(u8, behavior, "Isolated") or (asBool(sp.get("invert")) orelse false))
     {
         return null;
@@ -964,6 +1013,11 @@ test "qwen35 pattern keeps combining marks with letters" {
     try expectSplit(.qwen35, "cafe\u{301} !\u{301}x", &.{ "cafe\u{301}", " !", "\u{301}x" });
     try expectSplit(.qwen2, "cafe\u{301} !\u{301}x", &.{ "cafe", "\u{301}", " !\u{301}", "x" });
     try expectSplit(.qwen35, "x 12345 !!\n\n", &.{ "x", " ", "1", "2", "3", "4", "5", " !!\n\n" });
+}
+
+test "glm4 pattern keeps up to three digits together" {
+    try expectSplit(.glm4, "x 12345 !!\n\n", &.{ "x", " ", "123", "45", " !!\n\n" });
+    try expectSplit(.glm4, "It'S 7 (hi)\n", &.{ "It", "'S", " ", "7", " (", "hi", ")\n" });
 }
 
 test "qwen2 pattern splits like Hugging Face" {

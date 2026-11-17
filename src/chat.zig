@@ -11,13 +11,16 @@
 //!   qwen38 (Qwen3.8-Flash-Next, TASK-31): Qwen3's turns with trimmed text, a
 //!     reasoning-effort system note, every turn's reasoning kept, and a prompt
 //!     that opens the reply's <think>
+//!   glm (GLM-5.3-Flash, TASK-32): [gMASK]<sop>, a reasoning-effort system turn,
+//!     <|user|>Hi, <|assistant|><think>...</think>reply, and a prompt that opens <think>
 const std = @import("std");
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 
-pub const Format = enum { tulu, qwen3, qwen3_release, qwen38 };
+pub const Format = enum { tulu, qwen3, qwen3_release, qwen38, glm };
 
-/// Qwen3.8's `reasoning_effort`; xhigh and low add a note to the system turn, medium adds none.
-pub const Effort = enum { xhigh, medium, low };
+/// `reasoning_effort`. Qwen3.8 takes xhigh, medium or low (xhigh and low add a system note);
+/// GLM-5.3-Flash takes low or high, and anything else is its default, max.
+pub const Effort = enum { xhigh, high, medium, low, max };
 
 pub const Role = enum { system, user, assistant };
 
@@ -40,7 +43,12 @@ pub const Options = struct {
 /// Whether the prompt itself opens the reply's reasoning, so generation starts inside it.
 pub fn opensReasoning(format: Format, opts: Options) bool
 {
-    return format == .qwen38 and opts.add_generation_prompt and opts.thinking != false;
+    return switch (format) {
+        .qwen38 => opts.add_generation_prompt and opts.thinking != false,
+        // GLM's template opens it whatever the client asks.
+        .glm => opts.add_generation_prompt,
+        else => false,
+    };
 }
 
 /// The format matching a model's chat template, or null for one we do not reimplement.
@@ -70,15 +78,21 @@ pub fn detect(tok: *const Tokenizer) ?Format {
     {
         return .qwen38;
     }
+    if (tok.pattern == .glm4 and std.mem.startsWith(u8, t, "[gMASK]<sop>") and has(t, "Reasoning Effort: {{ effective_reasoning_effort | capitalize }}") and
+        has(t, "<|assistant|>{{- '<think>' -}}") and has(t, "{{ '<think>' + reasoning_content +  '</think>'}}"))
+    {
+        return .glm;
+    }
     return null;
 }
 
 /// Token ids that end an assistant reply.
-pub fn stopIds(format: Format, tok: *const Tokenizer, buf: *[2]u32) []const u32 {
+pub fn stopIds(format: Format, tok: *const Tokenizer, buf: *[4]u32) []const u32 {
     var n: usize = 0;
     const names: []const []const u8 = switch (format) {
         .tulu => &.{"<|endoftext|>"},
         .qwen3, .qwen3_release, .qwen38 => &.{ "<|im_end|>", "<|endoftext|>" },
+        .glm => &.{ "<|endoftext|>", "<|user|>", "<|observation|>" },
     };
     for (names) |name|
     {
@@ -103,15 +117,58 @@ pub fn render(gpa: std.mem.Allocator, format: Format, messages: []const Message,
         .qwen3 => try renderQwen3(gpa, messages, opts, false, out),
         .qwen3_release => try renderQwen3(gpa, messages, opts, true, out),
         .qwen38 => try renderQwen38(gpa, messages, opts, out),
+        .glm => try renderGlm(gpa, messages, opts, out),
+    }
+}
+
+/// GLM-5.3-Flash's template: turns as they are, an assistant turn's reasoning taken from
+/// `reasoning` or else from a </think> in its content, and its reply trimmed.
+fn renderGlm(gpa: std.mem.Allocator, messages: []const Message, opts: Options, out: *std.ArrayList(u8)) !void {
+    const effort: []const u8 = switch (opts.effort) {
+        .low => "Low",
+        .high => "High",
+        else => "Max",
+    };
+    try appendAll(gpa, out, &.{ "[gMASK]<sop><|system|>Reasoning Effort: ", effort });
+    for (messages) |m|
+    {
+        switch (m.role)
+        {
+            .system => try appendAll(gpa, out, &.{ "<|system|>", m.content }),
+            .user => try appendAll(gpa, out, &.{ "<|user|>", m.content }),
+            .assistant => {
+                var content = m.content;
+                var reasoning: ?[]const u8 = m.reasoning;
+                if (reasoning == null)
+                {
+                    if (std.mem.indexOf(u8, content, "</think>")) |end|
+                    {
+                        const before = content[0..end];
+                        const open = if (std.mem.lastIndexOf(u8, before, "<think>")) |i| i + "<think>".len else 0;
+                        reasoning = before[open..];
+                        content = content[std.mem.lastIndexOf(u8, content, "</think>").? + "</think>".len ..];
+                    }
+                }
+                try appendAll(gpa, out, &.{ "<|assistant|><think>", reasoning orelse "", "</think>", pyTrim(content) });
+            },
+        }
+    }
+    if (opts.add_generation_prompt)
+    {
+        try out.appendSlice(gpa, "<|assistant|><think>");
     }
 }
 
 /// Refuses what Qwen3.8's template raises an exception for: a system turn after the first, or no user query.
 fn renderQwen38(gpa: std.mem.Allocator, messages: []const Message, opts: Options, out: *std.ArrayList(u8)) !void {
+    if (opts.effort == .high or opts.effort == .max)
+    {
+        return error.UnsupportedEffort;
+    }
     const note: []const u8 = if (opts.thinking == false) "" else switch (opts.effort) {
         .xhigh => "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.",
-        .medium => "",
         .low => "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration.",
+        else => "",
     };
     const system = if (messages[0].role == .system) pyTrim(messages[0].content) else "";
     if (system.len > 0)
@@ -313,6 +370,12 @@ test "qwen3 drops old reasoning and keeps it after the last user turn" {
         .{ .role = .user, .content = "Q" },
         .{ .role = .assistant, .content = "A", .reasoning = "\nr\n" },
     }, .{ .add_generation_prompt = false }, "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\nQ<|im_end|>\n<|im_start|>assistant\n<think>\nr\n</think>\n\nA<|im_end|>\n");
+}
+
+test "glm takes reasoning from a </think> and opens the reply's" {
+    try expectRender(.glm, &.{ .{ .role = .user, .content = "Hi" }, .{ .role = .assistant, .content = "<think>r</think>\n Hello \n" }, .{ .role = .user, .content = "Again" } }, .{}, "[gMASK]<sop><|system|>Reasoning Effort: Max<|user|>Hi<|assistant|><think>r</think>Hello<|user|>Again<|assistant|><think>");
+    try expectRender(.glm, &.{.{ .role = .user, .content = "Q" }}, .{ .effort = .low, .add_generation_prompt = false }, "[gMASK]<sop><|system|>Reasoning Effort: Low<|user|>Q");
+    try expectRender(.glm, &.{ .{ .role = .user, .content = "Q" }, .{ .role = .assistant, .content = "x</think>y</think>z" } }, .{ .add_generation_prompt = false }, "[gMASK]<sop><|system|>Reasoning Effort: Max<|user|>Q<|assistant|><think>x</think>z");
 }
 
 test "qwen38 keeps every turn's reasoning and opens the reply's" {

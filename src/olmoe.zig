@@ -36,6 +36,7 @@ const loader = @import("loader.zig");
 const pool = @import("pool.zig");
 const kv_format = @import("kv_format.zig");
 const qwen38 = @import("qwen38.zig");
+const glm53 = @import("glm53.zig");
 pub const KvFormat = kv_format.KvFormat;
 
 /// The model families the engine runs.
@@ -48,6 +49,8 @@ pub const Arch = enum {
     qwen35moe,
     /// Qwen3.8-Flash-Next (TASK-31): Qwen3.5-MoE with hyper-connections, QSA, and an n-gram embedding.
     qwen4exp,
+    /// GLM-5.3-Flash (TASK-32, GGUF "glm5-next"): KDA and MLA layers with a DSA indexer, mHC, dense leading layers.
+    glm5next,
 };
 
 pub const Config = struct {
@@ -99,6 +102,28 @@ pub const Config = struct {
     ple_row: usize = 0,
     ple_conv: usize = 0,
     ple_eos: u32 = 0,
+    /// GLM-5.3-Flash (TASK-32): leading layers with a dense feed-forward block, and its size.
+    dense_layers: usize = 0,
+    dense_ff: usize = 0,
+    /// KDA's forget gate lower bound (its heads and sizes are the ssm_ fields).
+    kda_lower: f32 = 0,
+    /// MLA: query rank, key and value latent width, and each head's key and value sizes.
+    mla_q_rank: usize = 0,
+    mla_kv_rank: usize = 0,
+    mla_k: usize = 0,
+    mla_v: usize = 0,
+    /// DSA: indexer heads, their size, tokens kept, and tokens per pool.
+    dsa_heads: usize = 0,
+    dsa_dim: usize = 0,
+    dsa_budget: usize = 0,
+    dsa_pool: usize = 0,
+    /// mHC: Sinkhorn iterations and its epsilon (the streams are `streams`).
+    hc_iters: usize = 0,
+    hc_eps: f32 = 0,
+    /// Router: sigmoid scores with a choice bias, renormalized and scaled by this.
+    route_scale: f32 = 0,
+    /// SwiGLU inputs clamped at this, 0 for none.
+    swiglu_limit: f32 = 0,
 
     pub fn qDim(self: Config) usize
     {
@@ -180,9 +205,19 @@ pub const Config = struct {
         return (self.ple_conv - 1) * self.ple_ngram;
     }
 
+    /// DSA's complete pools kept per query.
+    pub fn dsaTop(self: Config) usize
+    {
+        return self.dsa_budget / self.dsa_pool;
+    }
+
     pub fn fromGguf(h: gguf.Header) !Config {
         const name = h.getString("general.architecture") orelse return error.NotOlmoe;
-        const arch = std.meta.stringToEnum(Arch, name) orelse return error.NotOlmoe;
+        const arch = if (std.mem.eql(u8, name, "glm5-next")) .glm5next else std.meta.stringToEnum(Arch, name) orelse return error.NotOlmoe;
+        if (arch == .glm5next)
+        {
+            return glm53.config(h);
+        }
         const Keys = struct {
             hh: gguf.Header,
             prefix: []const u8,
@@ -330,6 +365,10 @@ pub var gpu_matmuls: ?*const fn (mats: []const Mat, x: []const f32, n: usize, ys
 pub var gpu_register: ?*const fn (buf: []u8) ?u64 = null;
 pub var gpu_unregister: ?*const fn (buf: []u8) void = null;
 
+/// Set with a GPU (TASK-32): maps a buffer of weights for the rest of the run, so matmuls
+/// on weights in it run there; false leaves them on the CPU.
+pub var gpu_adopt: ?*const fn (buf: []u8) bool = null;
+
 /// Set with a GPU (TASK-12): runs a group of experts there in one call, each
 /// on its own rows of `x`, and returns true, or false to use the CPU path.
 pub var gpu_experts: ?*const fn (job: ExpertJob) bool = null;
@@ -408,7 +447,7 @@ pub const Profile = struct {
     qsa_cpu: u64 = 0,
 
     /// Adds the time since `t` to `field` and moves `t` on.
-    fn lap(field: *u64, t: *u64) void
+    pub fn lap(field: *u64, t: *u64) void
     {
         const now = nowNs();
         field.* += now - t.*;
@@ -1133,10 +1172,17 @@ pub const Expert = struct {
         const row = scratch[2 * f ..][0..@max(self.gate.cols, f)];
         self.gate.matmul(x, 1, g, row);
         self.up.matmul(x, 1, u, row);
-        for (g, u) |*a, b| a.* = silu(a.*) * b;
+        for (g, u) |*a, b|
+        {
+            a.* = glm53.swiglu(a.*, b, swiglu_limit);
+        }
         self.down.matmul(g, 1, out, row);
     }
 };
+
+/// SwiGLU input clamp for routed experts (TASK-32's GLM-5.3-Flash), 0 for none. Every process
+/// that runs experts sets it from its model's config (`LocalExperts.init`, the expert cache).
+pub var swiglu_limit: f32 = 0;
 
 /// How the MoE block reaches its experts.
 pub const Moe = struct {
@@ -1416,6 +1462,8 @@ pub const Layer = struct {
     indexer: ?Indexer = null,
     /// The n-gram embedding, in its one layer.
     ple: ?PleLayer = null,
+    /// GLM-5.3-Flash's blocks (TASK-32); `router` is empty in its dense layers.
+    glm: ?glm53.Parts = null,
 };
 
 /// A hyper-connection (TASK-31): an RMSNorm over each stream (`norm`, streams x d_model),
@@ -1502,6 +1550,10 @@ pub const Weights = struct {
     }
 
     pub fn init(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader.Plan, region: []const u8) !Weights {
+        if (cfg.arch == .glm5next)
+        {
+            return glm53.weights(gpa, h, cfg, plan, region);
+        }
         var self: Weights = .{ .cfg = cfg, .embed = undefined, .layers = undefined, .out_norm = undefined, .head = undefined, .arena = .init(gpa) };
         errdefer self.arena.deinit();
         const a = self.arena.allocator();
@@ -1760,6 +1812,12 @@ pub const KvCache = struct {
     qsa_dim: usize = 0,
     /// Device address of `qsa` when a GPU reads it in place, else 0.
     dev_qsa: u64 = 0,
+    /// DSA (TASK-32), per MLA layer: each position's indexer key and pooling gate, then each
+    /// complete pool's key, `dsa_floats` apiece.
+    dsa: []f32 = &.{},
+    dsa_floats: usize = 0,
+    dsa_dim: usize = 0,
+    dsa_pool: usize = 1,
     /// The n-gram embedding's state (TASK-31): the last tokens before `len`, and its convolution's past inputs.
     ple_ctx: [Config.max_ngram]u32 = @splat(0),
     ple_eos: u32 = 0,
@@ -1806,6 +1864,14 @@ pub const KvCache = struct {
             self.qsa = try big_allocator.alloc(f32, cfg.attnLayers() * self.qsa_floats);
         }
         errdefer big_allocator.free(self.qsa);
+        if (cfg.dsa_heads > 0)
+        {
+            self.dsa_dim = cfg.dsa_dim;
+            self.dsa_pool = cfg.dsa_pool;
+            self.dsa_floats = 2 * self.cap * cfg.dsa_dim + self.cap / cfg.dsa_pool * cfg.dsa_dim;
+            self.dsa = try big_allocator.alloc(f32, cfg.attnLayers() * self.dsa_floats);
+        }
+        errdefer big_allocator.free(self.dsa);
         if (cfg.ple_layer != null)
         {
             self.ple_eos = cfg.ple_eos;
@@ -1840,6 +1906,7 @@ pub const KvCache = struct {
         }
         big_allocator.free(self.state);
         big_allocator.free(self.qsa);
+        big_allocator.free(self.dsa);
         big_allocator.free(self.ple_conv);
     }
 
@@ -1861,7 +1928,12 @@ pub const KvCache = struct {
     {
         _ = a;
         const d = cfg.kvDim();
-        const row = format.rows(d, cfg.kv_heads);
+        var row = format.rows(d, cfg.kv_heads);
+        // GLM-5.3-Flash keeps one MLA latent per position and no values.
+        if (cfg.arch == .glm5next)
+        {
+            row[1] = 0;
+        }
         // Positions rounded up to whole tiles, so the GPU never reads past the end.
         const room = (cap + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions * AttentionJob.tile_positions;
         const layer_bytes: [2]usize = .{
@@ -1871,14 +1943,14 @@ pub const KvCache = struct {
         // Only attention layers keep keys and values; a Gated DeltaNet layer keeps a fixed-size state.
         const k = try allocPages(cfg.attnLayers() * layer_bytes[0]);
         errdefer freePages(k);
-        const v = try allocPages(cfg.attnLayers() * layer_bytes[1]);
+        const v: []u8 = if (layer_bytes[1] == 0) @constCast(&[_]u8{}) else try allocPages(cfg.attnLayers() * layer_bytes[1]);
         errdefer freePages(v);
         var self: KvCache = .{ .cap = room, .d = d, .kv_heads = cfg.kv_heads, .format = format, .row = row, .layer_bytes = layer_bytes, .k = k, .v = v };
         try self.addExtras(cfg);
         errdefer self.freeExtras();
         if (gpu_register) |reg|
         {
-            if (AttentionJob.gpuHeadDim(cfg.head_dim))
+            if (AttentionJob.gpuHeadDim(cfg.head_dim) and v.len > 0)
             {
                 if (reg(k)) |dk|
                 {
@@ -1963,6 +2035,24 @@ pub const KvCache = struct {
         return len;
     }
 
+    /// One MLA layer's DSA indexer keys, `dsa_dim` per position.
+    pub fn dsaKeys(self: KvCache, layer: usize) []f32
+    {
+        return self.dsa[layer * self.dsa_floats ..][0 .. self.cap * self.dsa_dim];
+    }
+
+    /// Its pooling gate scores, `dsa_dim` per position.
+    pub fn dsaGates(self: KvCache, layer: usize) []f32
+    {
+        return self.dsa[layer * self.dsa_floats + self.cap * self.dsa_dim ..][0 .. self.cap * self.dsa_dim];
+    }
+
+    /// Its complete pools' keys, `dsa_dim` per pool.
+    pub fn dsaPools(self: KvCache, layer: usize) []f32
+    {
+        return self.dsa[layer * self.dsa_floats + 2 * self.cap * self.dsa_dim ..][0 .. self.cap / self.dsa_pool * self.dsa_dim];
+    }
+
     /// The state of the `index`-th Gated DeltaNet layer.
     pub fn recurrentState(self: KvCache, index: usize) []f32
     {
@@ -1985,6 +2075,10 @@ pub const KvCache = struct {
 
     fn freePages(s: []u8) void
     {
+        if (s.len == 0)
+        {
+            return;
+        }
         big_allocator.rawFree(s, page_align, @returnAddress());
     }
 
@@ -2011,7 +2105,10 @@ pub const KvCache = struct {
         if (self.format == .f32)
         {
             @memcpy(dk[0 .. n * self.row[0]], std.mem.sliceAsBytes(k[0 .. n * self.d]));
-            @memcpy(dv[0 .. n * self.row[1]], std.mem.sliceAsBytes(v[0 .. n * self.d]));
+            if (self.row[1] > 0)
+            {
+                @memcpy(dv[0 .. n * self.row[1]], std.mem.sliceAsBytes(v[0 .. n * self.d]));
+            }
             return;
         }
         const Rows = struct {
@@ -2093,6 +2190,10 @@ pub fn forwardAs(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, tokens: []
 /// only the last one's if it holds fewer rows than that.
 pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache, tokens: []const u32, logits: []f32, trace: ?Trace) !void
 {
+    if (w.cfg.arch == .glm5next)
+    {
+        return glm53.step(gpa, w, moe, cache, tokens, logits, trace);
+    }
     const cfg = w.cfg;
     const n = tokens.len;
     const d = cfg.d_model;
@@ -2750,7 +2851,7 @@ fn scoreGuesses(p: *Lookahead, guess: []const u32, idx: []const u32, li: usize, 
     p.total[hz - 1] += n * k;
 }
 
-fn nowNs() u64
+pub fn nowNs() u64
 {
     if (@import("builtin").os.tag == .windows)
     {
@@ -2921,11 +3022,12 @@ pub const LocalExperts = struct {
     const max_group = 1024;
 
     pub fn init(a: std.mem.Allocator, cfg: Config, m: loader.Model, owned: []const bool, plan: loader.Plan, region: []const u8) !LocalExperts {
+        swiglu_limit = cfg.swiglu_limit;
         const ex = try a.alloc(?Expert, cfg.layers * cfg.experts);
         for (ex, 0..) |*e, i| {
             const layer: u32 = @intCast(i / cfg.experts);
             const id: u32 = @intCast(i % cfg.experts);
-            if (!owned[id]) {
+            if (!owned[id] or layer < cfg.dense_layers) {
                 e.* = null;
                 continue;
             }
@@ -3126,7 +3228,7 @@ pub const LocalExperts = struct {
             ex.up.matmul(xb[first * d ..], cnt, ub, self.scratch);
             for (gb[0 .. cnt * f], ub[0 .. cnt * f]) |*a, b|
             {
-                a.* = silu(a.*) * b;
+                a.* = glm53.swiglu(a.*, b, swiglu_limit);
             }
             ex.down.matmul(gb, cnt, yb[first * d ..], self.scratch);
         }
@@ -3154,6 +3256,7 @@ pub const LocalExperts = struct {
 
 test {
     _ = pool;
+    _ = glm53;
 }
 
 test "capacity keeps each expert's highest-weight calls and drops the rest" {
@@ -3765,6 +3868,166 @@ test "tiny Qwen3.8-Flash-Next (hyper-connections, QSA, n-gram embedding) matches
         }
     }
     try std.testing.expect(checked_blocks > 0);
+}
+
+test "tiny GLM-5.3-Flash (mHC, KDA, MLA with DSA, dense layers) matches transformers (tools/ref/ref_glm53.py --tiny)" {
+    const tfref = @import("tfref.zig");
+    const gpa = std.testing.allocator;
+    const file = @embedFile("glm53_tiny.gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    try std.testing.expectEqual(Arch.glm5next, cfg.arch);
+    try std.testing.expectEqual(@as(usize, 4), cfg.streams);
+    try std.testing.expectEqual(@as(usize, 1), cfg.dense_layers);
+    try std.testing.expectEqual(@as(usize, 2), cfg.dsaTop());
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [8]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+    defer local.deinit();
+    const golden = try tfref.File.parse(@embedFile("glm53_tiny.tfref"));
+
+    // Q4_K, which the tiny experts do not use, against gguf-py on a separate tensor.
+    const qt = h.tensor("test.q4_k").?;
+    const want_q = (try golden.get("test.q4_k")).f32s();
+    const got_q = try gpa.alloc(f32, want_q.len);
+    defer gpa.free(got_q);
+    try quant.dequantize(qt.format, file[qt.offset..][0..qt.bytes], got_q);
+    for (got_q, want_q) |got, exp|
+    {
+        try std.testing.expectApproxEqAbs(exp, got, 1e-6);
+    }
+
+    const prompts: usize = @intCast((try golden.get("config")).i32s()[0]);
+    const R = cfg.residual();
+    const k = cfg.top_k;
+    const top = cfg.dsaTop();
+    var checked_pools: usize = 0;
+    for (0..prompts) |p|
+    {
+        var buf: [64]u8 = undefined;
+        const ids = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
+        const n = ids.len;
+        const tokens = try gpa.alloc(u32, n);
+        defer gpa.free(tokens);
+        for (tokens, ids) |*t, id|
+        {
+            t.* = @intCast(id);
+        }
+        const logits = try gpa.alloc(f32, n * cfg.vocab);
+        defer gpa.free(logits);
+        const trace: Trace = .{
+            .hidden = try gpa.alloc(f32, cfg.layers * n * R),
+            .topk = try gpa.alloc(u32, cfg.layers * n * k),
+            .qsa = try gpa.alloc(i32, cfg.attnLayers() * n * top),
+        };
+        defer gpa.free(trace.hidden);
+        defer gpa.free(trace.topk);
+        defer gpa.free(trace.qsa);
+        try forward(gpa, &w, local.moe(), tokens, logits, trace);
+        for (0..cfg.layers) |l|
+        {
+            const hw = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.hidden", .{ p, l }))).f32s();
+            for (trace.hidden[l * n * R ..][0 .. n * R], hw, 0..) |a, b, i|
+            {
+                if (@abs(a - b) > 1e-4)
+                {
+                    std.debug.print("layer {d}, token {d}, value {d}: {d} against {d}\n", .{ l, i / R, i % R, a, b });
+                    return error.TestHiddenMismatch;
+                }
+            }
+            if (l >= cfg.dense_layers)
+            {
+                // transformers' choice order is unspecified, so the sets are compared, ascending.
+                const gi = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.topk_idx", .{ p, l }))).i32s();
+                for (0..n) |t|
+                {
+                    const row = trace.topk[(l * n + t) * k ..][0..k];
+                    std.mem.sort(u32, row, {}, std.sort.asc(u32));
+                    for (row, gi[t * k ..][0..k]) |got, exp|
+                    {
+                        try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+                    }
+                }
+            }
+            if (cfg.recurrent(l))
+            {
+                continue;
+            }
+            const kept = trace.qsa[cfg.attnIndex(l) * n * top ..][0 .. n * top];
+            const from_t = golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.dsa_from", .{ p, l })) catch
+            {
+                for (kept) |b|
+                {
+                    try std.testing.expectEqual(@as(i32, -1), b);
+                }
+                continue;
+            };
+            const from: usize = @intCast(from_t.i32s()[0]);
+            const gp = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.dsa_pools", .{ p, l }))).i32s();
+            for (kept[0 .. from * top]) |b|
+            {
+                try std.testing.expectEqual(@as(i32, -1), b);
+            }
+            for (kept[from * top ..], gp, 0..) |got, exp, i|
+            {
+                if (got != exp)
+                {
+                    std.debug.print("layer {d}, token {d}: kept pool {d}, transformers {d}\n", .{ l, from + i / top, got, exp });
+                    return error.TestDsaMismatch;
+                }
+            }
+            checked_pools += gp.len;
+        }
+        const want = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits", .{p}))).f32s();
+        for (logits, want) |a, b|
+        {
+            try std.testing.expectApproxEqAbs(b, a, 1e-4);
+        }
+
+        // Generation steps one token at a time, so the KDA, MLA and DSA state carries across steps.
+        const want_tokens = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_tokens", .{p}))).i32s();
+        const want_logits = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_logits", .{p}))).f32s();
+        const g = want_tokens.len;
+        const all = try gpa.alloc(u32, n + g);
+        defer gpa.free(all);
+        @memcpy(all[0..n], tokens);
+        var cache = try KvCache.init(gpa, cfg, n + g);
+        defer cache.deinit(gpa);
+        var sampler: Sampler = .{};
+        const step_logits = try gpa.alloc(f32, g * cfg.vocab);
+        defer gpa.free(step_logits);
+        try generate(gpa, &w, local.moe(), &cache, all[0..n], &sampler, all[n..], step_logits);
+        for (all[n..], want_tokens) |got, exp|
+        {
+            try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+        }
+        for (step_logits, want_logits) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-4);
+        }
+
+        // A prompt fed in pieces gives the same last logits as in one pass.
+        cache.reset();
+        const half = n / 2;
+        const piece = try gpa.alloc(f32, cfg.vocab);
+        defer gpa.free(piece);
+        try step(gpa, &w, local.moe(), &cache, tokens[0..half], piece, null);
+        try step(gpa, &w, local.moe(), &cache, tokens[half..], piece, null);
+        for (piece, logits[(n - 1) * cfg.vocab ..][0..cfg.vocab]) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-5);
+        }
+    }
+    try std.testing.expect(checked_pools > 0);
 }
 
 test "lookahead on hyper-connections leaves every logit bit-identical" {

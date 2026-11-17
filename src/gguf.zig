@@ -62,6 +62,7 @@ pub fn formatOf(ggml_type: u32) ?quant.Format {
         1 => .f16,
         2 => .q4_0,
         8 => .q8_0,
+        12 => .q4_k,
         30 => .bf16,
         39 => .mxfp4,
         40 => .nvfp4,

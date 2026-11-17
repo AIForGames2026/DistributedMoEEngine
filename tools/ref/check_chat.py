@@ -65,6 +65,7 @@ SETTINGS = [
     {"add_generation_prompt": True, "enable_thinking": True},
     {"add_generation_prompt": True, "reasoning_effort": "low"},
     {"add_generation_prompt": True, "reasoning_effort": "medium"},
+    {"add_generation_prompt": True, "reasoning_effort": "high"},
 ]
 
 

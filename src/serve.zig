@@ -302,6 +302,7 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
     chat.render(a, format, req.messages, chat_opts, &text) catch |err| switch (err) {
         error.SystemNotFirst => return sendError(fd, 400, "A system message must come first.", "invalid_request_error", "messages"),
         error.NoUserQuery => return sendError(fd, 400, "The messages need a user turn that is not a tool response.", "invalid_request_error", "messages"),
+        error.UnsupportedEffort => return sendError(fd, 400, "This model does not take that reasoning_effort.", "invalid_request_error", "chat_template_kwargs"),
         else => return err,
     };
     var prompt: std.ArrayList(u32) = .empty;
@@ -318,7 +319,7 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
         return sendError(fd, 400, msg, "invalid_request_error", "messages");
     }
 
-    var stop_buf: [2]u32 = undefined;
+    var stop_buf: [4]u32 = undefined;
     var sampler = olmoe.Sampler.seeded(req.temperature, req.top_k, req.seed orelse opts.clock());
     sampler.top_p = req.top_p;
     const think_open = tok.addedId("<think>");

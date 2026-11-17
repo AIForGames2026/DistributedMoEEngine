@@ -1,0 +1,8 @@
+load: non-expert weights and 96 of 288 experts, 67.21 GB in 12.15 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (67.21 GB in 1.97 s)
+rdma: recording every step to /home/admin/lukehinojosa/bench-glm53/chat.jsonl
+rdma: OpenAI-compatible API at http://127.0.0.1:8093/v1 (model "GLM-5.3-Flash-Q4_K-00002-of-00002", chat format glm, context 16384 tokens, reusing shared prompt prefixes)
+rdma: chat page with the live diagram at http://127.0.0.1:8093/
+rdma: request 1: 28 prompt tokens (0 reused), 89 generated in 40.88 s, first token 4864 ms, 2.4 tokens/s decoding, finish stop
+rdma: request 2: 137 prompt tokens (116 reused), 135 generated in 59.74 s, first token 4040 ms, 2.4 tokens/s decoding, finish stop
+rdma: request 3: 260 prompt tokens (0 reused), 53 generated in 64.92 s, first token 42693 ms, 2.3 tokens/s decoding, finish stop

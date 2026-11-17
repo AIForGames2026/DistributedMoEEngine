@@ -445,10 +445,23 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-32] GLM-5.3-Flash (Hybrid Attention, 320B)
 - **Milestone**: None (after v1)
-- **Status**: Backlog
+- **Status**: In Progress (started Nov 17)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 15, third step of the hybrid track. As reported by NVIDIA's model coverage page and hosting providers (to be checked against its `config.json`): 320B parameters with 18B active per token; 45 layers, the first 3 with dense feed-forward blocks and the other 42 with 288 experts, 8 routed plus 1 shared per token; 34 KDA layers (a delta-rule linear attention with per-channel gates, which generalizes TASK-29's Gated DeltaNet) and 11 sparse MLA-style attention layers with a token indexer. Its smallest 4-bit GGUF is about 200 GB, so it needs two Sparks in memory or one streaming experts from NVMe. New work on top of TASK-31: per-channel gating in the delta-rule kernel, MLA with sparse token selection, dense leading layers, and the router (likely sigmoid with a bias, to be confirmed). The vision encoder stays out. Generating transformers references for a 320B model may need the lazy expert loading TASK-12's reference script uses, or more memory than the lab has; settle that before scheduling.
-- **Acceptance Criteria**: To be written when it is scheduled. Minimum: the TASK-10 and TASK-24 checks against a reference, and a one-Spark run with experts streamed from NVMe, recorded in `bench/`.
+- **Checked against the release (Nov 17)**: `config.json` (`glm5_next`), ggml-org's GGUF (`glm5-next`, Q4_K, 181 GB in two parts) and transformers 5.23's `modeling_glm5_next.py`.
+  - **Layers:** 45, hidden size 4,096. Three KDA layers to every MLA layer (34 and 11). The first 3 layers have a dense feed-forward block (12,288), the other 42 an MoE block.
+  - **KDA:** Gated DeltaNet with a decay per key channel. 64 heads of 128, separate short convolutions for q, k and v, a low-rank forget gate bounded below at -5, a sigmoid beta, and an output norm gated through a low-rank projection.
+  - **MLA with DSA:** 64 heads, queries through a 1,536 rank, keys and values through a 512-wide latent, heads of 256, no rope at all. An indexer (32 heads of 128) scores pools of 4 tokens, each pooled by a learned softmax over its tokens, and keeps the best 512 pools (2,048 tokens) plus the unfinished tail, as in TASK-31's QSA.
+  - **mHC:** 4 residual streams. Before each attention and feed-forward block, a projection of all four gives the input mix, the output weights and a 4 x 4 stream mix made doubly stochastic by 20 Sinkhorn iterations. The streams are averaged before the final norm.
+  - **MoE:** 288 experts of 2,048 (14.2 MB each in Q4_K, 171 GB in all), 8 routed plus 1 shared, a sigmoid router with a bias used only for choosing, weights renormalized and scaled by 2.5. SwiGLU inputs are clamped at 10.
+  - **Weights:** routed experts in Q4_K, everything else Q8_0 or F32. The MTP layer and the vision encoder stay out. Tokenizer: the `glm4` pre-tokenizer.
+- **Acceptance Criteria** (Nov 17, following TASK-31; the user chose a multi-machine run in place of one Spark streaming from NVMe):
+  - **Against transformers:** on ggml-org's Q4_K GGUF, compared with transformers' `Glm5NextForConditionalGeneration` (text only) in float32 on the GGUF's dequantized weights, loaded lazily. The TASK-10 checks (logits within 1e-2, top-1 identical, every routing choice and every DSA pool identical) and TASK-24's greedy generation check on short prompts, and TASK-31's long-prompt criterion on one past 2,048 tokens (the first DSA layer identical, at least 99.9% of DSA pools and 99.5% of expert choices shared, every top-1 identical). Router near-ties end the logit check at that step, as in TASK-31. These run in one process and split across processes.
+  - **Unit test:** a tiny random model with the same layer mix, a DSA budget small enough to select, mHC, KDA and the dense layers checks the same in `zig build test`.
+  - **Multi-machine run:** the three Sparks over RDMA, every expert in memory (about 57 GB per Spark), in a short window when the other Sparks' servers can be stopped. The window is scripted: the owners' servers are stopped, gx10-01's watchdog paused, and both restored and checked healthy before it ends. It records the golden check, 32k and 128k prompts (time to first token, decode speed, calls per rank), and the chat replay.
+  - **GPU:** the new layers and Q4_K experts run on the GPU.
+  - **Tokenizer and chat format:** identical to Hugging Face, as in TASK-31.
+  - **Chat replay:** the scripted three-turn chat from the three-Spark run is added to the public page, written up in `bench/trace/`.
 
 #### [TASK-33] Any Number of Expert Nodes
 - **Milestone**: None (after v1)
@@ -503,9 +516,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25, TASK-32 |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25 |
 | **To Do** | (none) |
-| **In Progress** | (none) |
+| **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
 | **Review** | TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 

@@ -25,12 +25,17 @@ pub const Format = enum {
     /// values and high nibbles its last 8. A tensor-wide f32 scale, if any,
     /// is applied separately.
     nvfp4,
+    /// 256 values (ggml Q4_K, TASK-32): f16 scale and f16 min, 12 bytes packing eight 6-bit
+    /// scales and mins (one pair per 32 values), then 128 bytes of 4-bit values; each 32 bytes
+    /// hold 64 values, low nibbles first.
+    q4_k,
 
     pub fn blockValues(self: Format) usize {
         return switch (self) {
             .f32, .f16, .bf16 => 1,
             .q8_0, .q4_0, .mxfp4 => 32,
             .nvfp4 => 64,
+            .q4_k => 256,
         };
     }
 
@@ -42,6 +47,7 @@ pub const Format = enum {
             .q4_0 => 18,
             .mxfp4 => 17,
             .nvfp4 => 36,
+            .q4_k => 144,
         };
     }
 
@@ -165,7 +171,59 @@ pub fn dequantize(fmt: Format, src: []const u8, out: []f32) error{ PartialBlock,
                 }
             }
         },
+        .q4_k => {
+            var b: usize = 0;
+            while (b < out.len / 256) : (b += 1)
+            {
+                const blk = src[b * 144 ..][0..144];
+                const d = f16ToF32(std.mem.readInt(u16, blk[0..2], .little));
+                const dmin = f16ToF32(std.mem.readInt(u16, blk[2..4], .little));
+                const scales = blk[4..16];
+                for (0..4) |c|
+                {
+                    const lo = scaleMinK4(scales, 2 * c);
+                    const hi = scaleMinK4(scales, 2 * c + 1);
+                    const d1 = d * @as(f32, @floatFromInt(lo[0]));
+                    const m1 = dmin * @as(f32, @floatFromInt(lo[1]));
+                    const d2 = d * @as(f32, @floatFromInt(hi[0]));
+                    const m2 = dmin * @as(f32, @floatFromInt(hi[1]));
+                    const o = out[b * 256 + c * 64 ..][0..64];
+                    for (blk[16 + c * 32 ..][0..32], 0..) |q, l|
+                    {
+                        o[l] = d1 * @as(f32, @floatFromInt(q & 0xF)) - m1;
+                        o[l + 32] = d2 * @as(f32, @floatFromInt(q >> 4)) - m2;
+                    }
+                }
+            }
+        },
     }
+}
+
+/// Q4_K's j-th 6-bit scale and min from its 12 packed bytes (ggml's get_scale_min_k4).
+pub fn scaleMinK4(q: []const u8, j: usize) [2]u8
+{
+    if (j < 4)
+    {
+        return .{ q[j] & 63, q[j + 4] & 63 };
+    }
+    return .{ (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4), (q[j + 4] >> 4) | ((q[j] >> 6) << 4) };
+}
+
+test "q4_k block decodes scales, mins and nibbles in ggml order" {
+    var blk: [144]u8 = @splat(0);
+    std.mem.writeInt(u16, blk[0..2], @bitCast(@as(f16, 0.5)), .little);
+    std.mem.writeInt(u16, blk[2..4], @bitCast(@as(f16, 0.25)), .little);
+    blk[4] = 2; // sub-block 0: scale 2
+    blk[8] = 4; // sub-block 0: min 4
+    blk[12] = 0x3_1; // sub-block 4: scale 1, min 3
+    blk[16] = 0x0_7; // value 0: 7, value 32: 0
+    blk[16 + 64] = 0x0_5; // value 128 (sub-block 4): 5
+    var out: [256]f32 = undefined;
+    try dequantize(.q4_k, &blk, &out);
+    try std.testing.expectEqual(@as(f32, 0.5 * 2 * 7 - 0.25 * 4), out[0]);
+    try std.testing.expectEqual(@as(f32, 0), out[32]);
+    try std.testing.expectEqual(@as(f32, 0.5 * 1 * 5 - 0.25 * 3), out[128]);
+    try std.testing.expectEqual(@as(u64, 144 * 2), try Format.q4_k.bytesFor(512));
 }
 
 test "format sizes match ggml" {

@@ -1,0 +1,63 @@
+10:38:52 gx10-01 health: {"ok": true, "backend": "tensorfold", "busy": false, "requests_running": 0, "requests_total": 1357, "prompt_tokens_total; gx10-03 requests running: 0
+10:39:00 gx10-01: qwen38-27b-tf stopped, watchdog paused
+10:39:12 gx10-03: qwen38-flash stopped
+10:39:14 == check
+== check 10:39:15, stop at 12:10
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, zig 0.17.0
+engine: v0.2.0-alpha-43-g21172ab-g32
+a1e9bcead2fce5ca96f5a4ef54dc77ad6dd9ba77ecde57f812e875e6d3e33f07  models/glm53-flash/GLM-5.3-Flash-Q4_K-00001-of-00002.gguf
+27636dd16f76d39aa95db1de081cf458f705f1c78f8f1010b2fac3edc416c116  models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+ls: cannot access 'models/glm53-flash/glm53_golden.tfref': No such file or directory
+-rw-rw-r-- 1 admin admin 1781584 Nov 17 10:13 models/glm53-flash/repo.tokens
+               total        used        free      shared  buff/cache   available
+Mem:             121           5           8           0         108         116
+== 192.168.197.13
+GX10-03
+               total        used        free      shared  buff/cache   available
+Mem:             121           5         113           0           3         115
+[N/A]
+65636288 -rw-rw-r-- 1 admin admin 181363033792 Nov 17 05:47 /home/admin/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+4b7ca7ee7120746ba62541293eb0d5be  /home/admin/lukehinojosa/bin/olmoe-g32
+== 192.168.177.11
+GX10-01
+               total        used        free      shared  buff/cache   available
+Mem:             121           5         113           0           3         116
+[N/A]
+65636120 -rw-rw-r-- 1 admin admin 181363033792 Nov 17 05:51 /home/admin/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+4b7ca7ee7120746ba62541293eb0d5be  /home/admin/lukehinojosa/bin/olmoe-g32
+4b7ca7ee7120746ba62541293eb0d5be  src/engine/zig-out-g32/bin/olmoe
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+G32_DONE 10:41:02
+10:41:02 == chat
+== chat 10:41:03, stop at 12:10
+> In two or three sentences, what is a mixture-of-experts language model?
+A mixture-of-experts (MoE) language model is a neural network that replaces its dense feed-forward layers with multiple specialized "expert" sub-networks, using a router that activates only a small subset of experts for each input token. This lets the model have a very large total parameter count wh
+  (89 tokens, first token 4864 ms, 2.4 tokens/s, finish stop)
+
+> Why does it matter which machine each expert lives on when the model is split across computers?
+When experts are spread across machines, each token must physically travel over the network to whichever machine hosts the expert that the router selected for it. This "all-to-all" communication can become a major bottleneck, since network bandwidth between machines is much slower than memory access
+  (135 tokens, first token 4040 ms, 2.4 tokens/s, finish stop)
+
+> Give me a one-line summary of what we discussed.
+We discussed mixture-of-experts language models—how they use a router to activate only a few specialized expert sub-networks per token—and why the physical placement of experts across machines matters, since it determines network communication costs that can bottleneck performance.
+  (53 tokens, first token 42693 ms, 2.3 tokens/s, finish stop)
+
+G32_DONE 10:44:36
+10:44:36 == long32
+== long32 10:44:37, stop at 12:10
+32k: rank 0 exit 124
+rdma: prefill 4096 of 32640 positions, 1073.7 s
+G32_DONE 11:04:45
+11:04:45 == long128
+== long128 11:04:45, stop at 12:10
+128k: skipped, prefill at about 4 tokens/s cannot finish in the window
+G32_DONE 11:04:45
+11:04:45 restoring the lab servers
+11:05:34 gx10-01: qwen38-27b-tf healthy
+11:07:59 gx10-03: qwen38-flash healthy
+11:08:00 gx10-01: watchdog lock released
+11:08:00 both lab servers are back
+11:08:01 logs copied to /d/CLionProjects/DistributedMoEEngine/bench/olmoe/2026-11-17-glm53

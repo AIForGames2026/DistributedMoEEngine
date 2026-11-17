@@ -1,0 +1,4 @@
+expert: listening on port 48220
+load: 96 of 288 experts, 57.08 GB in 10.30 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (57.08 GB in 1.49 s)
+expert: rank 2 serving, resident memory 57227 MB

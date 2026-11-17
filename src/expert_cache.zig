@@ -228,8 +228,10 @@ pub const ExpertCache = struct {
             .allocator = a,
         };
         @memset(self.checked, false);
+        olmoe.swiglu_limit = cfg.swiglu_limit;
         var pinned: usize = 0;
-        for (0..@min(pin_layers, cfg.layers)) |l|
+        // Pinning starts at the first layer with experts (GLM-5.3-Flash's leading layers are dense).
+        for (cfg.dense_layers..@min(cfg.dense_layers + pin_layers, cfg.layers)) |l|
         {
             for (0..cfg.experts) |e|
             {

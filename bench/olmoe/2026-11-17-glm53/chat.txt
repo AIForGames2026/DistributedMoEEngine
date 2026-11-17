@@ -1,0 +1,12 @@
+> In two or three sentences, what is a mixture-of-experts language model?
+A mixture-of-experts (MoE) language model is a neural network that replaces its dense feed-forward layers with multiple specialized "expert" sub-networks, using a router that activates only a small subset of experts for each input token. This lets the model have a very large total parameter count wh
+  (89 tokens, first token 4864 ms, 2.4 tokens/s, finish stop)
+
+> Why does it matter which machine each expert lives on when the model is split across computers?
+When experts are spread across machines, each token must physically travel over the network to whichever machine hosts the expert that the router selected for it. This "all-to-all" communication can become a major bottleneck, since network bandwidth between machines is much slower than memory access
+  (135 tokens, first token 4040 ms, 2.4 tokens/s, finish stop)
+
+> Give me a one-line summary of what we discussed.
+We discussed mixture-of-experts language models—how they use a router to activate only a few specialized expert sub-networks per token—and why the physical placement of experts across machines matters, since it determines network communication costs that can bottleneck performance.
+  (53 tokens, first token 42693 ms, 2.3 tokens/s, finish stop)
+

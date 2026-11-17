@@ -132,7 +132,7 @@ pub fn parseChat(a: std.mem.Allocator, body: []const u8, why: *Invalid) !Request
             {
                 const name = if (e == .string) e.string else "";
                 req.effort = std.meta.stringToEnum(chat.Effort, name) orelse
-                    return invalid(why, "'reasoning_effort' must be \"xhigh\", \"medium\" or \"low\".", "reasoning_effort");
+                    return invalid(why, "'reasoning_effort' must be \"xhigh\", \"high\", \"medium\", \"low\" or \"max\".", "reasoning_effort");
             }
         }
     }

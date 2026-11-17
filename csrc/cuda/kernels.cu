@@ -57,6 +57,144 @@ extern "C" __global__ void tf_silu_mul(float *__restrict__ g, const float *__res
     }
 }
 
+// GLM-5.3-Flash's SwiGLU (TASK-32): the gate clamped from above, the up projection on both sides.
+extern "C" __global__ void tf_silu_mul_clamp(float *__restrict__ g, const float *__restrict__ u, int count, float limit)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < count)
+    {
+        const float a = fminf(g[i], limit);
+        g[i] = a / (1.0f + expf(-a)) * fminf(fmaxf(u[i], -limit), limit);
+    }
+}
+
+// Q4_K's j-th 6-bit scale and min from its 12 packed bytes (ggml's get_scale_min_k4).
+__device__ __forceinline__ void q4k_scale_min(const unsigned char *q, int j, int *sc, int *m)
+{
+    if (j < 4)
+    {
+        *sc = q[j] & 63;
+        *m = q[j + 4] & 63;
+    }
+    else
+    {
+        *sc = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
+        *m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
+    }
+}
+
+// One layer's Q4_K expert rows (TASK-32): group z has weight wt[z] and batch rows first[z] to
+// first[z + 1] - 1 of x (cols wide), writing those rows of y (rows wide). Each warp takes RW
+// weight rows; each lane decodes 8 of a block's 256 values per row and applies them to TT inputs.
+template <int TT, int RW>
+__device__ __forceinline__ void q4k_grouped(const unsigned long long *__restrict__ wt, const int *__restrict__ first,
+                                            const float *__restrict__ x, float *__restrict__ y, int rows, int cols)
+{
+    const int g = blockIdx.z;
+    const int base = first[g], cnt = first[g + 1] - base;
+    if (cnt <= 0)
+    {
+        return;
+    }
+    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+    const int row0 = (blockIdx.x * 8 + warp) * RW;
+    const int nb = cols >> 8;
+    __shared__ __align__(16) float xs[TT][256];
+    const int c = lane >> 3, sub = lane & 7;
+    const int o_lo = c * 64 + sub * 4, o_hi = o_lo + 32;
+    for (int t0 = 0; t0 < cnt; t0 += TT)
+    {
+        const int nt = min(TT, cnt - t0);
+        float acc[RW][TT];
+#pragma unroll
+        for (int r = 0; r < RW; r++)
+        {
+#pragma unroll
+            for (int t = 0; t < TT; t++)
+            {
+                acc[r][t] = 0.0f;
+            }
+        }
+        for (int b = 0; b < nb; b++)
+        {
+            __syncthreads();
+            for (int i = threadIdx.x; i < TT * 256; i += 256)
+            {
+                const int t = i >> 8, col = i & 255;
+                xs[t][col] = t < nt ? x[(size_t)(base + t0 + t) * cols + (b << 8) + col] : 0.0f;
+            }
+            __syncthreads();
+            float w[RW][8];
+#pragma unroll
+            for (int r = 0; r < RW; r++)
+            {
+                const unsigned char *blk = (const unsigned char *)wt[g] + ((size_t)min(row0 + r, rows - 1) * nb + b) * 144;
+                const float d = __half2float(__ushort_as_half((unsigned short)(blk[0] | (blk[1] << 8))));
+                const float dmin = __half2float(__ushort_as_half((unsigned short)(blk[2] | (blk[3] << 8))));
+                int s1, m1, s2, m2;
+                q4k_scale_min(blk + 4, 2 * c, &s1, &m1);
+                q4k_scale_min(blk + 4, 2 * c + 1, &s2, &m2);
+                const float d1 = d * (float)s1, mm1 = dmin * (float)m1, d2 = d * (float)s2, mm2 = dmin * (float)m2;
+                const unsigned int q = *(const unsigned int *)(blk + 16 + c * 32 + sub * 4);
+#pragma unroll
+                for (int j = 0; j < 4; j++)
+                {
+                    const unsigned int byte = (q >> (8 * j)) & 0xFF;
+                    w[r][j] = d1 * (float)(byte & 0xF) - mm1;
+                    w[r][4 + j] = d2 * (float)(byte >> 4) - mm2;
+                }
+            }
+#pragma unroll
+            for (int t = 0; t < TT; t++)
+            {
+                const float4 lo = *(const float4 *)&xs[t][o_lo];
+                const float4 hi = *(const float4 *)&xs[t][o_hi];
+#pragma unroll
+                for (int r = 0; r < RW; r++)
+                {
+                    acc[r][t] += w[r][0] * lo.x + w[r][1] * lo.y + w[r][2] * lo.z + w[r][3] * lo.w +
+                                 w[r][4] * hi.x + w[r][5] * hi.y + w[r][6] * hi.z + w[r][7] * hi.w;
+                }
+            }
+        }
+#pragma unroll
+        for (int r = 0; r < RW; r++)
+        {
+#pragma unroll
+            for (int t = 0; t < TT; t++)
+            {
+                float s = acc[r][t];
+                for (int off = 16; off > 0; off >>= 1)
+                {
+                    s += __shfl_xor_sync(0xffffffffu, s, off);
+                }
+                if (lane == 0 && t < nt && row0 + r < rows)
+                {
+                    y[(size_t)(base + t0 + t) * rows + row0 + r] = s;
+                }
+            }
+        }
+    }
+}
+
+// Few inputs per expert (decode): a row per warp, up to 8 inputs per pass.
+extern "C" __global__ void __launch_bounds__(256) tf_q4k_grouped(const unsigned long long *__restrict__ wt,
+                                                                 const int *__restrict__ first,
+                                                                 const float *__restrict__ x, float *__restrict__ y,
+                                                                 int rows, int cols)
+{
+    q4k_grouped<8, 1>(wt, first, x, y, rows, cols);
+}
+
+// Many inputs per expert (prefill): 4 rows per warp share each staged input, 16 inputs per pass.
+extern "C" __global__ void __launch_bounds__(256) tf_q4k_grouped_wide(const unsigned long long *__restrict__ wt,
+                                                                      const int *__restrict__ first,
+                                                                      const float *__restrict__ x, float *__restrict__ y,
+                                                                      int rows, int cols)
+{
+    q4k_grouped<16, 4>(wt, first, x, y, rows, cols);
+}
+
 // The power of 2 that brings a row whose largest magnitude is `mx` near the top of f16's range.
 __device__ __forceinline__ float row_up(float mx)
 {

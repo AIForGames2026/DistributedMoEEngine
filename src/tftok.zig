@@ -9,8 +9,8 @@
 //!
 //! TOKENIZER is a GGUF model (its `tokenizer.*` metadata) or a `tokenizer.json`;
 //! a `tokenizer.json` has no chat template, so `--config` supplies one.
-//! Also checks that decoding a text file's ids gives back its NFC text, and
-//! exits with status 1 if not.
+//! Also checks that decoding a text file's ids gives back its text (in NFC when
+//! the tokenizer normalizes), and exits with status 1 if not.
 const std = @import("std");
 const chat = @import("chat.zig");
 const gguf = @import("gguf.zig");
@@ -56,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
             defer ids.deinit(gpa);
             renderChat(gpa, io, &tok, format, it.next() orelse return error.MissingValue, &ids) catch |err| switch (err) {
                 // The template refuses this conversation; check_chat.py expects the same refusal.
-                error.SystemNotFirst, error.NoUserQuery => {
+                error.SystemNotFirst, error.NoUserQuery, error.UnsupportedEffort => {
                     try out.print("refused {t}\n", .{err});
                     continue;
                 },
@@ -82,7 +82,14 @@ pub fn main(init: std.process.Init) !void {
 
         var want: std.ArrayList(u8) = .empty;
         defer want.deinit(gpa);
-        try unicode.nfc(gpa, text, &want);
+        if (tok.nfc)
+        {
+            try unicode.nfc(gpa, text, &want);
+        }
+        else
+        {
+            try want.appendSlice(gpa, text);
+        }
         var back: std.ArrayList(u8) = .empty;
         defer back.deinit(gpa);
         try tokenizer.decode(gpa, &tok, ids.items, &back);

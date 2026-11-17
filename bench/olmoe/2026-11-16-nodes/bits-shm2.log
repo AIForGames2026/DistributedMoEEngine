@@ -1,0 +1,13 @@
+load: 64 of 128 experts, 15.40 GB in 4.65 s, expert CRC32C OK
+expert: rank 1 serving, resident memory 15429 MB
+load: non-expert weights and 64 of 128 experts, 17.08 GB in 4.81 s, expert CRC32C OK
+shm: context 512 tokens + 16 generated, chunks of 256; KV cache all in memory, f32, 196608 bytes per token: 0.11 GB in memory (all of it would be 0.10 GB), GPU attention off
+shm: prefill 256 of 512 positions, 148.0 s
+shm: prefill time: projections 2.3 s, QK norm and rope 0.1 s, attention 7.6 s, Gated DeltaNet 0.0 s, output 2.9 s, router 0.2 s, experts 286.9 s, LM head 0.0 s
+shm: decode time: projections 1.1 s, QK norm and rope 0.0 s, attention 0.6 s, Gated DeltaNet 0.0 s, output 0.5 s, router 0.0 s, experts 5.6 s, LM head 0.1 s
+shm: time to first token 300.069 s (2 tokens/s prefill); decode 0.530 s per token (1.89 tokens/s) over 15 steps from position 512; resident memory 17253 MB
+shm: PASS: all 16 generated tokens and their logits match /tmp/lh_n33.bin bit for bit
+shm: 102119 expert calls sent to 1 peer, 100249 run locally; payload f32
+expert: rank 1 ran 102119 expert FFNs for rank 0, 1474 us each on average (max 1641 us), 150.52 s in all; resident memory 15431 MB
+expert: heap: 43 allocations, 43 frees, peak 40.6 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 109 allocations, 109 frees, peak 191.8 MB, 0 bytes still allocated at exit (balanced)

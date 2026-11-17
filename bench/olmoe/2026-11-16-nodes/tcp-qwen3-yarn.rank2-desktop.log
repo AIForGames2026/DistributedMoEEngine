@@ -1,0 +1,5 @@
+expert: listening on port 7718
+load: 42 of 128 experts, 10.11 GB in 1.58 s, expert CRC32C OK
+expert: rank 2 serving, resident memory 10133 MB
+expert: rank 2 ran 21178 expert FFNs for rank 0, 1473 us each on average (max 4947 us), 31.19 s in all; resident memory 10135 MB
+expert: heap: 43 allocations, 43 frees, peak 27.9 MB, 0 bytes still allocated at exit (balanced)

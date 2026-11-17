@@ -1,0 +1,11 @@
+load: non-expert weights and 43 of 128 experts, 12.02 GB in 4.26 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (12.02 GB in 0.31 s)
+tcp: prompt 0 (5 tokens, 1161 ms): logits max err 2.06e-4, top-1 5/5, hidden max err 1.46e-3, experts chosen 1920/1920 same ok
+tcp: prompt 1 (17 tokens, 3516 ms): logits max err 2.88e-4, top-1 17/17, hidden max err 2.01e-3, experts chosen 6528/6528 same ok
+tcp: prompt 2 (15 tokens, 2972 ms): logits max err 5.53e-5, top-1 15/15, hidden max err 1.22e-3, experts chosen 5760/5760 same ok
+tcp: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.88e-4), every top-1 token identical
+tcp: 9511 expert calls sent to 2 peers, 4697 run locally; payload f32
+tcp: rank 1 (127.0.0.1): 4842 expert calls
+tcp: rank 2 (184.171.155.166): 4669 expert calls
+tcp: heap: 77 allocations, 77 frees, peak 91.1 MB, 0 bytes still allocated at exit (balanced)
+rc=0

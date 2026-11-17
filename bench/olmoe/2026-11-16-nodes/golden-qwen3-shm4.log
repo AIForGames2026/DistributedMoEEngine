@@ -1,0 +1,26 @@
+load: 32 of 128 experts, 7.70 GB in 5.94 s, expert CRC32C OK
+load: 32 of 128 experts, 7.70 GB in 6.03 s, expert CRC32C OK
+load: 32 of 128 experts, 7.70 GB in 6.09 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 2 serving, resident memory 7839 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 1 serving, resident memory 7839 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 3 serving, resident memory 7839 MB
+load: non-expert weights and 32 of 128 experts, 9.38 GB in 6.23 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (9.38 GB in 0.24 s)
+shm: prompt 0 (5 tokens, 394 ms): logits max err 2.73e-4, top-1 5/5, hidden max err 1.83e-3, experts chosen 1920/1920 same ok
+shm: prompt 1 (17 tokens, 1333 ms): logits max err 2.86e-4, top-1 17/17, hidden max err 2.01e-3, experts chosen 6528/6528 same ok
+shm: prompt 2 (15 tokens, 1157 ms): logits max err 1.15e-4, top-1 15/15, hidden max err 1.83e-3, experts chosen 5760/5760 same ok
+shm: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.86e-4), every top-1 token identical
+shm: 10768 expert calls sent to 3 peers, 3440 run locally; payload f32
+shm: rank 1 (GX10-02): 3585 expert calls
+shm: rank 2 (GX10-02): 3613 expert calls
+shm: rank 3 (GX10-02): 3570 expert calls
+expert: rank 1 ran 3585 expert FFNs for rank 0, 624 us each on average (max expert: rank 3 ran 3570 expert FFNs for rank 0, 611 us each on average (max expert: rank 2 ran 3613 expert FFNs for rank 0, 615 us each on average (max 1787 us), 2.24 s in all; resident memory 7843 MB
+1921 us), 2.18 s in all; resident memory 7843 MB
+2013 us), 2.22 s in all; resident memory 7843 MB
+expert: heap: 43 allocations, 43 frees, peak 27.9 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 43 allocations, 43 frees, peak 27.9 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 43 allocations, 43 frees, peak 27.9 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 76 allocations, 76 frees, peak 91.1 MB, 0 bytes still allocated at exit (balanced)

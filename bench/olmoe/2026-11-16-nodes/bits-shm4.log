@@ -1,0 +1,24 @@
+load: 32 of 128 experts, 7.70 GB in 5.96 s, expert CRC32C OK
+expert: rank 2 serving, resident memory 7728 MB
+load: 32 of 128 experts, 7.70 GB in 6.01 s, expert CRC32C OK
+expert: rank 3 serving, resident memory 7728 MB
+load: 32 of 128 experts, 7.70 GB in 6.02 s, expert CRC32C OK
+expert: rank 1 serving, resident memory 7728 MB
+load: non-expert weights and 32 of 128 experts, 9.38 GB in 6.36 s, expert CRC32C OK
+shm: context 512 tokens + 16 generated, chunks of 256; KV cache all in memory, f32, 196608 bytes per token: 0.11 GB in memory (all of it would be 0.10 GB), GPU attention off
+shm: prefill 256 of 512 positions, 86.2 s
+shm: prefill time: projections 2.2 s, QK norm and rope 0.1 s, attention 7.6 s, Gated DeltaNet 0.0 s, output 3.0 s, router 0.1 s, experts 161.0 s, LM head 0.0 s
+shm: decode time: projections 1.1 s, QK norm and rope 0.0 s, attention 0.6 s, Gated DeltaNet 0.0 s, output 0.5 s, router 0.0 s, experts 3.8 s, LM head 0.1 s
+shm: time to first token 174.162 s (3 tokens/s prefill); decode 0.408 s per token (2.45 tokens/s) over 15 steps from position 512; resident memory 9554 MB
+shm: PASS: all 16 generated tokens and their logits match /tmp/lh_n33.bin bit for bit
+shm: 151426 expert calls sent to 3 peers, 50942 run locally; payload f32
+shm: rank 1 (GX10-02): 49307 expert calls
+shm: rank 2 (GX10-02): 53941 expert calls
+shm: rank 3 (GX10-02): 48178 expert calls
+expert: rank 1 ran 49307 expert FFNs for rank 0, 1480 us each on average (max expert: rank 2 ran 53941 expert FFNs for rank 0, 1479 us each on average (max expert: rank 3 ran 48178 expert FFNs for rank 0, 1478 us each on average (max 1579 us), 72.99 s in all; resident memory 7729 MB
+1678 us), 79.79 s in all; resident memory 7729 MB
+1709 us), 71.22 s in all; resident memory 7729 MB
+expert: heap: 43 allocations, 43 frees, peak 40.6 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 43 allocations, 43 frees, peak 40.6 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 43 allocations, 43 frees, peak 40.6 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 109 allocations, 109 frees, peak 191.8 MB, 0 bytes still allocated at exit (balanced)

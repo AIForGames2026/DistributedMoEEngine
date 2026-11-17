@@ -1,0 +1,6 @@
+== tracker 22:13:08
+./run.sh: line 77: 2744357 Killed                  nohup sh -c "echo \$\$ > /tmp/lh_n33_$1.pid; exec $O expert $OM --port $3 --rank $2 --ranks 4 --tracker 127.0.0.1 --gpu --payload f32" > "$out/tracker-$1.log" 2>&1 < /dev/null
+== bits 22:14:00
+== golden 22:26:57
+== rdma 22:28:19
+N33_DONE 22:28:35

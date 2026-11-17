@@ -1,0 +1,21 @@
+load: non-expert weights and 43 of 128 experts, 12.02 GB in 4.28 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (12.02 GB in 0.31 s)
+tcp: prompt 0 (5 tokens, 2104 ms): logits max err 2.06e-4, top-1 5/5, hidden max err 1.46e-3, experts chosen 1920/1920 same ok
+tcp: prompt 1 (17 tokens, 3739 ms): logits max err 2.88e-4, top-1 17/17, hidden max err 2.01e-3, experts chosen 6528/6528 same ok
+tcp: prompt 2 (15 tokens, 3266 ms): logits max err 6.48e-5, top-1 15/15, hidden max err 1.22e-3, experts chosen 5760/5760 same ok
+tcp: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.88e-4), every top-1 token identical
+tcp: generate prompt 0: 32 tokens in 11.59 s (2.8 tokens/s, prompt included)
+tcp:   tokens: 12095 13 576 6722 315 279 3639 15072 374 7148 13 576 6722 315 279 3639 4180 374 6515 11 422 727 13 576 6722 315 15948 374 61124 75372 13 576
+tcp:   same as transformers' generate(): 32/32 tokens, logits max err 1.18e-4 ok
+tcp: generate prompt 1: 32 tokens in 14.09 s (2.3 tokens/s, prompt included)
+tcp:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 308 284 526 5384 445 6269 264 1372 25 40964 262 1173 955 579 39345 1445 4390
+tcp:   same as transformers' generate(): 32/32 tokens, logits max err 9.54e-5 ok
+tcp: generate prompt 2: 32 tokens in 13.82 s (2.3 tokens/s, prompt included)
+tcp:   tokens: 429 279 1614 646 387 803 11050 13 4354 11 279 29058 374 5990 2814 304 264 1616 429 374 537 7853 315 279 3950 594 2309 304 279 8500 13 1096
+tcp:   same as transformers' generate(): 32/32 tokens, logits max err 6.68e-5 ok
+tcp: PASS: every generated token matches transformers' generate(), logits within 1e-2
+tcp: 42845 expert calls sent to 2 peers, 21283 run locally; payload f32
+tcp: rank 1 (127.0.0.1): 21667 expert calls
+tcp: rank 2 (184.171.155.166): 21178 expert calls
+tcp: heap: 379 allocations, 379 frees, peak 159.4 MB, 0 bytes still allocated at exit (balanced)
+rc=0

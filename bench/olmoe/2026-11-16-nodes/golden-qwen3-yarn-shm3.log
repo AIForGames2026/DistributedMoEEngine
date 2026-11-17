@@ -1,0 +1,30 @@
+load: 43 of 128 experts, 10.35 GB in 5.63 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.35 GB in 0.27 s)
+expert: rank 1 serving, resident memory 10486 MB
+load: 42 of 128 experts, 10.11 GB in 5.77 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.11 GB in 0.26 s)
+expert: rank 2 serving, resident memory 10245 MB
+load: non-expert weights and 43 of 128 experts, 12.02 GB in 6.05 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (12.02 GB in 0.32 s)
+shm: prompt 0 (5 tokens, 390 ms): logits max err 2.73e-4, top-1 5/5, hidden max err 1.83e-3, experts chosen 1920/1920 same ok
+shm: prompt 1 (17 tokens, 1302 ms): logits max err 2.86e-4, top-1 17/17, hidden max err 2.01e-3, experts chosen 6528/6528 same ok
+shm: prompt 2 (15 tokens, 1130 ms): logits max err 1.15e-4, top-1 15/15, hidden max err 1.83e-3, experts chosen 5760/5760 same ok
+shm: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.86e-4), every top-1 token identical
+shm: generate prompt 0: 32 tokens in 3.03 s (10.6 tokens/s, prompt included)
+shm:   tokens: 12095 13 576 6722 315 279 3639 15072 374 7148 13 576 6722 315 279 3639 4180 374 6515 11 422 727 13 576 6722 315 15948 374 61124 75372 13 576
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 1.03e-4 ok
+shm: generate prompt 1: 32 tokens in 3.91 s (8.2 tokens/s, prompt included)
+shm:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 308 284 526 5384 445 6269 264 1372 25 40964 262 1173 955 579 39345 1445 4390
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 9.54e-5 ok
+shm: generate prompt 2: 32 tokens in 3.79 s (8.4 tokens/s, prompt included)
+shm:   tokens: 429 279 1614 646 387 803 11050 13 4354 11 279 29058 374 5990 2814 304 264 1616 429 374 537 7853 315 279 3950 594 2309 304 279 8500 13 1096
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 6.68e-5 ok
+shm: PASS: every generated token matches transformers' generate(), logits within 1e-2
+shm: 42845 expert calls sent to 2 peers, 21283 run locally; payload f32
+shm: rank 1 (GX10-02): 21667 expert calls
+shm: rank 2 (GX10-02): 21178 expert calls
+expert: rank 1 ran 21667 expert FFNs for rank 0, 443 us each on average (max expert: rank 2 ran 21178 expert FFNs for rank 0, 455 us each on average (max 1755 us), 9.60 s in all; resident memory 10489 MB
+1642 us), 9.63 s in all; resident memory 10248 MB
+expert: heap: 43 allocations, 43 frees, peak 27.9 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 43 allocations, 43 frees, peak 27.9 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 378 allocations, 378 frees, peak 159.4 MB, 0 bytes still allocated at exit (balanced)

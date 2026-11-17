@@ -1,0 +1,8 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 4.74 s, expert CRC32C OK
+local: context 512 tokens + 16 generated, chunks of 256; KV cache all in memory, f32, 196608 bytes per token: 0.11 GB in memory (all of it would be 0.10 GB), GPU attention off
+local: prefill 256 of 512 positions, 11.6 s
+local: prefill time: projections 2.3 s, QK norm and rope 0.1 s, attention 7.5 s, Gated DeltaNet 0.0 s, output 3.0 s, router 0.1 s, experts 13.8 s, LM head 0.0 s
+local: decode time: projections 0.9 s, QK norm and rope 0.0 s, attention 0.6 s, Gated DeltaNet 0.0 s, output 0.4 s, router 0.0 s, experts 8.6 s, LM head 0.1 s
+local: time to first token 27.003 s (19 tokens/s prefill); decode 0.702 s per token (1.42 tokens/s) over 15 steps from position 512; resident memory 32690 MB
+local: saved 16 tokens and their logits to /tmp/lh_n33.bin
+local: heap: 98 allocations, 98 frees, peak 240.0 MB, 0 bytes still allocated at exit (balanced)

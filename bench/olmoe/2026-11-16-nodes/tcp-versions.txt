@@ -1,0 +1,2 @@
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, 0.17.0, engine v0.2.0-alpha-35-gca800e5-n33
+desktop WSL2: 6.6.87.2-microsoft-standard-WSL2, Model name: 12th Gen Intel(R) Core(TM) i7-12700K, 20 threads, engine v0.2.0-alpha-35-gca800e5-n33

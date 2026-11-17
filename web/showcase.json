@@ -24,6 +24,33 @@
       "speed": 1
     },
     {
+      "id": "three-sparks-chat",
+      "source": "bench/trace/2026-11-16/chat-three-sparks.jsonl.gz",
+      "title": "Chat: Qwen3-30B-A3B split across three DGX Sparks over RDMA",
+      "summary": "The same scripted three-turn chat, with reasoning, split over all three Sparks (TASK-33): rank 0 on gx10-02 runs attention, the router and a third of the experts, and reaches gx10-03 and gx10-01 over RDMA on direct cables. It was recorded at 1.7 tokens/s because gx10-01's GPU was busy with another job; the same setup with that GPU free measured 27.5 tokens/s, so it plays at 16x by default. The per-rank call counts come from the frames and match the engine's own counters.",
+      "results": "bench/trace/2026-11-16-chats.md",
+      "ranks": [
+        "gx10-02",
+        "gx10-03",
+        "gx10-01"
+      ],
+      "speed": 16
+    },
+    {
+      "id": "sparks-desktop-chat",
+      "source": "bench/trace/2026-11-16/chat-sparks-desktop.jsonl.gz",
+      "title": "Chat: Qwen3-30B-A3B across three DGX Sparks and a desktop CPU",
+      "summary": "The same chat over four processes (TASK-33): the three Sparks over RDMA, plus a desktop's CPU in WSL2 over TCP on the campus network, one router mixing both kinds of link. The desktop answers each expert call in about 1.4 ms against 0.06 ms on a Spark's GPU, so it sets the pace at 2.0 tokens/s; it plays at 4x by default. Its replies differ from the three-Spark chat because FP8 activations round differently when experts move.",
+      "results": "bench/trace/2026-11-16-chats.md",
+      "ranks": [
+        "gx10-02",
+        "gx10-03",
+        "gx10-01",
+        "desktop"
+      ],
+      "speed": 4
+    },
+    {
       "id": "soak",
       "source": "bench/rc/2026-11-16-soak/soak-first-6000.jsonl.gz",
       "title": "Soak: the first 3 minutes of the one-hour run (TASK-15)",

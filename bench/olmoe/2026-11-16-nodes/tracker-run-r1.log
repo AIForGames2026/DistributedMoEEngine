@@ -1,0 +1,7 @@
+expert: listening on port 48101
+22:13:09.400 expert: joined the tracker at 127.0.0.1:47300 as id 4 with 16 of 64 experts (heartbeat 250 ms)
+load: 16 of 64 experts, 1.71 GB in 1.07 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.71 GB in 0.04 s)
+expert: rank 1 serving, resident memory 1838 MB
+expert: rank 1 ran 5815 expert FFNs for rank 0, 572 us each on average (max 2075 us), 3.33 s in all; resident memory 1842 MB
+expert: heap: 42 allocations, 42 frees, peak 13.1 MB, 0 bytes still allocated at exit (balanced)

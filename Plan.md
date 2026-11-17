@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, and #35 is TASK-33, opened Nov 16). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, #35 is TASK-33, opened Nov 16, and #36 to #41 are TASK-34 to TASK-39, opened Nov 17). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -486,13 +486,86 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 ---
 
+#### [TASK-34] Vulkan GPU Backend (Intel Arc A750)
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17; waits for the borrowed Arc A750)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 17. The GPU layer is CUDA only (`csrc/tf_gpu.c` uses CUDA's driver API, and `csrc/cuda/kernels.cu` assumes 32-lane warps), so non-NVIDIA machines join only as CPU expert nodes (TASK-22). The rest of the engine reaches the GPU through a few function pointers (`gpu_experts`, `gpu_attention`, matmul), each with a CPU fallback, so a second backend can start with matmuls and experts and add the rest later. Vulkan covers Intel, AMD and NVIDIA GPUs with one backend:
+  - A backend chosen at build time (`-Dgpu=vulkan`) behind the same function pointers, with compute shaders compiled to SPIR-V and loaded at startup.
+  - First the Q8_0 and f32 matmuls and the grouped expert path (TASK-12, TASK-32), then attention. Anything not yet ported falls back to the CPU and is reported, not silent (TASK-32 found Q4_K experts quietly on the CPU).
+  - ggml's Vulkan shaders (llama.cpp, MIT) are the starting point for quantized formats; borrowed files keep their MIT notice and are listed in `THIRD_PARTY.md`.
+  - Developed on the desktop's 5070 Ti, where Vulkan results can be compared with the CUDA backend's, then run on a borrowed Intel Arc A750 (8 GB) in a Linux machine. Native Windows builds stay out of scope, and WSL2 offers no usable Vulkan on Intel GPUs.
+- **Acceptance Criteria**:
+  - **Against CUDA:** on the 5070 Ti, the Vulkan backend's OLMoE-1B-7B passes the TASK-10 checks (logits within 1e-2, top-1 identical, every routing choice identical), and its matmuls agree with the CPU within 1e-3 under `TF_GPU_CHECK=1`.
+  - **On the Arc A750:** OLMoE-1B-7B split between the Arc A750 and a second machine passes the TASK-10 and TASK-24 checks with the same GPU check, as TASK-26 did for Ampere, and the run is recorded in `bench/` labeled with the GPU, driver and Mesa or Intel driver version.
+  - **No silent fallback:** a run prints which operations ran on the GPU, and the recorded runs show matmuls and experts there.
+
+#### [TASK-35] Metal GPU Backend and macOS Build (Apple M4)
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17; waits for the borrowed M4 MacBook)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 17. Apple Silicon shares memory between the CPU and GPU like the GB10, so weights can be used in place on the GPU, and Macs with large memory are natural MoE hosts. Today the engine builds only on Linux (io_uring, CUDA and RDMA) plus the Windows CPU PoC check. This task needs a macOS build first, then a Metal backend behind the same function pointers as CUDA and TASK-34:
+  - **macOS build:** model loading without io_uring (plain reads or `mmap`), the shared-memory transport without `memfd` (`shm_open`), and TCP between machines. RDMA stays Linux only.
+  - **Metal backend** (`-Dgpu=metal`): page-aligned weights wrapped as Metal buffers without copying, then the Q8_0 and f32 matmuls, the grouped expert path and attention, in that order. Anything not yet ported falls back to the CPU and is reported.
+  - ggml's Metal shaders (llama.cpp, MIT) are the starting point for quantized formats; borrowed files keep their MIT notice and are listed in `THIRD_PARTY.md`.
+  - Run on a borrowed M4 MacBook, alone and as an expert node with a Spark as rank 0 over TCP. The model is chosen by its memory: OLMoE-1B-7B fits any M4, and Qwen3-30B-A3B (Q8_0, 32 GB) fits whole only with 48 GB or more, otherwise split.
+- **Acceptance Criteria**:
+  - **macOS build:** `zig build` and `zig build test` pass on macOS, and OLMoE-1B-7B passes the TASK-10 checks on the CPU there, in one process and over shared memory.
+  - **Metal:** OLMoE-1B-7B passes the TASK-10 and TASK-24 checks with matmuls and experts on the GPU, and its matmuls agree with the CPU within 1e-3 under `TF_GPU_CHECK=1`.
+  - **Mixed cluster:** the M4 as an expert node with rank 0 on a Spark over TCP passes the same checks, and the runs are recorded in `bench/` labeled with the machine, macOS version and memory.
+
+#### [TASK-36] Every GGUF Quant Format on the CPU and GPU
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 17. The engine reads 8 weight formats (f32, f16, bf16, Q8_0, Q4_0, Q4_K, MXFP4, NVFP4), and the GPU runs only f32 and Q8_0 matmuls plus Q8_0 and Q4_K experts; everything else runs on the CPU, which TASK-32 measured at about 12 times slower. Most published GGUFs use other K-quants (a Q4_K_M file mixes Q4_K and Q6_K) or the IQ formats.
+  - **CPU:** ggml's reference dequantization (llama.cpp, MIT) for the remaining formats: Q2_K, Q3_K, Q5_K, Q6_K, Q4_1, Q5_0, Q5_1, and IQ1 to IQ4 with their lookup tables, vendored as C or ported to `quant.zig`. Borrowed code keeps its MIT notice and is listed in `THIRD_PARTY.md`.
+  - **GPU:** one quantized matmul and one grouped expert kernel that decode a tile of weights to f16 and multiply on the tensor cores, with a small decode function per format, in place of a kernel per format. ggml's CUDA kernels serve as the design reference. The same decode functions are reused by TASK-34 and TASK-35.
+  - **No silent fallback:** a run reports any weight that stays on the CPU because its format has no GPU path (TASK-32's Q4_K experts ran on the CPU unnoticed).
+- **Acceptance Criteria**:
+  - **Decoding:** every format decodes test tensors exactly as ggml's reference does (bit for bit on the CPU), in `zig build test`.
+  - **GPU:** every format's GPU matmul agrees with the CPU within 1e-3 under `TF_GPU_CHECK=1`.
+  - **Models:** a Q4_K_M and an IQ-format GGUF of Qwen3-30B-A3B pass the TASK-10 and TASK-24 checks against transformers on the GGUF's dequantized weights, with every expert on the GPU.
+
+#### [TASK-37] SentencePiece Tokenizer and More Pre-Tokenizers
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 17. The tokenizer handles byte-level BPE with 4 pre-tokenizer patterns (`gpt2`, `qwen2`, `qwen35`, `glm4`), each added by hand with a model. Models such as Mixtral use SentencePiece, and most other families need their own pattern. llama.cpp's vocabulary code (MIT) has a SentencePiece tokenizer and the patterns for dozens of model families, keyed by the GGUF's `tokenizer.ggml.pre` value, plus vocab files with expected outputs for testing.
+  - SentencePiece (BPE with byte fallback, as Llama 2 era and Mixtral models use it).
+  - The pre-tokenizer patterns of the families TASK-39 adds, selected from the GGUF's metadata, with a clear refusal for an unknown one.
+  - Borrowed code and test vocabularies keep their MIT notice and are listed in `THIRD_PARTY.md`.
+- **Acceptance Criteria**: for Mixtral, DeepSeek V3 and gpt-oss, plus every model already supported, the tokenizer matches Hugging Face on `tools/ref/check_tokenizer.py`'s strings (as TASK-31 and TASK-32 did) from the GGUF alone, and the existing models still pass.
+
+#### [TASK-38] Chat Templates Read from the GGUF
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 17. Each model's chat template is ported by hand into `src/chat.zig` (5 formats so far), so a new model cannot chat until someone writes its format. GGUFs carry the original Jinja template. llama.cpp renders them with minja, a small Jinja interpreter (MIT, C++).
+  - A Jinja interpreter for the subset chat templates use (variables, loops, conditionals, filters such as `trim` and `capitalize`, string methods, `raise_exception`), as a Zig port or a vendored minja; the C++ dependency is weighed against porting.
+  - The server renders the GGUF's own template, passing messages, `add_generation_prompt`, `enable_thinking` and `reasoning_effort`. A template using an unsupported feature is refused with a clear error, and the hand-written formats stay as a fallback.
+  - Tool calls stay out.
+- **Acceptance Criteria**: `tools/ref/check_chat.py` matches transformers' rendering for the 5 existing formats and for the templates of Mixtral, DeepSeek V3, gpt-oss, Llama 4 and Kimi K2, across its settings (system prompt or not, reasoning on and off, several turns).
+
+#### [TASK-39] Mixtral, DeepSeek V3 and gpt-oss from llama.cpp's Specs
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 17. Each architecture is written by hand (5 so far), at 1 to 3 days each plus a transformers reference. The engine loads GGUFs made by llama.cpp's converter, so llama.cpp's per-architecture code (MIT) is the most exact record of each model's tensor names, shapes, converter transformations and forward pass; reading it replaces working out the GGUF layout by hand, as TASK-32's reference script had to. The reference is still transformers, not llama.cpp. Three popular families, each needing something new:
+  - **Mixtral:** grouped-query attention with a softmax router and no shared expert; mostly a check that the existing blocks generalize, plus SentencePiece (TASK-37).
+  - **DeepSeek V3 (and Kimi K2, which shares its architecture):** MLA with decoupled rope (TASK-32's MLA has none), group-limited routing, and dense leading layers.
+  - **gpt-oss:** attention sinks, alternating sliding-window and full attention, and MXFP4 experts (MXFP4 already loads).
+- **Acceptance Criteria**: each family passes the TASK-10 and TASK-24 checks against transformers (in float32 on the GGUF's dequantized weights, loaded lazily where the model is large), in one process and split; a tiny random model of each runs in `zig build test`; and each chats through TASK-38's templates.
+
+---
+
 ## 4. Scope Tiers & Cut Lines
 
 | Tier | Label | Meaning | Tasks |
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, used from a browser chat harness, and shown in a live and recorded diagram. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 16b, 18, 19, 23, 24, 30 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, 29, 31, and 32 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29, 31, 32 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, 29, 31, 32, and 34 to 39 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, and CPU-only expert nodes.
 
@@ -506,7 +579,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 TASK-20 is `should` but untagged: it is never cut, only reduced to a minimal build guide.
 
-**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist; TASK-33 lets the engine use any number of nodes, but runs are limited to the machines available), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends (AMD ROCm/HIP, Apple Metal, Intel; non-NVIDIA machines join only as CPU expert nodes, TASK-22), macOS engine builds, and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
+**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist; TASK-33 lets the engine use any number of nodes, but runs are limited to the machines available), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends and macOS engine builds (post-v1: Vulkan in TASK-34 and Metal with a macOS build in TASK-35; until then non-NVIDIA machines join only as CPU expert nodes, TASK-22), and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
 
 ---
 
@@ -516,7 +589,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25 |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-36 to TASK-39 (quant formats, tokenizers, chat templates and three model families, borrowing from llama.cpp) |
 | **To Do** | (none) |
 | **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
 | **Review** | TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
@@ -524,7 +597,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33 | 21 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39 | 27 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b, 23, 25 | 5 |
@@ -534,7 +607,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 17 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 12 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, 32, and 33 are post-v1; TASK-26 untagged |
+| `could` | 18 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, 32, and 33 to 39 are post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 

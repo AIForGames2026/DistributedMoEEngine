@@ -1,0 +1,8 @@
+load: non-expert weights and 32 of 128 experts, 9.38 GB in 1.74 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (9.38 GB in 0.25 s)
+tcp+rdma: recording every step to /tmp/lh_chat_sparks-desktop.jsonl
+tcp+rdma: OpenAI-compatible API at http://127.0.0.1:8092/v1 (model "Qwen3-30B-A3B-Q8_0", chat format qwen3_release, context 8192 tokens, reusing shared prompt prefixes)
+tcp+rdma: chat page with the live diagram at http://127.0.0.1:8092/
+tcp+rdma: request 1: 24 prompt tokens (0 reused), 423 generated in 238.26 s, first token 27709 ms, 2.0 tokens/s decoding, finish stop
+tcp+rdma: request 2: 134 prompt tokens (24 reused), 494 generated in 298.11 s, first token 51448 ms, 2.0 tokens/s decoding, finish stop
+tcp+rdma: request 3: 246 prompt tokens (134 reused), 395 generated in 245.35 s, first token 52214 ms, 2.0 tokens/s decoding, finish stop

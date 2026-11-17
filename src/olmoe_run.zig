@@ -8,6 +8,8 @@
 //!   olmoe router MODEL --host IP --port P --golden G.tfref [options]
 //!   olmoe router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ...  one --peer per expert rank, in rank order
 //!   olmoe rdma-expert / rdma-router                    the same over RDMA
+//!   olmoe dashboard --models DIR                       the operator dashboard (TASK-25, dashboard.zig)
+//!   olmoe node --dashboard IP --models DIR             its node agent (node_agent.zig)
 //!
 //! options: --payload fp8|bf16|f32 (default fp8), --placement FILE, --slots S,
 //!          --dev D, --gid G (RDMA), --gpu (Q8_0 matmuls on CUDA; -Dgpu=true),
@@ -78,6 +80,8 @@ const mf = @import("model_file.zig");
 const Arena = @import("arena.zig").Arena;
 const ExpertCache = @import("expert_cache.zig").ExpertCache;
 const split = @import("split.zig");
+const dashboard = @import("dashboard.zig");
+const node_agent = @import("node_agent.zig");
 const Experts = split.Experts;
 const SplitMoe = split.SplitMoe;
 const CacheSource = @import("expert_cache.zig").Source;
@@ -192,9 +196,28 @@ pub fn main(init: std.process.Init) !void {
     defer reportHeap();
     const gpa = proc_heap.allocator();
     olmoe.big_allocator = gpa;
+    {
+        // The operator dashboard and its node agents (TASK-25) take their own options.
+        var it = try init.minimal.args.iterateAllocator(init.arena.allocator());
+        var all: std.ArrayList([]const u8) = .empty;
+        while (it.next()) |arg|
+        {
+            try all.append(init.arena.allocator(), arg);
+        }
+        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "dashboard"))
+        {
+            return dashboard.main(init.gpa, all.items[2..]);
+        }
+        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "node"))
+        {
+            return node_agent.main(init.gpa, all.items[2..]);
+        }
+    }
     const opts = parseArgs(init) catch {
         std.debug.print(
             \\usage: olmoe local|shm|rdma MODEL --golden G.tfref [--ranks N] [options]
+            \\       olmoe dashboard --models DIR [options]   (TASK-25: the operator dashboard)
+            \\       olmoe node --dashboard IP[:PORT] --models DIR [options]   (its node agent)
             \\       olmoe expert|rdma-expert MODEL --port P [--rank R --ranks N] [options]
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
             \\       olmoe router|rdma-router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ... --golden G.tfref [options]

@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, #35 is TASK-33, opened Nov 16, and #36 to #41 are TASK-34 to TASK-39, opened Nov 17). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, #35 is TASK-33, opened Nov 16, and #36 to #41 are TASK-34 to TASK-39 and #42 is TASK-40, opened Nov 17). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -355,10 +355,17 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-25] Operator Dashboard
 - **Milestone**: None (after v1)
-- **Status**: Backlog
+- **Status**: Review (built Nov 17)
 - **Priority**: `could` | **Area**: `webgl`
 - **Description**: Added Nov 5 from the project owner's direction: the web page grows into a dashboard where an operator manages nodes, the router, and models, and the API endpoint at the router that harnesses call. The inspector becomes one feature of it. This needs what v1 does not ship: the tracker (TASK-09), live telemetry (TASK-16b), and an authenticated control channel on top of TASK-30's server. Testing Session 1's question 5 asks which control to build first. Until this task starts, the public site stays simulated and recorded data only.
-- **Acceptance Criteria**: To be written when it is scheduled. Minimum: an operator adds a node, loads a model, and sends a request through the router's endpoint from the dashboard, with authentication required for every control action.
+  - **Design (project owner's choices, Nov 17):** a supervisor plus node agents. `olmoe dashboard` runs on rank 0's machine, serves the page and the API, starts the router as its own child, and passes `/v1` through to it; each other machine runs `olmoe node`, an agent that starts and stops one expert rank on the dashboard's command, so no engine internals change. A machine that joins is used from the next load; moving experts onto it while a model runs stays out. Operators sign in with an admin token kept in a file and get a session cookie; agents prove a separate shared secret. The agents link to the dashboard directly instead of through TASK-09's tracker, which has no authentication.
+  - **Not in scope:** TLS (a proxy in front, or a private network), user accounts, tool calls, and the public site, which stays recordings only.
+- **Acceptance Criteria**: Written when scheduled (Nov 17).
+  - **Operator flow:** from the page, an operator signs in, approves a machine whose agent has joined, loads OLMoE-1B-7B across it and rank 0, chats with it through the dashboard's `/v1` with the live diagram showing, and stops it, leaving no engine process running. Greedy replies through the dashboard's `/v1` (with `--no-reuse`) give the same tokens as `olmoe local` on the same prompt tokens (`tools/ref/check_serve.py`).
+  - **Authentication:** every control action and the live view answer 401 without a session, with a wrong token, and with a forged or signed-out session; a cross-site POST is refused even with the token; an agent without the node secret, or a frame with a bad signature, is refused (`tools/ref/check_dashboard.py`, plus unit tests in `zig build test`).
+  - **Failures:** a rank that dies or a node that drops while a model runs marks the run failed within 2 s and stops the rest, with the reason on the page.
+  - **Across machines:** the operator flow with the router on a Spark and an expert rank on a second machine.
+- **Results (Nov 17)**: acceptance met, over TCP (`bench/serve/2026-11-17-dashboard.md`); RDMA through the dashboard is untested. Across machines: the dashboard and router on `gx10-02` with the desktop (WSL, behind NAT, so the new `--advertise` and an SSH tunnel) as an expert node over Tailscale: from the page, sign-in, approval, a two-process load and a streamed chat; through `/v1` the same 16 tokens as `olmoe local` on 4 of 4 conversations; `check_dashboard.py` 16 of 16; a killed desktop rank marked the run failed 0.3 s later and stopped the router. On one machine first: `olmoe dashboard` (`src/dashboard.zig`, page `web/dashboard.html` and `web/dashboard.js`) and `olmoe node` (`src/node_agent.zig`), with sessions and the signed node link in `src/auth.zig` and child processes in `src/proc.zig`. On the desktop (WSL, CPU, Debug build), with two agents beside the dashboard: from the page, sign-in, approval (kept across restarts), a load of OLMoE-1B-7B over three processes over TCP (ready in about 4 s, live diagram shown), a streamed chat through `/v1`, reload, and stop leaving no engine process. Through the dashboard's `/v1`, curl and the `openai` package, streamed and not, agreed on 4 of 4 conversations, and `olmoe local` generated the same 32 tokens for all 4. `tools/ref/check_dashboard.py` passed 16 of 16 (401 for every control action without a valid session or token, 403 for a cross-site POST, cookie HttpOnly and SameSite=Strict and dead after sign-out, an agent with the wrong secret or a badly signed frame refused). Killing a rank marked the run failed and stopped the rest within 1 s. `zig build test` passes 114 tests.
 
 #### [TASK-27] Compact KV Cache Formats
 - **Milestone**: None (after v1)
@@ -559,13 +566,31 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 ---
 
+#### [TASK-40] Native Windows Engine (olmoe)
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 17, after TASK-25 needed WSL2 plus `--advertise` and an SSH tunnel to make the desktop an expert node. Natively, Windows builds only `dispatch.exe` and `tensorfold.exe`. The forward pass already builds and passes its tests there (`olmoe.zig`, `expert_cache.zig` and the thread pool have Windows branches); what is Linux only is `olmoe_run.zig` and the modules around it.
+  - **Model loading:** a Windows reader behind the same interface as the io_uring O_DIRECT one (`model_file.zig`, `csrc/io/uring_reader.c`): unbuffered `ReadFile` to load every expert, and overlapped reads on an I/O completion port for the expert cache (`--cache`).
+  - **Modes:** `local` first, then `expert` and `router` over TCP (the transport already runs on Windows; the tracker import in `split.zig` becomes optional), then `shm` with `CreateProcess` and the named shared memory `dispatch.exe` already uses instead of `fork`.
+  - **Server:** `serve.zig`, `telemetry.zig` and `http.zig` on Winsock (`WSAPoll`, and a loopback socket or event in place of the pipe to the engine thread), reusing `transport/tcp.zig`'s Winsock layer.
+  - **GPU:** `csrc/tf_gpu.c` uses CUDA's driver API, which Windows has; `build.zig` links `nvcuda`, and nvcc needs MSVC's `cl.exe` as its host compiler.
+  - **Out:** RDMA, the NVMe KV tier and saved prefixes (TASK-12, TASK-28; they could reuse the new reader later), and the dashboard and node agent (TASK-25).
+- **Acceptance Criteria**:
+  - **One process:** on the desktop, native `olmoe local` passes the TASK-10 and TASK-24 checks for OLMoE-1B-7B on the CPU and with `--gpu` on the 5070 Ti, and Qwen3-30B-A3B with `--cache` streaming experts from the drive.
+  - **Server:** `--serve` passes `tools/ref/check_serve.py` and the built-in page shows the live diagram.
+  - **Split:** a native Windows expert rank with a Spark router over TCP passes the same checks, with no WSL2 or tunnel, and `shm` passes on Windows alone.
+  - **Build:** `build.ps1` builds `olmoe.exe` (with `-Gpu` for CUDA), Linux builds and tests are unchanged, and results are recorded in `bench/` with the Windows and driver versions.
+
+---
+
 ## 4. Scope Tiers & Cut Lines
 
 | Tier | Label | Meaning | Tasks |
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, used from a browser chat harness, and shown in a live and recorded diagram. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 16b, 18, 19, 23, 24, 30 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, 29, 31, 32, and 34 to 39 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, 29, 31, 32, and 34 to 40 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 40 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, and CPU-only expert nodes.
 
@@ -579,7 +604,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 TASK-20 is `should` but untagged: it is never cut, only reduced to a minimal build guide.
 
-**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist; TASK-33 lets the engine use any number of nodes, but runs are limited to the machines available), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends and macOS engine builds (post-v1: Vulkan in TASK-34 and Metal with a macOS build in TASK-35; until then non-NVIDIA machines join only as CPU expert nodes, TASK-22), and native Windows builds beyond the CPU PoC check (`build.ps1` builds `dispatch.exe` for shared memory and TCP; io_uring, CUDA, and RDMA stay Linux only).
+**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist; TASK-33 lets the engine use any number of nodes, but runs are limited to the machines available), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends and macOS engine builds (post-v1: Vulkan in TASK-34 and Metal with a macOS build in TASK-35; until then non-NVIDIA machines join only as CPU expert nodes, TASK-22), and native Windows engine builds (post-v1 in TASK-40; until then `build.ps1` builds `dispatch.exe` for the CPU PoC check over shared memory and TCP, and the engine runs in WSL2).
 
 ---
 
@@ -589,15 +614,15 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-25, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-36 to TASK-39 (quant formats, tokenizers, chat templates and three model families, borrowing from llama.cpp) |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-36 to TASK-39 (quant formats, tokenizers, chat templates and three model families, borrowing from llama.cpp), TASK-40 (native Windows engine) |
 | **To Do** | (none) |
 | **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
-| **Review** | TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
+| **Review** | TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
-| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39 | 27 |
+| `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 | 28 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
 | `webgl` | 04, 16, 16b, 23, 25 | 5 |
@@ -607,7 +632,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 |---|---|---|
 | `must` | 17 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 18 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, 32, and 33 to 39 are post-v1; TASK-26 untagged |
+| `could` | 19 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, 32, and 33 to 40 are post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 

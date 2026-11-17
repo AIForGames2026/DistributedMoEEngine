@@ -88,6 +88,8 @@ test {
     if (@import("builtin").os.tag == .linux)
     {
         _ = @import("tracker.zig");
+        _ = @import("auth.zig");
+        _ = @import("proc.zig");
         _ = @import("prefix_cache.zig");
         _ = @import("split.zig");
     }

@@ -16,6 +16,9 @@ pub const Head = struct {
     host: ?[]const u8 = null,
     /// Set by browsers on WebSocket and cross-site requests.
     origin: ?[]const u8 = null,
+    /// For the operator dashboard (TASK-25).
+    cookie: ?[]const u8 = null,
+    authorization: ?[]const u8 = null,
     /// Bytes up to and including the blank line.
     len: usize,
 };
@@ -81,6 +84,14 @@ pub fn parseHead(buf: []const u8, max_head: usize) Error!Head {
         {
             head.origin = value;
         }
+        else if (std.ascii.eqlIgnoreCase(name, "cookie"))
+        {
+            head.cookie = value;
+        }
+        else if (std.ascii.eqlIgnoreCase(name, "authorization"))
+        {
+            head.authorization = value;
+        }
     }
     if (upgrade)
     {
@@ -102,13 +113,16 @@ pub fn reason(status: u16) []const u8 {
         101 => "Switching Protocols",
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         411 => "Length Required",
+        409 => "Conflict",
         413 => "Content Too Large",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
+        502 => "Bad Gateway",
         503 => "Service Unavailable",
         else => "Error",
     };

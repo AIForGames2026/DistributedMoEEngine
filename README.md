@@ -58,6 +58,36 @@ npm run preview
 
 To run the real 7 GB model, over RDMA or on a GPU, see [Building and running everything](docs/BUILDING.md).
 
+### Operator dashboard (Linux)
+
+Run a model across several machines from one page. Start the dashboard on the machine that will hold rank 0. On its first run it writes an admin token to `dashboard.token` and a node secret to `node.secret`:
+
+```bash
+zig-out/bin/olmoe dashboard --models ~/models
+```
+
+Open `http://127.0.0.1:8080/` and sign in with the token. On each other machine, copy `node.secret` over (`chmod 600`), put the same model in a models directory, and start an agent:
+
+```bash
+zig-out/bin/olmoe node --dashboard <dashboard IP> --models ~/models --secret-file node.secret
+```
+
+Approve the machine on the page, tick it under Model, and press Load. Chat on the page, or point any OpenAI-compatible client at `http://<dashboard>:8080/v1`. The dashboard speaks plain HTTP and listens only on 127.0.0.1 unless you pass `--listen`, so keep it on a private network or behind a TLS proxy. Every option is in [Building and running everything](docs/BUILDING.md).
+
+**On Windows**, the dashboard and the agent run in WSL2 (the native build has no `olmoe`). Build in Ubuntu as above, and keep `dashboard.token` and `node.secret` in your WSL home directory: under `/mnt/c` every file looks readable by everyone, so they are refused. A dashboard in WSL opens in your Windows browser at `http://127.0.0.1:8080/`.
+
+To make a Windows PC an expert node, start the agent in WSL with `--advertise 127.0.0.1`, since WSL's network address is hidden behind Windows:
+
+```bash
+zig-out/bin/olmoe node --dashboard <dashboard IP> --models ~/models --secret-file ~/node.secret --advertise 127.0.0.1
+```
+
+Then, in PowerShell, open a tunnel that carries the dashboard machine's port for this rank back to the PC (47401 for the first node, 47402 for the second, and so on) and leave it running while the model is loaded:
+
+```powershell
+ssh -N -R 47401:127.0.0.1:47401 <user>@<dashboard machine>
+```
+
 ## Documentation
 
 - [Building and running everything](docs/BUILDING.md): every program, GPU and RDMA builds, benchmarks

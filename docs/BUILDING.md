@@ -133,6 +133,20 @@ zig-out/bin/olmoe rdma-expert ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --por
 zig-out/bin/olmoe rdma-router ~/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --tracker <tracker IPv4> --golden ~/models/olmoe_forward.tfref --gpu --payload f32
 ```
 
+Operator dashboard (TASK-25, Linux): `olmoe dashboard` runs on the machine that will hold rank 0. It serves a page where an operator signs in, approves machines as they join, loads a model across the chosen ones, and chats with it; the OpenAI-compatible API that harnesses call is the dashboard's own `/v1`. It starts the router (with `--serve` on a local port) as its own child, and each other machine runs `olmoe node`, an agent that links to the dashboard and starts one expert rank on its command. A machine that joins is used from the next load. Start the dashboard first; on its first run it writes a random admin token to `dashboard.token` and a node secret to `node.secret`, both readable by their owner only:
+
+```bash
+zig-out/bin/olmoe dashboard --models ~/models --listen 127.0.0.1:8080
+```
+
+Open `http://127.0.0.1:8080/` and paste the token. On each expert machine, copy `node.secret` over (with `chmod 600`), put the same model file (and its `.tfsum`) in a models directory, and start the agent:
+
+```bash
+zig-out/bin/olmoe node --dashboard <dashboard IPv4> --models ~/models --secret-file node.secret
+```
+
+It appears on the page as waiting for approval. Approve it, tick it under Model, and Load. The agent and the dashboard each prove they hold the node secret, and every frame between them is signed, so a machine without it cannot join or send commands; the agent accepts only a model file name and a few numbers, never a path or a command line. Every control action needs the session from signing in (an HttpOnly, SameSite=Strict cookie) or the token as `Authorization: Bearer`, and POSTs from pages served elsewhere are refused. `/v1` is open to anyone who can reach the dashboard unless `--api-key-file F` is given. The dashboard speaks plain HTTP and binds to 127.0.0.1 by default; to reach it from another machine, give `--listen 0.0.0.0:8080` on a private network only, or put a TLS proxy in front. Over RDMA, it picks for each node the device pair whose addresses share a subnet. Over TCP, the router dials each node at the address its agent linked from; an agent behind NAT (such as WSL) gives `--advertise IP` instead, for example `--advertise 127.0.0.1` with an SSH tunnel carrying the dashboard machine's expert port back to it (`ssh -N -R 47401:127.0.0.1:47401 <dashboard machine>`). Other options: `--node-port P` (default 47310), `--expert-port P` (the first node's rank listens there, the next one port up, default 47401), `--router-port P` (default 18080), `--engine PATH` (default this `olmoe`), and `--token-file`, `--node-secret-file`, `--nodes-file` (the approved machines, default `dashboard.nodes`), `--log-dir` (the router's log). `tools/ref/check_dashboard.py` checks the authentication from outside.
+
 Two-process dispatch and combine check (TASK-02), over shared memory, or over TCP between two machines (start the expert first):
 
 ```bash

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TensorFold Operator</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1b1f24;
+  --muted: #4d5866;
+  --line: #dde2e8;
+  --soft: #eef1f4;
+  --accent: #1d4ed8;
+  --accent-ink: #ffffff;
+  --ok: #15803d;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  --radius: 10px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216;
+    --panel: #171b21;
+    --ink: #e6e9ed;
+    --muted: #93a0b0;
+    --line: #2a313a;
+    --soft: #1f252d;
+    --accent: #6091ff;
+    --accent-ink: #0f1216;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.45; }
+header { display: flex; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+header .grow { flex: 1; }
+.status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; min-width: 0; }
+.status b { color: var(--ink); font-weight: 600; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; padding: 16px; max-width: 1600px; margin: 0 auto; }
+.col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+section h2 { font-size: 14px; margin: 0 0 10px; font-weight: 650; display: flex; align-items: baseline; gap: 8px; }
+section h2 .sub { color: var(--muted); font-weight: 400; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.actions { white-space: nowrap; text-align: right; }
+td.actions button + button { margin-left: 6px; }
+.badge.wrap { white-space: normal; }
+tr:last-child td { border-bottom: 0; }
+.scroll { overflow-x: auto; }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 999px; background: var(--soft); font-size: 12px; white-space: nowrap; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.danger { color: var(--bad); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.small { padding: 2px 10px; font-size: 12px; }
+input, select, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+textarea { width: 100%; resize: vertical; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 12px; margin-bottom: 12px; }
+.form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.form label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
+.form .wide { grid-column: 1 / -1; }
+.picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.pick { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; font-size: 13px; color: var(--ink); }
+.pick.off { color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.message { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--soft); font-size: 13px; }
+.error { color: var(--bad); }
+pre { margin: 0; background: var(--soft); border-radius: 8px; padding: 8px 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 6px 0; }
+.reply { white-space: pre-wrap; background: var(--soft); border-radius: 8px; padding: 8px 10px; margin-top: 8px; min-height: 2.5em; }
+iframe { width: 100%; height: 560px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.empty { color: var(--muted); padding: 10px 0; }
+#login { max-width: 420px; margin: 12vh auto; }
+#login p { color: var(--muted); margin: 0 0 12px; }
+#login form { display: flex; gap: 8px; }
+#login input { flex: 1; }
+@media (max-width: 1000px) {
+  main { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>TensorFold Operator</h1>
+  <div class="status" id="status" hidden><span class="dot" id="statusdot"></span><b id="statusstate"></b><span id="statusmsg"></span></div>
+  <div class="grow"></div>
+  <button id="logout" class="small" hidden>Sign out</button>
+</header>
+
+<section id="login" hidden>
+  <h2>Sign in</h2>
+  <p>Paste the admin token. It is in <span class="mono">dashboard.token</span> (or the file given with <span class="mono">--token-file</span>) on the machine running the dashboard.</p>
+  <form id="loginform">
+    <input id="token" type="password" autocomplete="current-password" placeholder="Admin token" aria-label="Admin token">
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+  <p id="loginerror" class="error" hidden></p>
+</section>
+
+<main id="app" hidden>
+  <div class="col">
+    <section>
+      <h2>Nodes <span class="sub" id="nodecount"></span></h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Node</th><th>Status</th><th>Memory free</th><th>GPU</th><th>Models</th><th>Rank</th><th></th></tr></thead>
+          <tbody id="nodes"></tbody>
+        </table>
+      </div>
+      <details id="addnode">
+        <summary>Add a node</summary>
+        <p class="muted">On the new machine, copy the node secret file from this one, then start its agent. It appears here as pending; approve it and it can hold experts from the next load.</p>
+        <pre class="mono" id="agentcmd"></pre>
+      </details>
+    </section>
+
+    <section>
+      <h2>Model</h2>
+      <div class="form">
+        <label class="wide">Model
+          <select id="model"></select>
+        </label>
+        <div class="wide">
+          <div class="muted" style="font-size:12px;margin-bottom:4px">Expert nodes (rank 0 runs here and holds its share too)</div>
+          <div class="picks" id="picks"></div>
+        </div>
+        <label>Transport
+          <select id="transport"><option value="tcp">TCP</option><option value="rdma">RDMA</option></select>
+        </label>
+        <label>Context (tokens)
+          <input id="ctx" type="number" min="256" step="256" value="4096">
+        </label>
+        <label>Payload
+          <select id="payload"><option>fp8</option><option>bf16</option><option>f32</option></select>
+        </label>
+        <label>KV cache
+          <select id="kv"><option>f32</option><option>bf16</option><option>fp8</option><option>bf16_fp8</option></select>
+        </label>
+        <label>Expert cache slots
+          <input id="cache" type="number" min="0" value="0" title="0 loads every expert; more streams experts from the drive into this many slots">
+        </label>
+        <label class="check"><input id="gpu" type="checkbox"> GPU (CUDA build)</label>
+        <label class="check"><input id="reuse" type="checkbox" checked> Reuse prompt prefixes</label>
+      </div>
+      <div class="row">
+        <button class="primary" id="load">Load</button>
+        <button class="danger" id="stop">Stop</button>
+        <span id="loaderror" class="error"></span>
+      </div>
+      <div class="message" id="runmsg"></div>
+      <details>
+        <summary>Router command and log</summary>
+        <pre class="mono" id="command"></pre>
+        <pre class="mono" id="routerlog" style="margin-top:8px"></pre>
+      </details>
+    </section>
+  </div>
+
+  <div class="col">
+    <section>
+      <h2>Endpoint <span class="sub" id="endpointsub"></span></h2>
+      <p class="muted" style="margin:0 0 8px">OpenAI-compatible; point any client that takes a custom base URL here.</p>
+      <pre class="mono" id="endpoint"></pre>
+      <div style="margin-top:12px">
+        <textarea id="prompt" rows="3" placeholder="Send a test request through the endpoint">What is a mixture-of-experts model? Answer in two sentences.</textarea>
+        <div class="row" style="margin-top:8px">
+          <button id="send" class="primary">Send</button>
+          <span class="muted" id="sendstats"></span>
+        </div>
+        <div class="reply" id="reply"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Live diagram <span class="sub"><a id="liveopen" href="/live" target="_blank" rel="noopener">open in a new tab</a></span></h2>
+      <div class="empty" id="liveempty">Shown once a model is loaded.</div>
+      <iframe id="live" title="Live expert diagram" hidden></iframe>
+    </section>
+  </div>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>

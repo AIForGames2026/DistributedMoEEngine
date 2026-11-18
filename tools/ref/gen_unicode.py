@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Writes src/unicode_tables.zig (TASK-30): the Unicode data the tokenizer
-needs, from Python's unicodedata. Letter, mark, and number ranges for the
-pre-tokenizer patterns, and canonical combining classes, decompositions, and
+needs, from Python's unicodedata. Letter, mark, number, punctuation and
+symbol ranges for the pre-tokenizer patterns (the letter cases for gpt-oss's,
+TASK-37), and canonical combining classes, decompositions, and
 compositions for NFC.
 
 Usage:
@@ -45,6 +46,11 @@ def main():
     letters = ranges(lambda cp: cat(cp).startswith("L"))
     numbers = ranges(lambda cp: cat(cp).startswith("N"))
     marks = ranges(lambda cp: cat(cp).startswith("M"))
+    upper = ranges(lambda cp: cat(cp) in ("Lu", "Lt"))
+    lower = ranges(lambda cp: cat(cp) == "Ll")
+    other_letters = ranges(lambda cp: cat(cp) in ("Lm", "Lo"))
+    punctuation = ranges(lambda cp: cat(cp).startswith("P"))
+    symbols = ranges(lambda cp: cat(cp).startswith("S"))
 
     ccc = []
     for cp in range(MAX):
@@ -91,6 +97,11 @@ def main():
     emit("letters", "[2]u21", letters, tup)
     emit("numbers", "[2]u21", numbers, tup)
     emit("marks", "[2]u21", marks, tup)
+    emit("upper", "[2]u21", upper, tup)
+    emit("lower", "[2]u21", lower, tup)
+    emit("other_letters", "[2]u21", other_letters, tup)
+    emit("punctuation", "[2]u21", punctuation, tup)
+    emit("symbols", "[2]u21", symbols, tup)
     emit("combining", "[3]u21", ccc, tup)
     emit("decomp_index", "[3]u21", decomp_index, tup)
     emit("decomp_data", "u21", decomp_data, lambda r: f"0x{r:X}")

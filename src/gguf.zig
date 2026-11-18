@@ -165,6 +165,33 @@ pub const Header = struct {
         };
     }
 
+    /// A float array's element `i`, or null if missing, not one, or out of range.
+    pub fn floatAt(self: Header, key: []const u8, i: u64) ?f64 {
+        const v = self.get(key) orelse return null;
+        const a = switch (v) {
+            .array => |a| a,
+            else => return null,
+        };
+        if (i >= a.len or (a.elem != .f32 and a.elem != .f64))
+        {
+            return null;
+        }
+        var r: Reader = .{ .buf = a.data, .pos = @intCast(i * Reader.scalarSize(a.elem)) };
+        const x = r.value(a.elem) catch return null;
+        return switch (x) {
+            .float => |f| f,
+            else => null,
+        };
+    }
+
+    pub fn getBool(self: Header, key: []const u8) ?bool {
+        const v = self.get(key) orelse return null;
+        return switch (v) {
+            .boolean => |b| b,
+            else => null,
+        };
+    }
+
     pub fn tensor(self: Header, name: []const u8) ?TensorInfo {
         for (self.tensors) |t| if (std.mem.eql(u8, t.name, name)) return t;
         return null;

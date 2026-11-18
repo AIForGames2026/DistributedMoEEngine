@@ -5,6 +5,12 @@
 //! text is split by the model's pre-tokenizer pattern, and each piece is
 //! merged by BPE over its UTF-8 bytes.
 //!
+//! SentencePiece vocabularies (TASK-37, GGUF model "llama", as Mixtral's) take
+//! another path: spaces become U+2581, one is put in front of the text, and BPE
+//! merges characters, with bytes as tokens for characters not in the vocabulary.
+//! The GGUF has scores instead of merges; every split of a token into two tokens
+//! is a merge, ranked by the token's score as Hugging Face's converter does.
+//!
 //! The patterns are matched by hand instead of with a regex engine:
 //!   gpt2 (OLMoE): 's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
 //!   qwen2 (Qwen3): (?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}|
@@ -14,11 +20,46 @@
 //!   glm4 (GLM-5.3-Flash, TASK-32): qwen2 with numbers in runs of up to three
 //!                  digits. Its BPE also ignores merges: a piece that is a whole
 //!                  vocabulary token is that token.
+//!   deepseek_v3 (TASK-37): three splits in turn, each piece of one split by the
+//!                  next: \p{N}{1,3}, then runs of CJK ideographs and kana, then
+//!                  [!-/:-@[-`{-~][A-Za-z]+|[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+|
+//!                   ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
+//!                  Text no alternative matches is a piece of its own.
+//!   gpt4o (gpt-oss, TASK-37): words split by case,
+//!                  [^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|...)?|
+//!                  [^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|...)?|
+//!                  \p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+
+//!                  with merges ignored as for glm4.
 const std = @import("std");
 const gguf = @import("gguf.zig");
 const unicode = @import("unicode.zig");
 
-pub const Pattern = enum { gpt2, qwen2, qwen35, glm4 };
+/// `none` is SentencePiece's: the text is not split.
+pub const Pattern = enum { gpt2, qwen2, qwen35, glm4, deepseek_v3, gpt4o, none };
+
+/// When SentencePiece puts U+2581 in front of the text: never, only at its start, or before every piece between added tokens.
+pub const Prepend = enum { never, first, always };
+
+/// What `tokenizer.ggml.pre` names each pattern; the first spelling is the canonical one.
+const pre_names = [_]struct { name: []const u8, pattern: Pattern }{
+    .{ .name = "olmo", .pattern = .gpt2 },
+    .{ .name = "qwen2", .pattern = .qwen2 },
+    .{ .name = "qwen35", .pattern = .qwen35 },
+    .{ .name = "glm4", .pattern = .glm4 },
+    .{ .name = "deepseek-v3", .pattern = .deepseek_v3 },
+    .{ .name = "gpt-4o", .pattern = .gpt4o },
+};
+
+fn patternOf(pre: []const u8) ?Pattern {
+    for (pre_names) |p|
+    {
+        if (std.mem.eql(u8, p.name, pre))
+        {
+            return p.pattern;
+        }
+    }
+    return null;
+}
 
 pub const Error = error{ UnsupportedTokenizer, BadTokenizer, InvalidUtf8, OutOfMemory };
 
@@ -45,6 +86,13 @@ pub const Tokenizer = struct {
     whole: std.StringHashMapUnmanaged(u32) = .empty,
     /// Whether text is NFC-normalized before splitting; GLM-5.3-Flash's tokenizer has no normalizer.
     nfc: bool = true,
+    /// Whether a prompt starts with `bos` (`tokenizer.ggml.add_bos_token`), as Hugging Face's `encode` adds it.
+    add_bos: bool = false,
+    /// SentencePiece: each character's id, for characters that are vocabulary tokens.
+    chars: std.StringHashMapUnmanaged(u32) = .empty,
+    prepend: Prepend = .never,
+    /// Whether decoding drops one space at the start of the text, as SentencePiece's decoder does.
+    strip_space: bool = false,
 
     pub fn deinit(self: *Tokenizer) void {
         self.arena.deinit();
@@ -55,25 +103,24 @@ pub const Tokenizer = struct {
     /// header may be freed afterwards.
     pub fn fromGguf(gpa: std.mem.Allocator, h: gguf.Header) Error!Tokenizer {
         const model = h.getString("tokenizer.ggml.model") orelse return error.BadTokenizer;
+        if (std.mem.eql(u8, model, "llama"))
+        {
+            return fromGgufSpm(gpa, h);
+        }
         if (!std.mem.eql(u8, model, "gpt2"))
         {
+            std.log.err("tokenizer: GGUF tokenizer model \"{s}\" is not supported (gpt2 and llama are)", .{model});
             return error.UnsupportedTokenizer;
         }
-        const pre = h.getString("tokenizer.ggml.pre") orelse return error.UnsupportedTokenizer;
-        const pattern: Pattern = if (std.mem.eql(u8, pre, "olmo"))
-            .gpt2
-        else if (std.mem.eql(u8, pre, "qwen2"))
-            .qwen2
-        else if (std.mem.eql(u8, pre, "qwen35"))
-            .qwen35
-        else if (std.mem.eql(u8, pre, "glm4"))
-            .glm4
-        else
+        const pre = h.getString("tokenizer.ggml.pre") orelse "(none)";
+        const pattern = patternOf(pre) orelse {
+            std.log.err("tokenizer: pre-tokenizer \"{s}\" is not supported (olmo, qwen2, qwen35, glm4, deepseek-v3 and gpt-4o are)", .{pre});
             return error.UnsupportedTokenizer;
+        };
 
         var b = try Builder.init(gpa, pattern);
-        // A GGUF does not record ignore_merges; GLM-5.3-Flash's tokenizer.json sets it.
-        b.ignore_merges = pattern == .glm4;
+        // A GGUF does not record ignore_merges; GLM-5.3-Flash's and gpt-oss's tokenizer.json set it.
+        b.ignore_merges = pattern == .glm4 or pattern == .gpt4o;
         errdefer b.arena.deinit();
         const a = b.arena.allocator();
         var toks = h.strings("tokenizer.ggml.tokens") orelse return error.BadTokenizer;
@@ -99,15 +146,160 @@ pub const Tokenizer = struct {
             try b.addMerge(rank, m[0..sp], m[sp + 1 ..]);
             rank += 1;
         }
+        const common = try Common.read(a, h);
         var tok = try b.finish();
-        // A GGUF does not record the normalizer: GLM-5.3-Flash has none, the others NFC.
-        tok.nfc = pattern != .glm4;
-        tok.bos = if (h.getInt("tokenizer.ggml.bos_token_id")) |v| @intCast(v) else null;
-        tok.eos = if (h.getInt("tokenizer.ggml.eos_token_id")) |v| @intCast(v) else null;
-        if (h.getString("tokenizer.chat_template")) |t|
-        {
-            tok.chat_template = try tok.arena.allocator().dupe(u8, t);
+        // A GGUF does not record the normalizer: OLMoE's and Qwen's are NFC, the newer ones have none.
+        tok.nfc = pattern == .gpt2 or pattern == .qwen2 or pattern == .qwen35;
+        common.apply(&tok);
+        return tok;
+    }
+
+    /// The keys every GGUF tokenizer shares: special ids, BOS, and the chat template.
+    const Common = struct {
+        bos: ?u32,
+        eos: ?u32,
+        add_bos: bool,
+        chat_template: ?[]const u8,
+
+        fn read(a: std.mem.Allocator, h: gguf.Header) !Common {
+            const bos: ?u32 = if (h.getInt("tokenizer.ggml.bos_token_id")) |v| @intCast(v) else null;
+            return .{
+                .bos = bos,
+                .eos = if (h.getInt("tokenizer.ggml.eos_token_id")) |v| @intCast(v) else null,
+                .add_bos = bos != null and (h.getBool("tokenizer.ggml.add_bos_token") orelse false),
+                .chat_template = if (h.getString("tokenizer.chat_template")) |t| try a.dupe(u8, t) else null,
+            };
         }
+
+        fn apply(self: Common, tok: *Tokenizer) void {
+            tok.bos = self.bos;
+            tok.eos = self.eos;
+            tok.add_bos = self.add_bos;
+            tok.chat_template = self.chat_template;
+        }
+    };
+
+    /// A SentencePiece vocabulary (`tokenizer.ggml.model` "llama") with scores and byte tokens.
+    fn fromGgufSpm(gpa: std.mem.Allocator, h: gguf.Header) Error!Tokenizer {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+        var pieces: std.ArrayList([]const u8) = .empty;
+        var special: std.ArrayList(bool) = .empty;
+        var added: std.ArrayList(Added) = .empty;
+        var chars: std.StringHashMapUnmanaged(u32) = .empty;
+        var by_text: std.StringHashMapUnmanaged(u32) = .empty;
+        var byte_ids: [256]u32 = @splat(std.math.maxInt(u32));
+
+        var toks = h.strings("tokenizer.ggml.tokens") orelse return error.BadTokenizer;
+        var id: u32 = 0;
+        while (toks.next() catch return error.BadTokenizer) |t|
+        {
+            // 1 normal, 2 unknown, 3 control, 4 user-defined, 5 unused, 6 byte.
+            const kind = h.intAt("tokenizer.ggml.token_type", id) orelse 1;
+            const text = try a.dupe(u8, t);
+            var p: []const u8 = text;
+            var is_special = false;
+            switch (kind)
+            {
+                2, 3, 4 => {
+                    try added.append(a, .{ .id = id, .text = text, .normalized = kind == 4 });
+                    is_special = kind != 4;
+                },
+                5 => p = "",
+                6 => {
+                    const byte = byteToken(text) orelse return error.BadTokenizer;
+                    byte_ids[byte] = id;
+                    p = try a.dupe(u8, &.{byte});
+                },
+                else => {
+                    p = try std.mem.replaceOwned(u8, a, text, "\u{2581}", " ");
+                    try by_text.put(a, text, id);
+                    if (text.len > 0 and (std.unicode.utf8ByteSequenceLength(text[0]) catch 0) == text.len)
+                    {
+                        try chars.put(a, text, id);
+                    }
+                },
+            }
+            try pieces.append(a, p);
+            try special.append(a, is_special);
+            id += 1;
+        }
+        for (byte_ids) |b|
+        {
+            if (b == std.math.maxInt(u32))
+            {
+                return error.BadTokenizer;
+            }
+        }
+
+        // Every split of a token into two tokens, ranked by the token's score, then by the ids.
+        const Cand = struct { score: f64, merged: u32, l: u32, r: u32 };
+        var cands: std.ArrayList(Cand) = .empty;
+        var it = by_text.iterator();
+        while (it.next()) |e|
+        {
+            const text = e.key_ptr.*;
+            const score = h.floatAt("tokenizer.ggml.scores", e.value_ptr.*) orelse 0;
+            var k: usize = 1;
+            while (k < text.len)
+            {
+                const l = by_text.get(text[0..k]);
+                const r = by_text.get(text[k..]);
+                if (l != null and r != null)
+                {
+                    try cands.append(a, .{ .score = score, .merged = e.value_ptr.*, .l = l.?, .r = r.? });
+                }
+                k += 1;
+            }
+        }
+        std.mem.sort(Cand, cands.items, {}, struct {
+            fn less(_: void, x: Cand, y: Cand) bool {
+                if (x.score != y.score)
+                {
+                    return x.score > y.score;
+                }
+                if (x.merged != y.merged)
+                {
+                    return x.merged < y.merged;
+                }
+                return x.l < y.l or (x.l == y.l and x.r < y.r);
+            }
+        }.less);
+        var merges: std.AutoHashMapUnmanaged(u64, Merge) = .empty;
+        for (cands.items, 0..) |c, rank|
+        {
+            const gop = try merges.getOrPut(a, pairKey(c.l, c.r));
+            if (!gop.found_existing)
+            {
+                gop.value_ptr.* = .{ .rank = @intCast(rank), .id = c.merged };
+            }
+        }
+
+        const scheme = h.getString("tokenizer.ggml.metaspace.prepend_scheme") orelse "first";
+        const prepend: Prepend = if (h.getBool("tokenizer.ggml.add_space_prefix") == false)
+            .never
+        else if (std.mem.eql(u8, scheme, "always"))
+            .always
+        else if (std.mem.eql(u8, scheme, "never"))
+            .never
+        else
+            .first;
+        const common = try Common.read(a, h);
+        var tok: Tokenizer = .{
+            .arena = arena,
+            .pattern = .none,
+            .pieces = pieces.items,
+            .special = special.items,
+            .byte_ids = byte_ids,
+            .merges = merges,
+            .added = added.items,
+            .nfc = false,
+            .chars = chars,
+            .prepend = prepend,
+            .strip_space = prepend != .never,
+        };
+        common.apply(&tok);
         return tok;
     }
 
@@ -262,7 +454,7 @@ pub const Tokenizer = struct {
                 {
                     const nm = self.findAdded(norm.items, npos, true);
                     const nend = if (nm) |x| x.start else norm.items.len;
-                    try self.encodePlain(gpa, norm.items[npos..nend], &s, out);
+                    try self.encodePlain(gpa, norm.items[npos..nend], pos == 0 and npos == 0, &s, out);
                     if (nm) |x|
                     {
                         try out.append(gpa, x.id);
@@ -312,10 +504,15 @@ pub const Tokenizer = struct {
         return null;
     }
 
-    fn encodePlain(self: *const Tokenizer, gpa: std.mem.Allocator, text: []const u8, s: *Scratch, out: *std.ArrayList(u32)) Error!void {
+    /// Text between added tokens; `first` if it starts the whole text.
+    fn encodePlain(self: *const Tokenizer, gpa: std.mem.Allocator, text: []const u8, first: bool, s: *Scratch, out: *std.ArrayList(u32)) Error!void {
         if (text.len == 0)
         {
             return;
+        }
+        if (self.pattern == .none)
+        {
+            return self.spm(gpa, text, first, s, out);
         }
         try split(gpa, self.pattern, text, s);
         for (s.bounds.items[0 .. s.bounds.items.len - 1], s.bounds.items[1..]) |lo, hi|
@@ -329,21 +526,70 @@ pub const Tokenizer = struct {
         {
             return out.append(gpa, id);
         }
-        const none = std.math.maxInt(u32);
         s.ids.clearRetainingCapacity();
+        for (word) |byte|
+        {
+            try s.ids.append(gpa, self.byte_ids[byte]);
+        }
+        try self.merge(gpa, s, out);
+    }
+
+    /// SentencePiece: spaces become U+2581, maybe one goes in front, and each
+    /// character not in the vocabulary becomes its bytes' tokens before merging.
+    fn spm(self: *const Tokenizer, gpa: std.mem.Allocator, text: []const u8, first: bool, s: *Scratch, out: *std.ArrayList(u32)) Error!void {
+        const space = "\u{2581}";
+        s.word.clearRetainingCapacity();
+        const lead = text[0] == ' ' or std.mem.startsWith(u8, text, space);
+        if (!lead and (self.prepend == .always or (self.prepend == .first and first)))
+        {
+            try s.word.appendSlice(gpa, space);
+        }
+        for (text) |byte|
+        {
+            if (byte == ' ')
+            {
+                try s.word.appendSlice(gpa, space);
+            }
+            else
+            {
+                try s.word.append(gpa, byte);
+            }
+        }
+        s.ids.clearRetainingCapacity();
+        var view = std.unicode.Utf8View.initUnchecked(s.word.items).iterator();
+        while (view.nextCodepointSlice()) |c|
+        {
+            if (self.chars.get(c)) |id|
+            {
+                try s.ids.append(gpa, id);
+            }
+            else
+            {
+                for (c) |byte|
+                {
+                    try s.ids.append(gpa, self.byte_ids[byte]);
+                }
+            }
+        }
+        try self.merge(gpa, s, out);
+    }
+
+    /// BPE over the ids in `s.ids`: the lowest-ranked mergeable pair first, leftmost on ties.
+    fn merge(self: *const Tokenizer, gpa: std.mem.Allocator, s: *Scratch, out: *std.ArrayList(u32)) Error!void {
+        const none = std.math.maxInt(u32);
+        const n = s.ids.items.len;
         s.next.clearRetainingCapacity();
         s.prev.clearRetainingCapacity();
         s.heap.clearRetainingCapacity();
-        for (word, 0..) |byte, i|
+        for (0..n) |i|
         {
-            try s.ids.append(gpa, self.byte_ids[byte]);
             try s.prev.append(gpa, if (i == 0) none else @intCast(i - 1));
-            try s.next.append(gpa, if (i + 1 == word.len) none else @intCast(i + 1));
+            try s.next.append(gpa, if (i + 1 == n) none else @intCast(i + 1));
         }
         const ids = s.ids.items;
         const prev = s.prev.items;
         const next = s.next.items;
-        for (0..word.len -| 1) |i|
+        for (0..n -| 1) |i|
         {
             try self.pushPair(gpa, s, @intCast(i), ids[i], ids[i + 1]);
         }
@@ -400,10 +646,12 @@ const Scratch = struct {
     prev: std.ArrayList(u32) = .empty,
     next: std.ArrayList(u32) = .empty,
     heap: std.ArrayList(Item) = .empty,
+    word: std.ArrayList(u8) = .empty,
 
     const Item = struct { rank: u32, pos: u32, a: u32, b: u32, id: u32 };
 
     fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
+        self.word.deinit(gpa);
         self.cps.deinit(gpa);
         self.offs.deinit(gpa);
         self.bounds.deinit(gpa);
@@ -467,35 +715,67 @@ const Scratch = struct {
     }
 };
 
-const class_letter = 1;
-const class_number = 2;
-const class_space = 4;
-const class_newline = 8;
-const class_mark = 16;
+const Class = u16;
+const class_letter: Class = 1;
+const class_number: Class = 2;
+const class_space: Class = 4;
+const class_newline: Class = 8;
+const class_mark: Class = 16;
+const class_upper: Class = 32;
+const class_lower: Class = 64;
+const class_other_letter: Class = 128;
+const class_punct: Class = 256;
+const class_symbol: Class = 512;
+/// gpt-oss's two letter classes: the start of a word, and the rest of it.
+const class_cased_start = class_upper | class_other_letter | class_mark;
+const class_cased_rest = class_lower | class_other_letter | class_mark;
 
-fn classOf(cp: u21) u8 {
+fn classOf(cp: u21) Class {
     if (cp < 0x80)
     {
         return switch (cp) {
-            'a'...'z', 'A'...'Z' => class_letter,
+            'a'...'z' => class_letter | class_lower,
+            'A'...'Z' => class_letter | class_upper,
             '0'...'9' => class_number,
             '\r', '\n' => class_space | class_newline,
             0x09, 0x0B, 0x0C, ' ' => class_space,
+            '$', '+', '<', '=', '>', '^', '`', '|', '~' => class_symbol,
+            '!', '"', '#', '%', '&', '\'', '(', ')', '*', ',', '-', '.', '/', ':', ';', '?', '@', '[', '\\', ']', '_', '{', '}' => class_punct,
             else => 0,
         };
     }
-    var c: u8 = 0;
+    var c: Class = 0;
     if (unicode.isLetter(cp))
     {
         c |= class_letter;
+        if (unicode.isUpper(cp))
+        {
+            c |= class_upper;
+        }
+        else if (unicode.isLower(cp))
+        {
+            c |= class_lower;
+        }
+        else if (unicode.isOtherLetter(cp))
+        {
+            c |= class_other_letter;
+        }
     }
-    if (unicode.isNumber(cp))
+    else if (unicode.isNumber(cp))
     {
         c |= class_number;
     }
-    if (unicode.isMark(cp))
+    else if (unicode.isMark(cp))
     {
         c |= class_mark;
+    }
+    else if (unicode.isPunctuation(cp))
+    {
+        c |= class_punct;
+    }
+    else if (unicode.isSymbol(cp))
+    {
+        c |= class_symbol;
     }
     if (unicode.isSpace(cp))
     {
@@ -520,6 +800,12 @@ fn split(gpa: std.mem.Allocator, pattern: Pattern, text: []const u8, s: *Scratch
     }
     try s.offs.append(gpa, @intCast(text.len));
     const cps = s.cps.items;
+    if (pattern == .deepseek_v3)
+    {
+        try splitDeepseek(gpa, cps, s);
+        try s.bounds.append(gpa, @intCast(text.len));
+        return;
+    }
     var i: usize = 0;
     while (i < cps.len)
     {
@@ -529,6 +815,8 @@ fn split(gpa: std.mem.Allocator, pattern: Pattern, text: []const u8, s: *Scratch
             .qwen2 => matchQwen(cps, i, class_letter),
             .qwen35 => matchQwen(cps, i, class_letter | class_mark),
             .glm4 => matchQwenDigits(cps, i, class_letter, 3),
+            .gpt4o => matchGpt4o(cps, i),
+            .deepseek_v3, .none => unreachable,
         };
         std.debug.assert(end > i);
         i = end;
@@ -536,7 +824,208 @@ fn split(gpa: std.mem.Allocator, pattern: Pattern, text: []const u8, s: *Scratch
     try s.bounds.append(gpa, @intCast(text.len));
 }
 
-fn is(cps: []const u21, i: usize, class: u8) bool {
+/// DeepSeek V3's three splits: numbers, then CJK runs in what is left, then
+/// its pattern in what is left of that. Each split sees only its own piece.
+fn splitDeepseek(gpa: std.mem.Allocator, cps: []const u21, s: *Scratch) !void {
+    var i: usize = 0;
+    while (i < cps.len)
+    {
+        if (is(cps, i, class_number))
+        {
+            try s.bounds.append(gpa, s.offs.items[i]);
+            i = @min(runOf(cps, i, class_number), i + 3);
+            continue;
+        }
+        var j = i;
+        while (j < cps.len and !is(cps, j, class_number))
+        {
+            j += 1;
+        }
+        while (i < j)
+        {
+            if (isCjk(cps[i]))
+            {
+                try s.bounds.append(gpa, s.offs.items[i]);
+                while (i < j and isCjk(cps[i]))
+                {
+                    i += 1;
+                }
+                continue;
+            }
+            var k = i;
+            while (k < j and !isCjk(cps[k]))
+            {
+                k += 1;
+            }
+            try splitBy(gpa, cps[0..k], i, s, matchDeepseek);
+            i = k;
+        }
+    }
+}
+
+/// Splits `cps[from..]` by a matcher; text where nothing matches is a piece of its own.
+fn splitBy(gpa: std.mem.Allocator, cps: []const u21, from: usize, s: *Scratch, comptime match: fn ([]const u21, usize) ?usize) !void {
+    var i = from;
+    while (i < cps.len)
+    {
+        try s.bounds.append(gpa, s.offs.items[i]);
+        if (match(cps, i)) |end|
+        {
+            i = end;
+            continue;
+        }
+        i += 1;
+        while (i < cps.len and match(cps, i) == null)
+        {
+            i += 1;
+        }
+    }
+}
+
+/// DeepSeek V3's CJK class: the common ideographs to U+9FA5, hiragana and katakana.
+fn isCjk(cp: u21) bool {
+    return (cp >= 0x4E00 and cp <= 0x9FA5) or (cp >= 0x3040 and cp <= 0x30FF);
+}
+
+fn isAsciiLetter(cps: []const u21, i: usize) bool {
+    return i < cps.len and cps[i] < 0x80 and std.ascii.isAlphabetic(@intCast(cps[i]));
+}
+
+fn matchDeepseek(cps: []const u21, i: usize) ?usize {
+    const c = classOf(cps[i]);
+    // ASCII punctuation or symbol, then ASCII letters.
+    if (cps[i] < 0x80 and c & (class_punct | class_symbol) != 0 and isAsciiLetter(cps, i + 1))
+    {
+        var j = i + 1;
+        while (isAsciiLetter(cps, j))
+        {
+            j += 1;
+        }
+        return j;
+    }
+    const word = class_letter | class_mark;
+    if (c & (class_newline | class_letter | class_punct | class_symbol) == 0 and is(cps, i + 1, word))
+    {
+        return runOf(cps, i + 1, word);
+    }
+    if (c & word != 0)
+    {
+        return runOf(cps, i, word);
+    }
+    const ps = class_punct | class_symbol;
+    const s = if (cps[i] == ' ' and is(cps, i + 1, ps)) i + 1 else i;
+    if (is(cps, s, ps))
+    {
+        return runOf(cps, runOf(cps, s, ps), class_newline);
+    }
+    if (c & class_space != 0)
+    {
+        return spaceOrBreaks(cps, i);
+    }
+    return null;
+}
+
+/// White space at `i`: through its last line break if it has one, else as `spaceRun`.
+fn spaceOrBreaks(cps: []const u21, i: usize) usize {
+    const j = runOf(cps, i, class_space);
+    var k = j;
+    while (k > i)
+    {
+        k -= 1;
+        if (classOf(cps[k]) & class_newline != 0)
+        {
+            return k + 1;
+        }
+    }
+    return spaceRun(cps, i);
+}
+
+/// One character that may lead a gpt-oss word: not a line break, letter or number.
+fn isWordLead(cps: []const u21, i: usize) bool {
+    return i < cps.len and classOf(cps[i]) & (class_newline | class_letter | class_number) == 0;
+}
+
+/// gpt-oss's first word form: optional capitals, then at least one lower-case letter.
+fn casedLower(cps: []const u21, s: usize) ?usize {
+    const u = runOf(cps, s, class_cased_start);
+    var end: usize = undefined;
+    if (is(cps, u, class_cased_rest))
+    {
+        end = runOf(cps, u, class_cased_rest);
+    }
+    else
+    {
+        // Give back capitals until one can end the word.
+        var p = u;
+        while (true)
+        {
+            if (p == s)
+            {
+                return null;
+            }
+            p -= 1;
+            if (is(cps, p, class_cased_rest))
+            {
+                break;
+            }
+        }
+        end = p + 1;
+    }
+    return contraction(cps, end, true) orelse end;
+}
+
+/// gpt-oss's second word form: at least one capital, then any lower-case letters.
+fn casedUpper(cps: []const u21, s: usize) ?usize {
+    if (!is(cps, s, class_cased_start))
+    {
+        return null;
+    }
+    const end = runOf(cps, runOf(cps, s, class_cased_start), class_cased_rest);
+    return contraction(cps, end, true) orelse end;
+}
+
+fn matchGpt4o(cps: []const u21, i: usize) usize {
+    const lead = isWordLead(cps, i);
+    if (lead)
+    {
+        if (casedLower(cps, i + 1)) |end|
+        {
+            return end;
+        }
+    }
+    if (casedLower(cps, i)) |end|
+    {
+        return end;
+    }
+    if (lead)
+    {
+        if (casedUpper(cps, i + 1)) |end|
+        {
+            return end;
+        }
+    }
+    if (casedUpper(cps, i)) |end|
+    {
+        return end;
+    }
+    if (is(cps, i, class_number))
+    {
+        return @min(runOf(cps, i, class_number), i + 3);
+    }
+    const s = if (cps[i] == ' ' and isOther(cps, i + 1)) i + 1 else i;
+    if (isOther(cps, s))
+    {
+        var j = runOfOther(cps, s);
+        while (j < cps.len and (cps[j] == '\r' or cps[j] == '\n' or cps[j] == '/'))
+        {
+            j += 1;
+        }
+        return j;
+    }
+    return spaceOrBreaks(cps, i);
+}
+
+fn is(cps: []const u21, i: usize, class: Class) bool {
     return i < cps.len and classOf(cps[i]) & class != 0;
 }
 
@@ -545,11 +1034,11 @@ fn isOther(cps: []const u21, i: usize) bool {
 }
 
 /// Neither `letters`, a number, nor white space.
-fn isOtherThan(cps: []const u21, i: usize, letters: u8) bool {
+fn isOtherThan(cps: []const u21, i: usize, letters: Class) bool {
     return i < cps.len and classOf(cps[i]) & (letters | class_number | class_space) == 0;
 }
 
-fn runOf(cps: []const u21, from: usize, class: u8) usize {
+fn runOf(cps: []const u21, from: usize, class: Class) usize {
     var j = from;
     while (is(cps, j, class))
     {
@@ -562,7 +1051,7 @@ fn runOfOther(cps: []const u21, from: usize) usize {
     return runOfOtherThan(cps, from, class_letter);
 }
 
-fn runOfOtherThan(cps: []const u21, from: usize, letters: u8) usize {
+fn runOfOtherThan(cps: []const u21, from: usize, letters: Class) usize {
     var j = from;
     while (isOtherThan(cps, j, letters))
     {
@@ -573,7 +1062,7 @@ fn runOfOtherThan(cps: []const u21, from: usize, letters: u8) usize {
 
 /// End of the contraction at `i` ('s, 't, 're, 've, 'm, 'll, 'd), or null.
 fn contraction(cps: []const u21, i: usize, fold: bool) ?usize {
-    if (cps[i] != '\'' or i + 1 >= cps.len)
+    if (i + 1 >= cps.len or cps[i] != '\'')
     {
         return null;
     }
@@ -638,12 +1127,12 @@ fn matchGpt2(cps: []const u21, i: usize) usize {
 }
 
 /// The qwen2 and qwen35 patterns, which differ only in what counts as a letter (`letters`).
-fn matchQwen(cps: []const u21, i: usize, letters: u8) usize {
+fn matchQwen(cps: []const u21, i: usize, letters: Class) usize {
     return matchQwenDigits(cps, i, letters, 1);
 }
 
 /// The qwen2 family with numbers in runs of up to `digits` (1 for qwen2, 3 for glm4).
-fn matchQwenDigits(cps: []const u21, i: usize, letters: u8, digits: usize) usize {
+fn matchQwenDigits(cps: []const u21, i: usize, letters: Class, digits: usize) usize {
     if (contraction(cps, i, true)) |end|
     {
         return end;
@@ -825,6 +1314,15 @@ const char_bytes: [324]i16 = blk: {
     break :blk t;
 };
 
+/// The byte a SentencePiece byte token such as "<0x0A>" stands for.
+fn byteToken(text: []const u8) ?u8 {
+    if (text.len != 6 or !std.mem.startsWith(u8, text, "<0x") or text[5] != '>')
+    {
+        return null;
+    }
+    return std.fmt.parseInt(u8, text[3..5], 16) catch null;
+}
+
 /// A vocabulary string's bytes; characters outside the alphabet pass through as UTF-8.
 fn byteLevelDecode(a: std.mem.Allocator, text: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
@@ -849,9 +1347,19 @@ fn byteLevelDecode(a: std.mem.Allocator, text: []const u8) ![]const u8 {
 pub const Stream = struct {
     pending: [4]u8 = undefined,
     len: u8 = 0,
+    started: bool = false,
 
     pub fn push(self: *Stream, gpa: std.mem.Allocator, tok: *const Tokenizer, id: u32, out: *std.ArrayList(u8)) !void {
-        for (tok.piece(id)) |byte|
+        var p = tok.piece(id);
+        if (!self.started and p.len > 0)
+        {
+            self.started = true;
+            if (tok.strip_space and p[0] == ' ')
+            {
+                p = p[1..];
+            }
+        }
+        for (p) |byte|
         {
             self.pending[self.len] = byte;
             self.len += 1;
@@ -1015,6 +1523,128 @@ test "qwen35 pattern keeps combining marks with letters" {
     try expectSplit(.qwen35, "x 12345 !!\n\n", &.{ "x", " ", "1", "2", "3", "4", "5", " !!\n\n" });
 }
 
+test "deepseek_v3 pattern splits like Hugging Face" {
+    // Pieces from Hugging Face's pre_tokenize_str on DeepSeek-V3's tokenizer.json.
+    try expectSplit(.deepseek_v3, "a1b22c333d4444 x", &.{ "a", "1", "b", "22", "c", "333", "d", "444", "4", " x" });
+    try expectSplit(.deepseek_v3, "日本語abc #include <x.h>", &.{ "日本語", "abc", " #", "include", " <", "x", ".h", ">" });
+    try expectSplit(.deepseek_v3, "!!abc ?? \n\n x\x01\x02y", &.{ "!!", "abc", " ??", " \n\n", " x", "\x01", "\x02y" });
+}
+
+test "gpt4o pattern splits like Hugging Face" {
+    // Pieces from Hugging Face's pre_tokenize_str on gpt-oss's tokenizer.json.
+    try expectSplit(.gpt4o, "HelloWORLDfoo DON'T can't", &.{ "Hello", "WORLDfoo", " DON'T", " can't" });
+    try expectSplit(.gpt4o, "path/to\n x  y", &.{ "path", "/to", "\n", " x", " ", " y" });
+    try expectSplit(.gpt4o, "\u{1C5}ungla \u{2B0}ello 12345", &.{ "\u{1C5}ungla", " \u{2B0}ello", " ", "123", "45" });
+}
+
+test "an unknown pre-tokenizer is refused by name" {
+    try std.testing.expectEqual(Pattern.deepseek_v3, patternOf("deepseek-v3").?);
+    try std.testing.expectEqual(@as(?Pattern, null), patternOf("llama-bpe"));
+}
+
+/// A GGUF header with only the given metadata, for the SentencePiece test.
+fn testGguf(gpa: std.mem.Allocator, tokens: []const []const u8, scores: []const f32, types: []const i32, add_bos: bool) ![]u8 {
+    var b: std.ArrayList(u8) = .empty;
+    errdefer b.deinit(gpa);
+    const put = struct {
+        fn int(l: *std.ArrayList(u8), g: std.mem.Allocator, comptime T: type, v: T) !void {
+            var buf: [@sizeOf(T)]u8 = undefined;
+            std.mem.writeInt(T, &buf, v, .little);
+            try l.appendSlice(g, &buf);
+        }
+        fn str(l: *std.ArrayList(u8), g: std.mem.Allocator, s: []const u8) !void {
+            try int(l, g, u64, s.len);
+            try l.appendSlice(g, s);
+        }
+    };
+    try b.appendSlice(gpa, "GGUF");
+    try put.int(&b, gpa, u32, 3);
+    try put.int(&b, gpa, u64, 0);
+    try put.int(&b, gpa, u64, 7);
+    try put.str(&b, gpa, "tokenizer.ggml.model");
+    try put.int(&b, gpa, u32, 8);
+    try put.str(&b, gpa, "llama");
+    try put.str(&b, gpa, "tokenizer.ggml.tokens");
+    try put.int(&b, gpa, u32, 9);
+    try put.int(&b, gpa, u32, 8);
+    try put.int(&b, gpa, u64, tokens.len);
+    for (tokens) |t|
+    {
+        try put.str(&b, gpa, t);
+    }
+    try put.str(&b, gpa, "tokenizer.ggml.scores");
+    try put.int(&b, gpa, u32, 9);
+    try put.int(&b, gpa, u32, 6);
+    try put.int(&b, gpa, u64, scores.len);
+    for (scores) |s|
+    {
+        try put.int(&b, gpa, u32, @bitCast(s));
+    }
+    try put.str(&b, gpa, "tokenizer.ggml.token_type");
+    try put.int(&b, gpa, u32, 9);
+    try put.int(&b, gpa, u32, 5);
+    try put.int(&b, gpa, u64, types.len);
+    for (types) |t|
+    {
+        try put.int(&b, gpa, i32, t);
+    }
+    try put.str(&b, gpa, "tokenizer.ggml.bos_token_id");
+    try put.int(&b, gpa, u32, 4);
+    try put.int(&b, gpa, u32, 1);
+    try put.str(&b, gpa, "tokenizer.ggml.add_bos_token");
+    try put.int(&b, gpa, u32, 7);
+    try b.append(gpa, @intFromBool(add_bos));
+    try put.str(&b, gpa, "tokenizer.ggml.metaspace.prepend_scheme");
+    try put.int(&b, gpa, u32, 8);
+    try put.str(&b, gpa, "first");
+    return b.toOwnedSlice(gpa);
+}
+
+test "SentencePiece merges by score, falls back to bytes, and puts a space in front of the first piece only" {
+    const gpa = std.testing.allocator;
+    var tokens: std.ArrayList([]const u8) = .empty;
+    defer tokens.deinit(gpa);
+    var names: std.ArrayList(u8) = .empty;
+    defer names.deinit(gpa);
+    var scores: std.ArrayList(f32) = .empty;
+    defer scores.deinit(gpa);
+    var types: std.ArrayList(i32) = .empty;
+    defer types.deinit(gpa);
+    for (0..256) |byte|
+    {
+        try names.print(gpa, "<0x{X:0>2}>", .{byte});
+    }
+    try tokens.appendSlice(gpa, &.{ "<unk>", "<s>", "</s>" });
+    try types.appendSlice(gpa, &.{ 2, 3, 3 });
+    for (0..256) |byte|
+    {
+        try tokens.append(gpa, names.items[byte * 6 ..][0..6]);
+        try types.append(gpa, 6);
+    }
+    // Ids 259 to 264; the space-then-h merge outranks h-then-i.
+    try tokens.appendSlice(gpa, &.{ "\u{2581}", "h", "i", "\u{2581}h", "hi", "\u{2581}hi" });
+    try types.appendSlice(gpa, &.{ 1, 1, 1, 1, 1, 1 });
+    try scores.appendNTimes(gpa, 0, 259);
+    try scores.appendSlice(gpa, &.{ -10, -10, -10, -1, -2, -3 });
+
+    const bytes = try testGguf(gpa, tokens.items, scores.items, types.items, true);
+    defer gpa.free(bytes);
+    var h = try gguf.parse(gpa, bytes, bytes.len);
+    defer h.deinit(gpa);
+    var tok = try Tokenizer.fromGguf(gpa, h);
+    defer tok.deinit();
+    try std.testing.expect(tok.add_bos and tok.bos.? == 1 and tok.pattern == .none);
+
+    var ids: std.ArrayList(u32) = .empty;
+    defer ids.deinit(gpa);
+    try tok.encode(gpa, "hi</s>hi \u{e9}", &ids);
+    try std.testing.expectEqualSlices(u32, &.{ 264, 2, 263, 259, 3 + 0xC3, 3 + 0xA9 }, ids.items);
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try decode(gpa, &tok, ids.items, &text);
+    try std.testing.expectEqualStrings("hi</s>hi \u{e9}", text.items);
+}
+
 test "glm4 pattern keeps up to three digits together" {
     try expectSplit(.glm4, "x 12345 !!\n\n", &.{ "x", " ", "123", "45", " !!\n\n" });
     try expectSplit(.glm4, "It'S 7 (hi)\n", &.{ "It", "'S", " ", "7", " (", "hi", ")\n" });
@@ -1067,6 +1697,7 @@ test "streaming decode holds back split characters" {
     var tok: Tokenizer = undefined;
     const pieces = [_][]const u8{ "caf", "\xC3", "\xA9!", "\xFF" };
     tok.pieces = &pieces;
+    tok.strip_space = false;
     const gpa = std.testing.allocator;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);

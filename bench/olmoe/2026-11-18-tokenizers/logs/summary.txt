@@ -1,0 +1,10 @@
+deepseek-v3: 5038/5038 texts identical (160573 tokens); decode round trip ok
+glm53: 5038/5038 texts identical (152144 tokens); decode round trip ok
+gpt-oss: 5038/5038 texts identical (153347 tokens); decode round trip ok
+mixtral: 5038/5038 texts identical (186981 tokens); decode round trip ok
+olmoe: 5038/5038 texts identical (169431 tokens); decode round trip ok
+qwen3-iq4_xs: 5038/5038 texts identical (144621 tokens); decode round trip ok
+qwen3-q4_k_m: 5038/5038 texts identical (144621 tokens); decode round trip ok
+qwen3: 5038/5038 texts identical (144621 tokens); decode round trip ok
+qwen36: 5038/5038 texts identical (153567 tokens); decode round trip ok
+qwen38: 5038/5038 texts identical (153567 tokens); decode round trip ok

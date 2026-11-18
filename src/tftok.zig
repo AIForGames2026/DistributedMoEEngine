@@ -38,8 +38,8 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--info"))
         {
             const format = chat.detect(&tok);
-            try out.print("pattern {s}, {d} ids, {d} added tokens, merges {d}, bos {?d}, eos {?d}, chat format {s}\n", .{
-                @tagName(tok.pattern), tok.vocabSize(), tok.added.len, tok.merges.count(), tok.bos, tok.eos,
+            try out.print("pattern {s}, {d} ids, {d} added tokens, merges {d}, bos {?d} (added: {}), eos {?d}, chat format {s}\n", .{
+                @tagName(tok.pattern), tok.vocabSize(), tok.added.len, tok.merges.count(), tok.bos, tok.add_bos, tok.eos,
                 if (format) |f| @tagName(f) else if (tok.chat_template != null) "unknown" else "none",
             });
             continue;
@@ -73,6 +73,12 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(text);
         var ids: std.ArrayList(u32) = .empty;
         defer ids.deinit(gpa);
+        // Hugging Face's encode starts with BOS when the tokenizer adds one.
+        const bos: usize = if (tok.add_bos) 1 else 0;
+        if (tok.add_bos)
+        {
+            try ids.append(gpa, tok.bos.?);
+        }
         try tok.encode(gpa, text, &ids);
         for (ids.items, 0..) |id, i|
         {
@@ -86,13 +92,21 @@ pub fn main(init: std.process.Init) !void {
         {
             try unicode.nfc(gpa, text, &want);
         }
+        else if (tok.pattern == .none)
+        {
+            // SentencePiece decodes U+2581 as a space and drops the first space.
+            const spaced = try std.mem.replaceOwned(u8, gpa, text, "\u{2581}", " ");
+            defer gpa.free(spaced);
+            const strip = tok.strip_space and spaced.len > 0 and spaced[0] == ' ';
+            try want.appendSlice(gpa, spaced[@intFromBool(strip)..]);
+        }
         else
         {
             try want.appendSlice(gpa, text);
         }
         var back: std.ArrayList(u8) = .empty;
         defer back.deinit(gpa);
-        try tokenizer.decode(gpa, &tok, ids.items, &back);
+        try tokenizer.decode(gpa, &tok, ids.items[bos..], &back);
         if (!std.mem.eql(u8, want.items, back.items))
         {
             std.debug.print("{s}: decoding the ids does not give back the text\n", .{arg});

@@ -41,6 +41,16 @@ EDGE = [
     "mixed\r\nline\rendings\n",
     "̀́ starts with combining marks",
     "Привет, мир! Γειά σου Κόσμε! שלום עולם مرحبا بالعالم",
+    # TASK-37: case splits (gpt-oss), CJK runs and ASCII punctuation (DeepSeek V3), SentencePiece spaces and specials.
+    "HelloWORLDfoo camelCaseWord XMLHttpRequest ǅungla ʰello DON'T can'T I'M",
+    "path/to/file\n/usr/bin\r\n// comment\n",
+    "a1b22c333d4444 x١٢٣ 3.14 1e-10",
+    "日本語のテキストabc漢字カタカナ㐀𠀀 中文，标点。",
+    "#include <stdio.h> e.g. U.S.A. $100 @user #tag ~home",
+    "!!abc ??Def ...xyz ,a ;b",
+    "▁ hi ▁▁there",
+    "<s>hello</s> world<unk> <s> spaced",
+    "\x00\x01 control\x7f chars​ zero width",
 ]
 
 POOL = (

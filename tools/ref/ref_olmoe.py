@@ -116,9 +116,10 @@ def build(gguf_path, config_path):
     return model.eval(), cfg
 
 
-def record(model, cfg, prompts, gen):
+def record(model, cfg, prompts, gen, gaps=False):
     """Golden values for each token-id list in `prompts`, plus `gen` tokens of
-    greedy generate() and the logits each was picked from (TASK-24)."""
+    greedy generate() and the logits each was picked from (TASK-24). With
+    `gaps`, also each generated step's smallest router gap (as ref_qwen38.py)."""
     out = {"config": torch.tensor([len(prompts), cfg.num_hidden_layers, cfg.num_experts, cfg.num_experts_per_tok,
                                    cfg.hidden_size, cfg.vocab_size], dtype=torch.int32)}
     k = cfg.num_experts_per_tok
@@ -139,11 +140,31 @@ def record(model, cfg, prompts, gen):
                 out[f"prompt{p}.layer{l}.topk_idx"] = idx[:, :k].to(torch.int32).contiguous()
                 out[f"prompt{p}.layer{l}.topk_w"] = w[:, :k].contiguous()
             if gen:
+                # Each step's smallest gap between the k-th and (k+1)-th router probability, over every
+                # layer at the position its logits come from; a near-tie there can flip a choice.
+                step_gaps = []
+
+                def gap(mod, _args, res):
+                    probs = torch.softmax(res[0][-1].float(), dim=-1)
+                    w = torch.topk(probs, k + 1).values
+                    g_now = float(w[k - 1] - w[k])
+                    if mod is model.model.layers[0].mlp.gate:
+                        step_gaps.append(g_now)
+                    else:
+                        step_gaps[-1] = min(step_gaps[-1], g_now)
+
+                hooks = [layer.mlp.gate.register_forward_hook(gap) for layer in model.model.layers] if gaps else []
                 # No end-of-text stop, so every prompt yields exactly `gen` tokens.
                 g = model.generate(torch.tensor([ids]), max_new_tokens=gen, min_new_tokens=gen, do_sample=False,
                                    eos_token_id=None, pad_token_id=0, output_logits=True, return_dict_in_generate=True)
+                for h in hooks:
+                    h.remove()
                 out[f"prompt{p}.gen_tokens"] = g.sequences[0, len(ids):].to(torch.int32).contiguous()
                 out[f"prompt{p}.gen_logits"] = torch.cat([x.float() for x in g.logits]).contiguous()
+                if gaps:
+                    if len(step_gaps) != gen:
+                        sys.exit(f"recorded {len(step_gaps)} router gaps for {gen} generated steps")
+                    out[f"prompt{p}.gen_gaps"] = torch.tensor(step_gaps, dtype=torch.float32)
     return out, min_gap
 
 

@@ -314,7 +314,7 @@ def main():
     model, cfg = build(args.gguf, args.config)
     tok = Tokenizer.from_file(args.tokenizer)
     prompts = [tok.encode(text).ids for text in PROMPTS]
-    out, gap = record(model, cfg, prompts, args.generate)
+    out, gap = record(model, cfg, prompts, args.generate, gaps=True)
     for p, ids in enumerate(prompts):
         top1 = out[f"prompt{p}.logits"].argmax(-1).tolist()
         print(f"prompt {p}: {len(ids)} tokens; next token after the prompt: {tok.decode([top1[-1]])!r}")

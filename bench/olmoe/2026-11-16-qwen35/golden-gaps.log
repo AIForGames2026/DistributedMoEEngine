@@ -1,0 +1,18 @@
+load: non-expert weights and 256 of 256 experts, 36.89 GB in 6.69 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (36.89 GB in 0.96 s)
+local: prompt 0 (5 tokens, 115 ms): logits max err 3.86e-5 (last 5 positions), top-1 5/5, hidden max err 5.33e-5, experts chosen 1600/1600 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (19 tokens, 184 ms): logits max err 4.01e-5 (last 19 positions), top-1 19/19, hidden max err 4.27e-5, experts chosen 6080/6080 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 239 ms): logits max err 4.96e-5 (last 15 positions), top-1 15/15, hidden max err 4.96e-5, experts chosen 4800/4800 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: Qwen3.5-MoE logits within 1e-2 of the PyTorch reference (worst 4.96e-5), every top-1 token identical
+local: generate prompt 0: 32 tokens in 1.00 s (32.1 tokens/s, prompt included)
+local:   tokens: 11751 11 264 3177 34756 364 1141 8807 3712 11 7431 11 321 25438 57902 13 27480 12484 303 279 9897 81183 919 314 279 3046 11 3055 279 181474 10629 11
+local:   same as transformers' generate(): 32/32 tokens, logits max err 5.34e-5 at step 22 ok
+local: generate prompt 1: 32 tokens in 1.06 s (30.1 tokens/s, prompt included)
+local:   tokens: 73111 1393 471 220 16 8 478 73111 1393 471 220 17 8 1358 727 73111 697 6515 1393 11 20781 65787 1590 198 262 413 307 303 20781 25 198 285
+local:   step 3: logits max err 3.35e-1 at a router near-tie (gap 0.00e0 in transformers); logits held up to here
+local:   same as transformers' generate(): 32/32 tokens, logits max err 4.29e-5 at step 1 (before the near-tie) ok
+local: generate prompt 2: 32 tokens in 1.04 s (30.7 tokens/s, prompt included)
+local:   tokens: 279 1324 314 4393 4868 369 1691 8882 1056 279 2702 1324 314 4868 13 1061 5954 586 310 5281 685 279 1558 1331 1973 7459 279 52652 2695 13 271 760
+local:   same as transformers' generate(): 32/32 tokens, logits max err 4.20e-5 at step 13 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: heap: 480 allocations, 480 frees, peak 289.6 MB, 0 bytes still allocated at exit (balanced)

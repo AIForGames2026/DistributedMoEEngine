@@ -1,0 +1,38 @@
+/home/admin/lukehinojosa/src/engine/tools/ref/ref_qwen35.py:85: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/utils/tensor_numpy.cpp:208.)
+  return torch.from_numpy(np.ascontiguousarray(tensors[name]))
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `fused_recurrent_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+prompt 0: 5 tokens; next token after the prompt: ' Paris'
+  greedy: 'The capital of France is Paris, a city renowned for its rich history, culture, and iconic landmarks. Situated in the north-central part of the country, along the Seine River,'
+prompt 1: 19 tokens; next token after the prompt: ' fibonacci'
+  greedy: 'def fibonacci(n):\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef fibonacci_memo(n, memo={}):\n    if n in memo:\n       '
+prompt 2: 15 tokens; next token after the prompt: ' the'
+  greedy: 'Mixture-of-experts models route each token to a few experts, so the number of active parameters is much smaller than the total number of parameters. This allows us to scale up the model size without increasing the computational cost.\n\nThe'
+smallest gap between the k-th and (k+1)-th router probability: 5.23e-07
+wrote qwen35_generate_gaps.tfref (146680128 bytes, 373 tensors)
+	Command being timed: "/home/admin/lukehinojosa/tools/ref-venv5/bin/python /home/admin/lukehinojosa/src/engine/tools/ref/ref_qwen35.py --gguf Qwen3.6-35B-A3B-Q8_0.gguf --config config.json --tokenizer tokenizer.json --out qwen35_generate_gaps.tfref --generate 32"
+	User time (seconds): 2442.21
+	System time (seconds): 129.93
+	Percent of CPU this job got: 539%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 7:57.03
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 39594256
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 21909
+	Minor (reclaiming a frame) page faults: 2068090
+	Voluntary context switches: 15202749
+	Involuntary context switches: 31692
+	Swaps: 0
+	File system inputs: 53382976
+	File system outputs: 286664
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+REF_EXIT 0

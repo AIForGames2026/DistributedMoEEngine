@@ -1331,7 +1331,7 @@ test "selectTop keeps the highest scores, ties to the lower index, ascending" {
 }
 
 /// Sigmoid scores; the top k by score plus bias; their scores renormalized and scaled.
-fn route(cfg: Config, bias: []const f32, logits: []f32, n: usize, idx: []u32, wts: []f32) void
+fn route(cfg: Config, bias: []const f32, logits: []f32, n: usize, idx: []u32, wts: []f32, gaps: []f32) void
 {
     const k = cfg.top_k;
     const e = cfg.experts;
@@ -1348,6 +1348,18 @@ fn route(cfg: Config, bias: []const f32, logits: []f32, n: usize, idx: []u32, wt
         }
         const it = idx[t * k ..][0..k];
         olmoe.topK(choice, k, it, val[0..k]);
+        if (gaps.len > 0)
+        {
+            var next: f32 = -std.math.inf(f32);
+            for (choice, 0..) |cv, ex|
+            {
+                if (cv > next and std.mem.indexOfScalar(u32, it, @intCast(ex)) == null)
+                {
+                    next = cv;
+                }
+            }
+            gaps[t] = val[k - 1] - next;
+        }
         const wt = wts[t * k ..][0..k];
         var sum: f32 = 0;
         for (it, wt) |ex, *wv|
@@ -1432,6 +1444,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, cac
         hcPre(cfg, parts.attn_hc, h, n, x, mix, hy, scratch);
         normRows(threads, x, l.attn_norm, cfg.eps, d, n);
         olmoe.Profile.lap(&prof.output, &pt);
+        if (olmoe.dump) |f|
+        {
+            f("attn_in", li, x[0 .. n * d]);
+        }
         if (parts.kda) |kw|
         {
             const ri = cfg.recurrentIndex(li);
@@ -1446,11 +1462,19 @@ pub fn step(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, cac
             mla(&bufs, cfg, parts.mla.?, cache, ai, x, n, pos0, y, kept, scratch);
             olmoe.Profile.lap(&prof.attention, &pt);
         }
+        if (olmoe.dump) |f|
+        {
+            f("attn_out", li, y[0 .. n * d]);
+        }
         hcPost(cfg, h, y, mix, n, h2);
         std.mem.swap([]f32, &h, &h2);
 
         hcPre(cfg, parts.ffn_hc, h, n, x, mix, hy, scratch);
         normRows(threads, x, l.ffn_norm, cfg.eps, d, n);
+        if (olmoe.dump) |f|
+        {
+            f("mlp_in", li, x[0 .. n * d]);
+        }
         olmoe.Profile.lap(&prof.output, &pt);
         @memset(y, 0);
         if (li < cfg.dense_layers)
@@ -1461,15 +1485,24 @@ pub fn step(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, cac
         else
         {
             l.router.matmul(x, n, probs, scratch);
-            route(cfg, parts.bias, probs, n, idx, wts);
+            const gaps: []f32 = if (trace) |tr| (if (tr.gaps.len > 0) tr.gaps[li * n ..][0..n] else &.{}) else &.{};
+            route(cfg, parts.bias, probs, n, idx, wts, gaps);
             if (moe.capacity) |cp|
             {
                 cp.apply(idx, wts, n * k, cap_count, cap_list);
             }
             olmoe.Profile.lap(&prof.router, &pt);
             try moe.run(moe.ctx, li, x, n, idx, wts, y);
+            if (olmoe.dump) |f|
+            {
+                f("routed_out", li, y[0 .. n * d]);
+            }
             mlp(parts.mlp, cfg.swiglu_limit, x, n, g, u, h2[0 .. n * d], y, scratch);
             olmoe.Profile.lap(&prof.experts, &pt);
+            if (olmoe.dump) |f|
+            {
+                f("mlp_out", li, y[0 .. n * d]);
+            }
             if (trace) |tr|
             {
                 @memcpy(tr.topk[li * n * k ..][0 .. n * k], idx);

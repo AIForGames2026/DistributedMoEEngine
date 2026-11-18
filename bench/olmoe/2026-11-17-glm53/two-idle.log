@@ -1,0 +1,12 @@
+01:40:47 waiting until 04:00
+04:00:02 requests_total=392 engines on gx10-02=0 quiet checks=0
+04:05:04 requests_total=401 engines on gx10-02=0 quiet checks=0
+04:10:06 requests_total=409 engines on gx10-02=0 quiet checks=0
+04:15:08 requests_total=417 engines on gx10-02=0 quiet checks=0
+04:20:10 requests_total=425 engines on gx10-02=0 quiet checks=0
+04:25:12 requests_total=433 engines on gx10-02=0 quiet checks=0
+04:30:14 requests_total=441 engines on gx10-02=1 quiet checks=0
+04:35:15 requests_total=449 engines on gx10-02=1 quiet checks=0
+04:40:17 requests_total=457 engines on gx10-02=1 quiet checks=0
+04:45:19 requests_total=465 engines on gx10-02=1 quiet checks=0
+04:49:11 stopped by hand: the run moves to another day

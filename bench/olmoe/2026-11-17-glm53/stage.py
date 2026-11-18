@@ -5,6 +5,9 @@ file of the full length holding the header, every non-expert tensor, and this ra
 the direct cable by ssh; run on gx10-02:
 
   stage.py PART2.gguf HOST RANK RANKS
+  stage.py PART2.gguf HOST --add FIRST LAST
+
+--add copies only experts FIRST to LAST of every layer into a share already staged on HOST.
 """
 import os
 import subprocess
@@ -14,18 +17,23 @@ import gguf
 
 
 def main():
-    path, host, rank, ranks = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+    path, host = sys.argv[1], sys.argv[2]
+    add = sys.argv[3] == "--add"
+    if add:
+        lo, hi = int(sys.argv[4]), int(sys.argv[5]) + 1
+    else:
+        rank, ranks = int(sys.argv[3]), int(sys.argv[4])
     r = gguf.GGUFReader(path)
     size = os.path.getsize(path)
-    spans = [(0, int(r.tensors[0].data_offset))]
+    spans = [] if add else [(0, int(r.tensors[0].data_offset))]
     for t in r.tensors:
         off, n = int(t.data_offset), int(t.n_bytes)
         if "_exps." in t.name:
             experts = int(t.shape[-1])
             per = n // experts
-            first, last = rank * experts // ranks, (rank + 1) * experts // ranks
+            first, last = (lo, hi) if add else (rank * experts // ranks, (rank + 1) * experts // ranks)
             spans.append((off + first * per, (last - first) * per))
-        else:
+        elif not add:
             spans.append((off, n))
     spans.sort()
     merged = []
@@ -37,8 +45,12 @@ def main():
             merged.append((off, n))
     total = sum(n for _, n in merged)
     dst = "~/lukehinojosa/models/glm53-flash/" + os.path.basename(path)
-    print(f"{host}: rank {rank} of {ranks}, {len(merged)} spans, {total / 1e9:.2f} GB of {size / 1e9:.2f} GB", flush=True)
-    subprocess.run(["ssh", host, f"mkdir -p ~/lukehinojosa/models/glm53-flash && rm -f {dst} && truncate -s {size} {dst}"], check=True)
+    what = f"experts {lo} to {hi - 1} added" if add else f"rank {rank} of {ranks}"
+    print(f"{host}: {what}, {len(merged)} spans, {total / 1e9:.2f} GB of {size / 1e9:.2f} GB", flush=True)
+    if add:
+        subprocess.run(["ssh", host, f"test $(stat -c %s {dst}) = {size}"], check=True)
+    else:
+        subprocess.run(["ssh", host, f"mkdir -p ~/lukehinojosa/models/glm53-flash && rm -f {dst} && truncate -s {size} {dst}"], check=True)
     sent = 0
     for off, n in merged:
         # Whole MiB blocks where possible; dd's byte flags cover the rest.

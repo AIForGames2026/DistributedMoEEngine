@@ -1,0 +1,13 @@
+prompt 0 (5 tokens): experts 1680/1680 same (100.000%), logits max err 1.097e-05, top-1 5/5
+prompt 1 (17 tokens): experts 5712/5712 same (100.000%), logits max err 1.776e-05, top-1 17/17
+prompt 2 (15 tokens): experts 5040/5040 same (100.000%), logits max err 1.860e-05, top-1 15/15
+prompt 3, layer 11: dsa_pools 281087/281088 same
+prompt 3, layer 15: dsa_pools 281065/281088 same
+prompt 3, layer 19: dsa_pools 280954/281088 same
+prompt 3, layer 23: dsa_pools 280581/281088 same
+prompt 3, layer 27: dsa_pools 280215/281088 same
+prompt 3, layer 31: dsa_pools 280102/281088 same
+prompt 3, layer 35: dsa_pools 279778/281088 same
+prompt 3, layer 39: dsa_pools 279815/281088 same
+prompt 3, layer 43: dsa_pools 279857/281088 same
+prompt 3 (2600 tokens): experts 855627/873600 same (97.943%), pools or blocks 3085630/3091968 same (99.795%), logits max err 8.851e+00, top-1 32/32

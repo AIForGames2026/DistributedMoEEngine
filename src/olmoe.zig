@@ -372,6 +372,8 @@ pub var gpu_adopt: ?*const fn (buf: []u8) bool = null;
 /// Set with a GPU (TASK-12): runs a group of experts there in one call, each
 /// on its own rows of `x`, and returns true, or false to use the CPU path.
 pub var gpu_experts: ?*const fn (job: ExpertJob) bool = null;
+/// Diagnosis only: called with a layer's intermediate values by name (TF_DUMP_LAYER in olmoe_run).
+pub var dump: ?*const fn (name: []const u8, layer: usize, data: []const f32) void = null;
 
 /// Set with a GPU (TASK-29): the gated delta rule of one Gated DeltaNet layer
 /// there, updating the state in place, or false to run it on the CPU.
@@ -1762,6 +1764,8 @@ pub const Trace = struct {
     /// With QSA (TASK-31): per attention layer and token, the blocks it kept in
     /// ascending order (attention layers x n x qsaTop()), or -1s where it kept every block.
     qsa: []i32 = &.{},
+    /// Optional, layers x n: each token's gap between its k-th and (k+1)-th router choice score.
+    gaps: []f32 = &.{},
 };
 
 /// Top-k of `p` by value, largest first; ties go to the lower index (as

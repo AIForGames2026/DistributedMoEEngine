@@ -155,6 +155,8 @@ pub const Experts = struct {
     pending_want: []Want = &.{},
     /// The most tokens one step may bring (`--max-step`).
     max_tokens: usize = default_max_tokens,
+    /// Expert outputs that came back non-finite and were replaced by the CPU's (TASK-31, TASK-32).
+    replaced: usize = 0,
     /// With a GPU (TASK-32): room to run each expert's calls as one job, every ready expert at once.
     grouped: ?*Grouped = null,
     gpa: ?std.mem.Allocator = null,
@@ -498,16 +500,24 @@ pub const Experts = struct {
         return rows;
     }
 
-    fn checkCall(self: *Experts, layer: usize, expert: u32, token: usize, h: ExpertCache.Held, x: []const f32, y: []const f32, how: []const u8) void
+    fn checkCall(self: *Experts, layer: usize, expert: u32, token: usize, h: ExpertCache.Held, x: []const f32, y: []f32, how: []const u8) void
     {
-        if (olmoe.allFinite(y) and !(olmoe.nanTrace() and olmoe.maxAbs(y) >= 1e4))
+        const finite = olmoe.allFinite(y);
+        if (finite and !(olmoe.nanTrace() and olmoe.maxAbs(y) >= 1e4))
         {
             return;
         }
         const got = olmoe.maxAbs(y);
         var again: [8192]f32 = undefined;
         h.expert.forwardCpu(x, again[0..y.len], self.local.scratch);
-        std.debug.print("trace: layer {d} expert {d} token {d} slot {d} ({s}): output {e:.3}, CPU from the same slot {e:.3}, input {e:.3}\n", .{ layer, expert, token, h.slot, how, got, olmoe.maxAbs(again[0..y.len]), olmoe.maxAbs(x) });
+        // A non-finite output is the intermittent GPU fault of TASK-31; the CPU's answer from the same weights stands in.
+        const fix = !finite and olmoe.allFinite(again[0..y.len]);
+        if (fix)
+        {
+            @memcpy(y, again[0..y.len]);
+            self.replaced += 1;
+        }
+        std.debug.print("trace: layer {d} expert {d} token {d} slot {d} ({s}): output {e:.3}, CPU from the same slot {e:.3}, input {e:.3}{s}\n", .{ layer, expert, token, h.slot, how, got, olmoe.maxAbs(again[0..y.len]), olmoe.maxAbs(x), if (fix) "; replaced by the CPU's output" else "" });
     }
 
     /// One process with every expert, through the cache.
@@ -1271,7 +1281,7 @@ pub const Server = struct {
             n += 1;
         }
         try ep.finish();
-        std.debug.print("expert: rank {d} ran {d} expert FFNs for rank 0 in {d} grouped jobs, {d:.0} us each on average (max {d:.0} us), {d:.2} s in all; resident memory {d:.0} MB\n", .{
+        std.debug.print("expert: rank {d} ran {d} expert FFNs for rank 0 in {d} grouped jobs, {d:.0} us each on average (max {d:.0} us), {d:.2} s in all; resident memory {d:.0} MB; {d} non-finite GPU outputs replaced by the CPU's\n", .{
             ep.rank,
             self.answered,
             batches,
@@ -1279,6 +1289,7 @@ pub const Server = struct {
             @as(f64, @floatFromInt(self.ffn_max_ns)) / 1e3,
             @as(f64, @floatFromInt(self.ffn_ns)) / 1e9,
             mb(budget.residentBytes()),
+            self.experts.replaced,
         });
     }
 

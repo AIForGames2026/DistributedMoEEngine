@@ -1,0 +1,3 @@
+load: non-expert weights and 144 of 288 experts, 95.75 GB in 17.42 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (95.75 GB in 2.48 s)
+rdma: context 32640 tokens + 128 generated, chunks of 2048; KV cache all in memory, f32, 22528 bytes per token: 0.74 GB in memory (all of it would be 0.74 GB), GPU attention off

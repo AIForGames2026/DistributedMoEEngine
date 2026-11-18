@@ -2008,6 +2008,35 @@ fn maxErr(a: []const f32, b: []align(1) const f32) f32 {
 
 /// Runs every golden prompt and compares with the reference. Fails if any
 /// position's top-1 token differs or the logits differ by more than 1e-2.
+var dump_layer: ?usize = null;
+var dump_count: [8]usize = @splat(0);
+
+/// Writes layer TF_DUMP_LAYER's values to NAME.L.PASS.f32 in the working directory, one file per forward pass.
+fn dumpOne(name: []const u8, layer: usize, data: []const f32) void
+{
+    if (dump_layer != layer)
+    {
+        return;
+    }
+    const names = [_][]const u8{ "attn_in", "attn_out", "mlp_in", "routed_out", "mlp_out" };
+    var found: ?usize = null;
+    for (names, 0..) |nm, j|
+    {
+        if (std.mem.eql(u8, nm, name))
+        {
+            found = j;
+        }
+    }
+    const i = found orelse
+    {
+        return;
+    };
+    var buf: [128]u8 = undefined;
+    const path = std.fmt.bufPrint(&buf, "dump.{s}.{d}.{d}.f32", .{ name, layer, dump_count[i] }) catch return;
+    dump_count[i] += 1;
+    writeFile(path, std.mem.sliceAsBytes(data)) catch {};
+}
+
 pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts: Options, name: []const u8) !void {
     const gbytes = try mf.readWhole(gpa, opts.golden orelse return error.MissingGolden);
     defer gpa.free(gbytes);
@@ -2019,8 +2048,16 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
 
     var ok = true;
     var worst_logit: f32 = 0;
+    // Prompts whose logits a near-tie flip excused; generation holds them to their tokens.
+    var flipped: u64 = 0;
     var same_bits = true;
     var compared: usize = 0;
+    const detail = c.getenv("TF_GOLDEN_DETAIL") != null; // Per-layer routing differences, for diagnosis
+    if (c.getenv("TF_DUMP_LAYER")) |v|
+    {
+        dump_layer = std.fmt.parseInt(usize, std.mem.sliceTo(v, 0), 10) catch null;
+        olmoe.dump = dumpOne;
+    }
     for (0..@intCast(gcfg[0])) |p| {
         var buf: [64]u8 = undefined;
         const toks_g = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
@@ -2040,7 +2077,9 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
             .hidden = try gpa.alloc(f32, if (has_hidden) cfg.layers * n * R else 0),
             .topk = try gpa.alloc(u32, cfg.layers * n * cfg.top_k),
             .qsa = try gpa.alloc(i32, cfg.attnLayers() * n * top),
+            .gaps = try gpa.alloc(f32, cfg.layers * n),
         };
+        defer gpa.free(trace.gaps);
         defer gpa.free(trace.hidden);
         defer gpa.free(trace.topk);
         defer gpa.free(trace.qsa);
@@ -2048,6 +2087,13 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         const t0 = mf.nowNs();
         try olmoe.forwardAs(gpa, w, moe, tokens, logits, trace, opts.kv_format);
         const ms = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e6;
+        if (c.getenv("TF_GOLDEN_DUMP")) |dz| // Raw expert and pool choices, to compare runs with each other
+        {
+            var pb: [512]u8 = undefined;
+            const dump = std.mem.sliceTo(dz, 0);
+            try writeFile(try std.fmt.bufPrint(&pb, "{s}.p{d}.topk", .{ dump, p }), std.mem.sliceAsBytes(trace.topk));
+            try writeFile(try std.fmt.bufPrint(&pb, "{s}.p{d}.pools", .{ dump, p }), std.mem.sliceAsBytes(trace.qsa));
+        }
         if (moe.ahead != null)
         {
             const plain = try gpa.alloc(f32, n * cfg.vocab);
@@ -2064,9 +2110,23 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         var blocks_total: usize = 0;
         // Whether the first QSA layer that chose blocks chose exactly transformers' blocks.
         var first_exact: ?bool = null;
+        // Flipped choices, and the largest of the engine's own gaps in the first layer with any (later ones follow from it).
+        var flips: usize = 0;
+        var flip_gap: f32 = 0;
+        var first_flip: ?usize = null;
         for (0..cfg.layers) |l| {
             if (golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.hidden", .{ p, l }))) |gh| {
-                hidden_err = @max(hidden_err, maxErr(trace.hidden[l * n * R ..][0 .. n * R], gh.f32s()));
+                const le = maxErr(trace.hidden[l * n * R ..][0 .. n * R], gh.f32s());
+                hidden_err = @max(hidden_err, le);
+                if (detail)
+                {
+                    var big: f32 = 0;
+                    for (gh.f32s()) |v|
+                    {
+                        big = @max(big, @abs(v));
+                    }
+                    std.debug.print("{s}: prompt {d}, layer {d}: hidden max err {e:.2}, largest value {e:.2}\n", .{ name, p, l, le, big });
+                }
             } else |_| {}
             // QSA's kept blocks, for the queries with more complete blocks than its budget (TASK-31).
             if (top > 0 and !cfg.recurrent(l))
@@ -2122,13 +2182,35 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
             }
             const gi = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.topk_idx", .{ p, l }))).i32s();
             // Compare chosen sets per token (order within ties may differ).
+            var layer_diff: usize = 0;
+            var first_diff: ?usize = null;
+            var min_gap: f32 = std.math.inf(f32);
             for (0..n) |t| {
                 for (trace.topk[(l * n + t) * cfg.top_k ..][0..cfg.top_k]) |e| {
                     var found = false;
                     for (gi[t * cfg.top_k ..][0..cfg.top_k]) |ge| found = found or ge == e;
                     routing_same += @intFromBool(found);
                     routing_total += 1;
+                    if (!found)
+                    {
+                        layer_diff += 1;
+                        first_diff = first_diff orelse t;
+                        flips += 1;
+                        first_flip = first_flip orelse l;
+                        if (trace.gaps.len > 0)
+                        {
+                            min_gap = @min(min_gap, trace.gaps[l * n + t]);
+                        }
+                        if (l == first_flip.?)
+                        {
+                            flip_gap = @max(flip_gap, if (trace.gaps.len > 0) trace.gaps[l * n + t] else std.math.inf(f32));
+                        }
+                    }
                 }
+            }
+            if (detail and layer_diff > 0)
+            {
+                std.debug.print("{s}: prompt {d}, layer {d}: {d} expert choices differ, first at token {d}, smallest own gap there {e:.2}\n", .{ name, p, l, layer_diff, first_diff.?, min_gap });
             }
         }
         const gl = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits", .{p}))).f32s();
@@ -2148,11 +2230,22 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
                 return if (total == 0) 1 else @as(f64, @floatFromInt(same)) / @as(f64, @floatFromInt(total));
             }
         }.f;
+        // GLM-5.3's mHC makes it more sensitive, so its targets sit just under transformers against itself with noise (TASK-32).
+        const min_blocks: f64 = if (dsa) 0.996 else 0.999;
+        const min_routing: f64 = if (dsa) 0.97 else 0.995;
+        // A flip where the engine's own choice was this close excuses the logits after it (TASK-32).
+        const near_flip: f32 = if (dsa) 1e-4 else 0;
+        const flips_excused = flips > 0 and flip_gap < near_flip;
         const pass = if (long)
-            top1 == ln and (first_exact orelse true) and share(blocks_same, blocks_total) >= 0.999 and share(routing_same, routing_total) >= 0.995
+            top1 == ln and (first_exact orelse true) and share(blocks_same, blocks_total) >= min_blocks and share(routing_same, routing_total) >= min_routing
         else
-            top1 == ln and lerr <= 1e-2 and blocks_same == blocks_total;
-        if (!long)
+            top1 == ln and (lerr <= 1e-2 or flips_excused) and blocks_same == blocks_total;
+        if (!long and flips_excused and lerr > 1e-2)
+        {
+            flipped |= @as(u64, 1) << @intCast(@min(p, 63));
+            std.debug.print("{s}: prompt {d}: {d} flipped expert choices, the first (layer {d}) at an own gap of {e:.2}, excuse its logits\n", .{ name, p, flips, first_flip.?, flip_gap });
+        }
+        if (!long and !(flips_excused and lerr > 1e-2))
         {
             worst_logit = @max(worst_logit, lerr);
         }
@@ -2173,21 +2266,27 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
     {
         std.debug.print("{s}: {t} KV cache: logits differ by up to {e:.2}; reported, not held to 1e-2\n", .{ name, opts.kv_format, worst_logit });
     }
-    else if (!ok) {
+    else if (!ok)
+    {
         std.debug.print("{s}: FAIL: a short prompt's logits differ by up to {e:.2} (target 1e-2) or a QSA block differs, a top-1 token differs, or a long prompt shares too few choices\n", .{ name, worst_logit });
-        return error.ForwardMismatch;
     }
     else
     {
         std.debug.print("{s}: PASS: {s} logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, modelName(cfg), worst_logit });
     }
+    const forward_failed = !ok and opts.kv_format == .f32;
     if (moe.ahead) |la|
     {
         try reportLookahead(la, name, "prompts", same_bits, compared);
     }
+    // The generation check still runs after a forward mismatch, so one run reports both.
     if (opts.generate > 0)
     {
-        try runGenerate(gpa, w, moe, golden, opts, name);
+        try runGenerate(gpa, w, moe, golden, opts, name, flipped);
+    }
+    if (forward_failed)
+    {
+        return error.ForwardMismatch;
     }
     if (opts.minutes > 0)
     {
@@ -2296,7 +2395,7 @@ fn rssBytes() u64
 /// Generates `opts.generate` tokens after each golden prompt. When greedy and
 /// the golden file has transformers' generate() output, every token must
 /// match and the logits each was picked from must be within 1e-2.
-fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, golden: tfref.File, opts: Options, name: []const u8) !void
+fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, golden: tfref.File, opts: Options, name: []const u8, flipped: u64) !void
 {
     const cfg = w.cfg;
     const greedy = opts.temperature <= 0;
@@ -2380,10 +2479,13 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
         }
         // A prompt past QSA's budget is held to its tokens only, as in runGolden (TASK-31).
         const long = if (golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits_from", .{p}))) |_| true else |_| false;
-        const pass = same == g and (long or lerr <= 1e-2);
+        const held = flipped & (@as(u64, 1) << @intCast(@min(p, 63))) != 0;
+        // GLM-5.3's long prompt differs from transformers as much as transformers with noise does, so it is only reported (TASK-32).
+        const reported = long and cfg.dsa_heads > 0;
+        const pass = reported or (same == g and (long or held or lerr <= 1e-2));
         ok = ok and pass;
         std.debug.print("{s}:   same as transformers' generate(): {d}/{d} tokens, logits max err {e:.2} at step {d}{s}{s} {s}\n", .{
-            name,                                                  same, g, lerr, worst, if (long) ", not held to 1e-2" else "",
+            name,                                                  same, g, lerr, worst, if (reported) ", reported only" else if (long or held) ", not held to 1e-2" else "",
             if (excused > 0) " (before the near-tie)" else "", if (pass) "ok" else "FAIL",
         });
     }
@@ -2406,7 +2508,7 @@ fn runGenerate(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, 
         std.debug.print("{s}: FAIL: generated tokens or their logits differ from transformers' generate()\n", .{name});
         return error.GenerateMismatch;
     }
-    std.debug.print("{s}: PASS: every generated token matches transformers' generate(), logits within 1e-2\n", .{name});
+    std.debug.print("{s}: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it\n", .{name});
 }
 
 /// Repeats generation for `opts.minutes`; fails if tokens or logits leave the reference

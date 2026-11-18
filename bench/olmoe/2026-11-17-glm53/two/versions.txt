@@ -1,0 +1,16 @@
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, zig 0.17.0
+engine: v0.2.0-alpha-43-g21172ab-g32
+a1e9bcead2fce5ca96f5a4ef54dc77ad6dd9ba77ecde57f812e875e6d3e33f07  models/glm53-flash/GLM-5.3-Flash-Q4_K-00001-of-00002.gguf
+27636dd16f76d39aa95db1de081cf458f705f1c78f8f1010b2fac3edc416c116  models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+-rw-r--r-- 1 admin admin 250665984 Nov 17 21:01 models/glm53-flash/glm53_golden.tfref
+-rw-rw-r-- 1 admin admin   1781584 Nov 17 10:13 models/glm53-flash/repo.tokens
+               total        used        free      shared  buff/cache   available
+Mem:             121           5           9           0         107         116
+== 192.168.177.11
+GX10-01
+               total        used        free      shared  buff/cache   available
+Mem:             121           5          83           0          33         116
+[N/A]
+93505344 -rw-rw-r-- 1 admin admin 181363033792 Nov 17 23:45 /home/admin/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+4100c73d0192d15c1cc18abe863636fd  /home/admin/lukehinojosa/bin/olmoe-g32
+4100c73d0192d15c1cc18abe863636fd  src/engine/zig-out-g32g/bin/olmoe

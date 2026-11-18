@@ -2,10 +2,18 @@
 # TASK-32 on gx10-02: GLM-5.3-Flash split across the three Sparks over RDMA, every expert in memory.
 # window.sh runs it once the lab servers are stopped: run.sh SECTION (check golden chat long32 long128).
 # Each section stops by STOP_AT (local HH:MM) so the window can restore the servers in time.
+# RANKS=2 leaves gx10-03 out: gx10-01 holds the other half of the experts, logs go to two/.
 out="$(cd "$(dirname "$0")" && pwd)"
+RANKS="${RANKS:-3}"
+if [ "$RANKS" = 2 ]
+then
+    out="$out/two"
+    mkdir -p "$out"
+fi
 source ~/lukehinojosa/env.sh
 cd ~/lukehinojosa || exit 1
-O=src/engine/zig-out-g32g/bin/olmoe
+O="${O:-src/engine/zig-out-g32g/bin/olmoe}" # O and EB override the builds on rank 0 and the expert ranks
+EB="${EB:-bin/olmoe-g32}"
 D=models/glm53-flash
 M="${M:-$D/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf}" # M and G override for a rehearsal with the tiny model
 G="${G:-$D/glm53_golden.tfref}"
@@ -27,13 +35,22 @@ budget()
     echo $left
 }
 
-# experts NAME: starts ranks 1 and 2 on a fresh port and waits until both listen.
+# experts NAME: starts the expert ranks on a fresh port and waits until each listens.
 experts()
 {
     local name=$1 p=$(( 48100 + RANDOM % 200 ))
-    ssh -n admin@$R1 "$EX && (nohup sh -c 'echo \$\$ > /tmp/lh_g32.pid; exec bin/olmoe-g32 rdma-expert $M --port $p --dev rocep1s0f1 --rank 1 --ranks 3 --gpu --max-step 2048' > /tmp/lh_g32_$name.log 2>&1 < /dev/null &)"
-    ssh -n admin@$R2 "$EX && (nohup sh -c 'echo \$\$ > /tmp/lh_g32.pid; exec bin/olmoe-g32 rdma-expert $M --port $p --dev rocep1s0f0 --rank 2 --ranks 3 --gpu --max-step 2048' > /tmp/lh_g32_$name.log 2>&1 < /dev/null &)"
-    for ip in $R1 $R2
+    if [ "$RANKS" = 2 ]
+    then
+        ssh -n admin@$R2 "$EX && (nohup sh -c 'echo \$\$ > /tmp/lh_g32.pid; exec $EB rdma-expert $M --port $p --dev rocep1s0f0 --rank 1 --ranks 2 --gpu --max-step 2048' > /tmp/lh_g32_$name.log 2>&1 < /dev/null &)"
+        HOSTS="$R2"
+        PEERS="--peer rdma:$R2:$p@rocep1s0f1"
+    else
+        ssh -n admin@$R1 "$EX && (nohup sh -c 'echo \$\$ > /tmp/lh_g32.pid; exec $EB rdma-expert $M --port $p --dev rocep1s0f1 --rank 1 --ranks 3 --gpu --max-step 2048' > /tmp/lh_g32_$name.log 2>&1 < /dev/null &)"
+        ssh -n admin@$R2 "$EX && (nohup sh -c 'echo \$\$ > /tmp/lh_g32.pid; exec $EB rdma-expert $M --port $p --dev rocep1s0f0 --rank 2 --ranks 3 --gpu --max-step 2048' > /tmp/lh_g32_$name.log 2>&1 < /dev/null &)"
+        HOSTS="$R1 $R2"
+        PEERS="--peer rdma:$R1:$p@rocep1s0f0 --peer rdma:$R2:$p@rocep1s0f1"
+    fi
+    for ip in $HOSTS
     do
         for _ in $(seq 30)
         do
@@ -44,14 +61,17 @@ experts()
             sleep 1
         done
     done
-    PEERS="--peer rdma:$R1:$p@rocep1s0f0 --peer rdma:$R2:$p@rocep1s0f1"
 }
 
-# finish NAME: stops both expert ranks if still up and copies their logs next to this script.
+# finish NAME: stops the expert ranks if still up and copies their logs next to this script.
 finish()
 {
-    local name=$1
-    for pair in "$R1 rank1-gx10-03" "$R2 rank2-gx10-01"
+    local name=$1 pairs=("$R1 rank1-gx10-03" "$R2 rank2-gx10-01")
+    if [ "$RANKS" = 2 ]
+    then
+        pairs=("$R2 rank1-gx10-01")
+    fi
+    for pair in "${pairs[@]}"
     do
         set -- $pair
         ssh -n admin@$1 "kill \$(cat /tmp/lh_g32.pid) 2>/dev/null; sleep 2; kill -9 \$(cat /tmp/lh_g32.pid) 2>/dev/null; rm -f /tmp/lh_g32.pid"
@@ -86,7 +106,7 @@ check()
         sha256sum $D/GLM-5.3-Flash-Q4_K-0000*-of-00002.gguf
         ls -l $G $D/repo.tokens
         free -g | head -2
-        for ip in $R1 $R2
+        for ip in $( [ "$RANKS" = 2 ] && echo $R2 || echo $R1 $R2 )
         do
             echo "== $ip"
             ssh -n admin@$ip "hostname; free -g | head -2; nvidia-smi --query-gpu=memory.used --format=csv,noheader; ls -ls ~/lukehinojosa/$M; md5sum ~/lukehinojosa/bin/olmoe-g32"

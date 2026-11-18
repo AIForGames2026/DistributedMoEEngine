@@ -324,6 +324,34 @@ def choice_gap(logits, bias, k):
     return float((s[..., k - 1] - s[..., k]).min())
 
 
+def dump_parts(model, l):
+    """Hooks that keep layer `l`'s attention and MoE inputs and outputs for each forward pass
+    over a whole prompt, in the order the prompts run, to locate a difference inside a layer."""
+    layer = model.model.language_model.layers[l]
+    parts = {}
+    count = {}
+
+    def keep(name, t):
+        p = count.get(name, 0)
+        count[name] = p + 1
+        parts[f"prompt{p}.layer{l}.{name}"] = t.detach().float().reshape(-1, t.shape[-1]).contiguous()
+
+    def attn(mod, args, kwargs, res):
+        keep("attn_in", kwargs["hidden_states"] if "hidden_states" in kwargs else args[0])
+        keep("attn_out", res[0] if isinstance(res, tuple) else res)
+
+    def mlp(mod, args, res):
+        keep("mlp_in", args[0])
+        keep("mlp_out", res)
+
+    layer.self_attn.register_forward_hook(attn, with_kwargs=True)
+    layer.mlp.register_forward_hook(mlp)
+    if hasattr(layer.mlp, "experts"):
+        layer.mlp.experts.register_forward_hook(lambda mod, args, res: keep("routed_out", res))
+        layer.mlp.shared_experts.register_forward_hook(lambda mod, args, res: keep("shared_out", res))
+    return parts
+
+
 def record(model, cfg, prompts, gen, tail=None):
     """Golden values for each token-id list in `prompts`, plus `gen` tokens of greedy
     generate(). `tail[p]`, when set, keeps only that many final positions' logits
@@ -631,9 +659,12 @@ def main():
     ap.add_argument("--long", help="also run a prompt made of this file's first --long-tokens tokens")
     ap.add_argument("--long-tokens", type=int, default=2600)
     ap.add_argument("--tail", type=int, default=32, help="logits kept for the long prompt's last positions")
+    ap.add_argument("--threads", type=int, default=os.cpu_count(), help="CPU threads (fewer changes the rounding, TASK-31)")
+    ap.add_argument("--perturb", type=float, help="scale the embeddings by 1 plus this much random noise, to measure how far rounding-sized differences carry")
+    ap.add_argument("--dump-layer", type=int, help="also keep this layer's attention and MoE inputs and outputs, per prompt")
     args = ap.parse_args()
     torch.manual_seed(0)
-    torch.set_num_threads(os.cpu_count())
+    torch.set_num_threads(args.threads)
     model, cfg = build(args.gguf, args.config, args.lazy)
     tok = Tokenizer.from_file(args.tokenizer)
     prompts = [tok.encode(text).ids for text in PROMPTS]
@@ -645,7 +676,15 @@ def main():
             sys.exit(f"{args.long} has only {len(ids)} tokens")
         prompts.append(ids)
         tail.append(args.tail)
+    parts = dump_parts(model, args.dump_layer) if args.dump_layer is not None else {}
+    if args.perturb:
+        gen = torch.Generator().manual_seed(1)
+
+        def nudge(_mod, _args, res):
+            return res * (1 + args.perturb * torch.randn(res.shape, generator=gen, dtype=res.dtype))
+        model.model.language_model.embed_tokens.register_forward_hook(nudge)
     out, gap = record(model, cfg, prompts, args.generate, tail)
+    out.update(parts)
     for p, ids in enumerate(prompts):
         top1 = out[f"prompt{p}.logits"].argmax(-1).tolist()
         print(f"prompt {p}: {len(ids)} tokens; next token after the prompt: {tok.decode([top1[-1]])!r}")

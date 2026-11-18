@@ -1,0 +1,100 @@
+23:42:56 gx10-01 health: {"ok": true, "backend": "tensorfold", "busy": false, "requests_running": 0, "requests_total": 983, "prompt_tokens_total"
+23:42:58 window: deadline 2026-11-18 05:00, sections stop at 2026-11-18 05:40
+bash: -c: line 1: syntax error near unexpected token `('
+bash: -c: line 1: `ssh -o ConnectTimeout=10 admin@192.168.177.11 (nohup flock $HOME/.glm-watchdog/lock sleep 10800 > /dev/null 2>&1 < /dev/null &)'
+qwen38-27b-tf
+23:43:03 gx10-01: qwen38-27b-tf stopped, watchdog paused
+               total        used        free      shared  buff/cache   available
+Mem:             121           5         111           0           5         116
+23:43:05 == staging experts 144 to 191 on gx10-01
+admin@192.168.177.11: 28.5 of 28.5 GB
+admin@192.168.177.11: staged ~/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+23:45:09 == rehearsal with the tiny model
+== golden 23:45:11, stop at 2026-11-18 05:40
+golden: rank 0 exit 0
+rdma: generate prompt 0: 32 tokens in 0.11 s (289.6 tokens/s, prompt included)
+rdma: generate prompt 1: 32 tokens in 0.10 s (331.9 tokens/s, prompt included)
+rdma: generate prompt 2: 32 tokens in 0.10 s (332.2 tokens/s, prompt included)
+rdma: PASS: every generated token matches transformers' generate(), logits within 1e-2
+rdma: 1443 expert calls sent to 1 peer, 1293 run locally; payload f32
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.79
+	Maximum resident set size (kbytes): 123676
+G32_DONE 23:45:15
+23:45:19 == check
+== check 23:45:20, stop at 2026-11-18 05:40
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, zig 0.17.0
+engine: v0.2.0-alpha-43-g21172ab-g32
+a1e9bcead2fce5ca96f5a4ef54dc77ad6dd9ba77ecde57f812e875e6d3e33f07  models/glm53-flash/GLM-5.3-Flash-Q4_K-00001-of-00002.gguf
+27636dd16f76d39aa95db1de081cf458f705f1c78f8f1010b2fac3edc416c116  models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+-rw-r--r-- 1 admin admin 250665984 Nov 17 21:01 models/glm53-flash/glm53_golden.tfref
+-rw-rw-r-- 1 admin admin   1781584 Nov 17 10:13 models/glm53-flash/repo.tokens
+               total        used        free      shared  buff/cache   available
+Mem:             121           5           9           0         107         116
+== 192.168.177.11
+GX10-01
+               total        used        free      shared  buff/cache   available
+Mem:             121           5          83           0          33         116
+[N/A]
+93505344 -rw-rw-r-- 1 admin admin 181363033792 Nov 17 23:45 /home/admin/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+4100c73d0192d15c1cc18abe863636fd  /home/admin/lukehinojosa/bin/olmoe-g32
+4100c73d0192d15c1cc18abe863636fd  src/engine/zig-out-g32g/bin/olmoe
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+G32_DONE 23:47:07
+23:47:07 == golden
+== golden 23:47:09, stop at 2026-11-18 05:40
+golden: rank 0 exit 1
+rdma: 443871 expert calls sent to 1 peer, 442161 run locally; payload f32
+error: ForwardMismatch
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:34.55
+	Maximum resident set size (kbytes): 100591504
+G32_DONE 23:48:47
+23:48:47 == chat
+== chat 23:48:48, stop at 2026-11-18 05:40
+Traceback (most recent call last):
+  File "/home/admin/lukehinojosa/src/engine/tools/ref/record_chat.py", line 45, in <module>
+    main()
+  File "/home/admin/lukehinojosa/src/engine/tools/ref/record_chat.py", line 35, in main
+    with urllib.request.urlopen(req, timeout=600) as r:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 215, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 521, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 630, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 559, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 492, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 639, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+G32_DONE 23:49:32
+23:49:32 == long32
+== long32 23:49:33, stop at 2026-11-18 05:40
+32k: rank 0 exit 124
+G32_DONE 00:09:37
+00:09:37 == long128
+== long128 00:09:38, stop at 2026-11-18 05:40
+128k: rank 0 exit 143
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:33.52
+	Maximum resident set size (kbytes): 97374772
+G32_DONE 00:10:15
+00:10:15 restoring gx10-01's lab server
+qwen38-27b-tf
+00:10:16 gx10-01: qwen38-27b-tf healthy
+pkill: only one pattern can be provided
+Try `pkill --help' for more information.
+flock: cannot open lock file /home/admin/.glm-watchdog/lock: No such file or directory
+00:10:18 WARNING: gx10-01's watchdog lock is still held
+00:10:18 gx10-01's lab server is back
+00:10:26 logs copied to /d/CLionProjects/DistributedMoEEngine/bench/olmoe/2026-11-17-glm53/two
+WINDOW_EXIT 0

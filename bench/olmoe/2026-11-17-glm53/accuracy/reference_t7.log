@@ -1,0 +1,12 @@
+﻿23:35:20 D:\CLionProjects\DistributedMoEEngine\tools\ref\ref_glm53.py:89: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\utils\tensor_numpy.cpp:214.)
+23:35:20   return torch.from_numpy(np.ascontiguousarray(tensors[name]()))
+23:35:33 [transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+23:35:34 [transformers] `chunk_kda` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+01:07:15 prompt 0: 5 tokens; next token after the prompt: ' Paris'
+01:07:15 prompt 1: 17 tokens; next token after the prompt: ' fibonacci'
+01:07:15 prompt 2: 15 tokens; next token after the prompt: ' the'
+01:07:15 prompt 3: 2600 tokens; next token after the prompt: ' ms'
+01:07:15 smallest gap between the k-th and (k+1)-th choice score: 0.00e+00
+01:07:15 DSA pool choices with a tie at the cut: 22517 of 29007 (kept the lower pool)
+01:07:17 wrote E:\models\glm53-flash\glm53_golden_t7.tfref (171365888 bytes, 503 tensors)
+REF_EXIT 0 01:07:24

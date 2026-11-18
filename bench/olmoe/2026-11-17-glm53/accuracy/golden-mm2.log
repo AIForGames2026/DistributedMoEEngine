@@ -1,0 +1,65 @@
+load: non-expert weights and 288 of 288 experts (through the expert cache), 10.13 GB in 1.84 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.13 GB in 0.26 s)
+local: expert cache: 5000 slots (70.90 GB), 2 loader threads, 288 experts of layers below 1 loaded and kept in 4.02 s; cached experts run on the GPU
+local: prompt 0 (5 tokens, 3924 ms): logits max err 2.18e-3 (last 5 positions), top-1 5/5, hidden max err 3.04e-2, experts chosen 1680/1680 same (100.000%), DSA pools 0/0 same (100.000%) ok
+local: prompt 1, layer 40: 1 expert choices differ, first at token 8, smallest own gap there 4.86e-5
+local: prompt 1, layer 41: 1 expert choices differ, first at token 8, smallest own gap there 1.15e-3
+local: prompt 1 (17 tokens, 7741 ms): logits max err 5.05e-2 (last 17 positions), top-1 17/17, hidden max err 8.05e-1, experts chosen 5710/5712 same (99.965%), DSA pools 0/0 same (100.000%) FAIL
+local: prompt 2 (15 tokens, 5204 ms): logits max err 2.28e-3 (last 15 positions), top-1 15/15, hidden max err 2.47e-3, experts chosen 5040/5040 same (100.000%), DSA pools 0/0 same (100.000%) ok
+local: prompt 3, layer 3: 1 expert choices differ, first at token 463, smallest own gap there 1.91e-6
+local: prompt 3, layer 5: 2 expert choices differ, first at token 479, smallest own gap there 4.77e-7
+local: prompt 3, layer 6: 2 expert choices differ, first at token 1252, smallest own gap there 7.63e-6
+local: prompt 3, layer 7: DSA pools 281087/281088 same
+local: prompt 3, layer 7: 3 expert choices differ, first at token 1054, smallest own gap there 1.91e-6
+local: prompt 3, layer 8: 5 expert choices differ, first at token 1257, smallest own gap there 1.14e-5
+local: prompt 3, layer 9: 3 expert choices differ, first at token 302, smallest own gap there 4.77e-7
+local: prompt 3, layer 10: 5 expert choices differ, first at token 1252, smallest own gap there 1.00e-5
+local: prompt 3, layer 11: DSA pools 281071/281088 same
+local: prompt 3, layer 11: 8 expert choices differ, first at token 304, smallest own gap there 3.81e-6
+local: prompt 3, layer 12: 10 expert choices differ, first at token 1080, smallest own gap there 3.81e-6
+local: prompt 3, layer 13: 17 expert choices differ, first at token 1055, smallest own gap there 6.58e-5
+local: prompt 3, layer 14: 33 expert choices differ, first at token 641, smallest own gap there 9.54e-7
+local: prompt 3, layer 15: DSA pools 281010/281088 same
+local: prompt 3, layer 15: 35 expert choices differ, first at token 641, smallest own gap there 2.96e-5
+local: prompt 3, layer 16: 57 expert choices differ, first at token 345, smallest own gap there 7.63e-6
+local: prompt 3, layer 17: 90 expert choices differ, first at token 355, smallest own gap there 1.91e-6
+local: prompt 3, layer 18: 132 expert choices differ, first at token 304, smallest own gap there 2.86e-6
+local: prompt 3, layer 19: DSA pools 280746/281088 same
+local: prompt 3, layer 19: 152 expert choices differ, first at token 371, smallest own gap there 0.00e0
+local: prompt 3, layer 20: 236 expert choices differ, first at token 302, smallest own gap there 0.00e0
+local: prompt 3, layer 21: 291 expert choices differ, first at token 19, smallest own gap there 9.54e-7
+local: prompt 3, layer 22: 396 expert choices differ, first at token 65, smallest own gap there 3.72e-5
+local: prompt 3, layer 23: DSA pools 280228/281088 same
+local: prompt 3, layer 23: 558 expert choices differ, first at token 65, smallest own gap there 1.91e-6
+local: prompt 3, layer 24: 691 expert choices differ, first at token 36, smallest own gap there 9.54e-7
+local: prompt 3, layer 25: 817 expert choices differ, first at token 19, smallest own gap there 1.91e-6
+local: prompt 3, layer 26: 1000 expert choices differ, first at token 19, smallest own gap there 5.72e-6
+local: prompt 3, layer 27: DSA pools 279826/281088 same
+local: prompt 3, layer 27: 1042 expert choices differ, first at token 19, smallest own gap there 9.54e-7
+local: prompt 3, layer 28: 1032 expert choices differ, first at token 19, smallest own gap there 1.91e-6
+local: prompt 3, layer 29: 957 expert choices differ, first at token 21, smallest own gap there 1.14e-5
+local: prompt 3, layer 30: 1169 expert choices differ, first at token 20, smallest own gap there 0.00e0
+local: prompt 3, layer 31: DSA pools 279771/281088 same
+local: prompt 3, layer 31: 1228 expert choices differ, first at token 19, smallest own gap there 1.91e-6
+local: prompt 3, layer 32: 1253 expert choices differ, first at token 20, smallest own gap there 1.62e-5
+local: prompt 3, layer 33: 1130 expert choices differ, first at token 19, smallest own gap there 8.58e-6
+local: prompt 3, layer 34: 1172 expert choices differ, first at token 19, smallest own gap there 9.54e-7
+local: prompt 3, layer 35: DSA pools 279305/281088 same
+local: prompt 3, layer 35: 1233 expert choices differ, first at token 24, smallest own gap there 8.58e-6
+local: prompt 3, layer 36: 1276 expert choices differ, first at token 19, smallest own gap there 5.72e-6
+local: prompt 3, layer 37: 1236 expert choices differ, first at token 24, smallest own gap there 1.81e-5
+local: prompt 3, layer 38: 1209 expert choices differ, first at token 19, smallest own gap there 6.68e-6
+local: prompt 3, layer 39: DSA pools 279374/281088 same
+local: prompt 3, layer 39: 1217 expert choices differ, first at token 19, smallest own gap there 8.58e-6
+local: prompt 3, layer 40: 1099 expert choices differ, first at token 19, smallest own gap there 9.54e-7
+local: prompt 3, layer 41: 997 expert choices differ, first at token 22, smallest own gap there 1.53e-5
+local: prompt 3, layer 42: 888 expert choices differ, first at token 20, smallest own gap there 4.77e-6
+local: prompt 3, layer 43: DSA pools 279422/281088 same
+local: prompt 3, layer 43: 824 expert choices differ, first at token 35, smallest own gap there 0.00e0
+local: prompt 3, layer 44: 712 expert choices differ, first at token 32, smallest own gap there 5.72e-6
+local: prompt 3 (2600 tokens, 62284 ms): logits max err 3.87e0 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 849382/873600 same (97.228%), DSA pools 3082928/3091968 same (99.708%) FAIL
+local: FAIL: a short prompt's logits differ by up to 5.05e-2 (target 1e-2) or a QSA block differs, a top-1 token differs, or a long prompt shares too few choices
+local: expert cache: 18580 expert calls: 15.1% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 84.9% missed; 788332 calls set aside while others ran; 28720.1 ms with nothing to run but loads; 16065 loads (0 for hints, 227.41 GB, 5.31 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 136 allocations, 136 frees, peak 10371.0 MB, 0 bytes still allocated at exit (balanced)
+error: ForwardMismatch
+EXIT 1

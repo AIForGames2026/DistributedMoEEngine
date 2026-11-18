@@ -1,0 +1,22 @@
+load: non-expert weights and 288 of 288 experts (through the expert cache), 10.13 GB in 1.84 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.13 GB in 0.26 s)
+local: expert cache: 5000 slots (70.90 GB), 2 loader threads, 288 experts of layers below 1 loaded and kept in 3.93 s; cached experts run on the GPU
+local: prompt 0 (5 tokens, 3940 ms): logits max err 2.18e-3 (last 5 positions), top-1 5/5, hidden max err 3.04e-2, experts chosen 1680/1680 same (100.000%), DSA pools 0/0 same (100.000%) ok
+local: prompt 1 (17 tokens, 7645 ms): logits max err 5.05e-2 (last 17 positions), top-1 17/17, hidden max err 8.07e-1, experts chosen 5710/5712 same (99.965%), DSA pools 0/0 same (100.000%) FAIL
+local: prompt 2 (15 tokens, 5121 ms): logits max err 2.27e-3 (last 15 positions), top-1 15/15, hidden max err 2.47e-3, experts chosen 5040/5040 same (100.000%), DSA pools 0/0 same (100.000%) ok
+local: prompt 3, layer 7: DSA pools 281087/281088 same
+local: prompt 3, layer 11: DSA pools 281071/281088 same
+local: prompt 3, layer 15: DSA pools 281010/281088 same
+local: prompt 3, layer 19: DSA pools 280747/281088 same
+local: prompt 3, layer 23: DSA pools 280227/281088 same
+local: prompt 3, layer 27: DSA pools 279833/281088 same
+local: prompt 3, layer 31: DSA pools 279773/281088 same
+local: prompt 3, layer 35: DSA pools 279305/281088 same
+local: prompt 3, layer 39: DSA pools 279375/281088 same
+local: prompt 3, layer 43: DSA pools 279429/281088 same
+local: prompt 3 (2600 tokens, 63330 ms): logits max err 3.88e0 (last 32 positions, not held to 1e-2), top-1 32/32, hidden max err 0.00e0, experts chosen 849505/873600 same (97.242%), DSA pools 3082945/3091968 same (99.708%) FAIL
+local: FAIL: a short prompt's logits differ by up to 5.05e-2 (target 1e-2) or a QSA block differs, a top-1 token differs, or a long prompt shares too few choices
+local: expert cache: 18583 expert calls: 15.1% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 84.9% missed; 788332 calls set aside while others ran; 28788.3 ms with nothing to run but loads; 16068 loads (0 for hints, 227.46 GB, 5.32 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 132 allocations, 132 frees, peak 10370.5 MB, 0 bytes still allocated at exit (balanced)
+error: ForwardMismatch
+EXIT 1

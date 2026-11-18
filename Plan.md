@@ -3,7 +3,7 @@
 > Plan baseline: Monday, Oct 26, 2026. Milestone dates fall on Sundays; each milestone closes at end of day on its date.
 > Repository: https://github.com/AIForGames2026/DistributedMoEEngine
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, #35 is TASK-33, opened Nov 16, and #36 to #41 are TASK-34 to TASK-39 and #42 is TASK-40, opened Nov 17). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, #35 is TASK-33, opened Nov 16, and #36 to #41 are TASK-34 to TASK-39 #42 is TASK-40 and #43 is TASK-41, opened Nov 17). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -582,6 +582,20 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - **Split:** a native Windows expert rank with a Spark router over TCP passes the same checks, with no WSL2 or tunnel, and `shm` passes on Windows alone.
   - **Build:** `build.ps1` builds `olmoe.exe` (with `-Gpu` for CUDA), Linux builds and tests are unchanged, and results are recorded in `bench/` with the Windows and driver versions.
 
+#### [TASK-41] Prefetch and Cache Misses in the Live View
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 17)
+- **Priority**: `could` | **Area**: `webgl`
+- **Description**: Added Nov 17, after the "One token" view in `web/live.html` began showing each token's trip through the layers and its experts on each machine. It cannot show prefetching yet: each step frame carries only running cache totals (`cache: {resident, hinted, late, missed, loads}`), not which expert was a hit, a prefetch or a miss, and the one cached recording (Qwen3.8-Flash-Next, TASK-31) ran without `--lookahead`, so its `hinted` count is 0 throughout.
+  - **Engine, rank 0:** `ExpertCache.poll` already decides each call's status. While a viewer is connected, it writes that status into a per-step array (one byte per layer and expert, on the engine thread), and the telemetry tap, which already wraps `Moe.prefetch`, records each hint as (layer it is for, expert, layer it was sent during). Step frames gain `c: [layer, expert, status, ...]` and `h: [for layer, expert, sent during, ...]`, and the hello says which ranks have a cache. These are added fields, so the schema stays version 0 and older recordings still replay.
+  - **Page:** a drive on each machine that has a cache; faint prefetch packets during a layer toward the experts predicted for a later one, over the cable for a peer's share; a load from the drive to each expert that a hint brought in; and new expert states for the key: prefetched and ready, loading from the drive, and missed (the token waits on the drive).
+  - **Recording:** the TASK-31 chat again on `gx10-02` alone with `--cache 12000 --lookahead 1`, compared with the existing run without lookahead, and swapped into the published recordings (TASK-18).
+  - **Optional, peers:** a peer's cache status travels back in each combine packet's reserved `flags` bits 7 to 9 (`docs/wire-format.md`), shown with a split recording that has caches on `gx10-01` or `gx10-03`, only with the owner's go-ahead and while their servers are idle.
+- **Acceptance Criteria**:
+  - **Feed:** unit tests cover the status array, the hint list and the frame output; with no viewer connected nothing is recorded; `docs/telemetry-schema.md` documents `c`, `h` and the hello field; the existing recordings replay unchanged.
+  - **Page:** replaying the new recording, hints, drive loads, prefetched experts and misses show on the right dots, and each token's counts of resident, hinted, late and missed calls match the engine's own counters.
+  - **Recording:** the new Qwen3.8 chat is published with a write-up in `bench/trace/` giving its hit rates beside the run without lookahead.
+
 ---
 
 ## 4. Scope Tiers & Cut Lines
@@ -590,7 +604,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 |---|---|---|---|
 | **Must** | `must` | The release fails without it. Together these form the **MVP: Two-Process Slice**: a real MoE runs split across two engine processes (RDMA on `gx10-03`, TCP between the desktop and `gx10-03`), loaded through `io_uring`, used from a browser chat harness, and shown in a live and recorded diagram. | 01, 02, 03, 04, 05, 06, 07, 08, 10, 15, 16, 16b, 18, 19, 23, 24, 30 |
 | **Should** | `should` | The headline features beyond the MVP. Planned and expected, but droppable as a group. | 09, 11, 14, 17, 20, 21 |
-| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, 29, 31, 32, and 34 to 40 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 40 |
+| **Could** | `could` | Stretch work, attempted only when ahead of schedule or when more hardware frees up. TASK-25, 27, 28, 29, 31, 32, and 34 to 41 are post-v1. | 12, 13, 15b, 22, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41 |
 
 **If we fall behind, we cut first:** the **Stretch** cut (`cut-1`): NVMe KV offload, compressed expert streaming, the multi-Spark run, and CPU-only expert nodes.
 
@@ -614,7 +628,7 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-36 to TASK-39 (quant formats, tokenizers, chat templates and three model families, borrowing from llama.cpp), TASK-40 (native Windows engine) |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-36 to TASK-39 (quant formats, tokenizers, chat templates and three model families, borrowing from llama.cpp), TASK-40 (native Windows engine), TASK-41 (prefetch and cache misses in the live view) |
 | **To Do** | (none) |
 | **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
 | **Review** | TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
@@ -625,14 +639,14 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | `code` | 01, 02, 03, 07, 08, 10, 11, 12, 13, 14, 17, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 | 28 |
 | `architecture` | 06, 09 | 2 |
 | `benchmarking` | 05, 15, 15b, 21 | 4 |
-| `webgl` | 04, 16, 16b, 23, 25 | 5 |
+| `webgl` | 04, 16, 16b, 23, 25, 41 | 6 |
 | `docs` | 18, 19, 20 | 3 |
 
 | Priority | Count | Cut tag |
 |---|---|---|
 | `must` | 17 | none |
 | `should` | 6 | 4 tagged `cut-2` |
-| `could` | 19 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, 32, and 33 to 40 are post-v1; TASK-26 untagged |
+| `could` | 20 | 4 tagged `cut-1`; TASK-25, 27, 28, 29, 31, 32, and 33 to 41 are post-v1; TASK-26 untagged |
 
 **GitHub labels to create**: `must`, `should`, `could`, `code`, `architecture`, `benchmarking`, `webgl`, `docs`, `cut-1`, `cut-2`. Milestones: PoC, Alpha, Beta, RC, Final, with the dates above.
 

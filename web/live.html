@@ -15,6 +15,8 @@
   --cell: #e2e6eb;
   --rank0: 29, 78, 216;
   --rank1: 234, 88, 12;
+  --rank2: 147, 51, 234;
+  --rank3: 219, 39, 119;
   --heat-floor: 0.22;
   --heat-span: 0.4;
   --ok: #15803d;
@@ -22,6 +24,9 @@
   --user: #e8eefc;
   --think: #f1f3f5;
   --radius: 10px;
+  --router: 13, 148, 136;
+  --blend: 202, 138, 4;
+  --now: 245, 158, 11;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
@@ -37,10 +42,14 @@
     --heat-span: 0.22;
     --rank0: 96, 145, 255;
     --rank1: 251, 146, 60;
+    --rank2: 192, 132, 252;
+    --rank3: 244, 114, 182;
     --ok: #4ade80;
     --bad: #f87171;
     --user: #1f2a44;
     --think: #1d2229;
+    --router: 45, 212, 191;
+    --blend: 250, 204, 21;
   }
 }
 * { box-sizing: border-box; }
@@ -52,7 +61,7 @@ header h1 { font-size: 16px; margin: 0; font-weight: 650; }
 header .meta { color: var(--muted); font-size: 13px; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 6px; vertical-align: middle; }
 .dot.on { background: var(--ok); }
-main { flex: 1; display: grid; grid-template-columns: minmax(320px, 420px) 1fr; min-height: 0; }
+main { flex: 1; display: grid; grid-template-columns: minmax(340px, 45%) 1fr; min-height: 0; }
 #chat { display: flex; flex-direction: column; border-right: 1px solid var(--line); min-height: 0; background: var(--panel); }
 #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .msg { max-width: 100%; white-space: pre-wrap; word-wrap: break-word; line-height: 1.45; font-size: 14px; }
@@ -71,7 +80,7 @@ button { padding: 7px 16px; border-radius: 8px; border: 0; background: rgb(var(-
 button.stop { background: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
 #view { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-#stage { flex: 1; position: relative; min-height: 240px; }
+#stage { flex: 0 1 520px; position: relative; min-height: 240px; }
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(128, 128, 128, 0.15); background: color-mix(in srgb, var(--bg) 60%, transparent); }
 #loading .card { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 18px 22px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--ink); font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -86,7 +95,11 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .good { color: var(--ok); }
 .warn { color: var(--bad); }
 .ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); margin-left: 0; font-weight: 500; padding: 5px 12px; }
-.ghost:hover { background: var(--cell); }
+.ghost:hover, .ghost.on { background: var(--cell); }
+.seg { display: inline-flex; }
+.seg .ghost { border-radius: 0; font-size: 13px; }
+.seg .ghost:first-child { border-radius: 8px 0 0 8px; }
+.seg .ghost:last-child { border-radius: 0 8px 8px 0; border-left: 0; }
 header .tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 label.ghost { border-radius: 8px; cursor: pointer; font-size: 13px; }
 a.ghost { border-radius: 8px; font-size: 13px; text-decoration: none; }
@@ -116,6 +129,10 @@ body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px
   <span class="meta"><span id="dot" class="dot"></span><span id="conn">connecting to the engine</span></span>
   <span class="meta" id="model"></span>
   <span class="tools">
+    <span class="seg" role="group" aria-label="diagram">
+      <button type="button" class="ghost on" data-view="flow" aria-pressed="true">One token</button>
+      <button type="button" class="ghost" data-view="heat" aria-pressed="false">All experts</button>
+    </span>
     <select id="pick" aria-label="recording" hidden></select>
     <a id="inspector" class="ghost" href="inspector.html" hidden>3D inspector</a>
     <a id="repo" class="ghost" href="https://github.com/AIForGames2026/DistributedMoEEngine" hidden>Source</a>
@@ -143,6 +160,9 @@ body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px
       <select id="speed" aria-label="replay speed">
         <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
         <option value="2">2×</option><option value="4">4×</option><option value="10">10×</option><option value="16">16×</option>
+      </select>
+      <select id="pace" aria-label="pace">
+        <option value="word" selected>Word by word</option><option value="real">Real time</option>
       </select>
       <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="replay position">
       <span id="clock">0.0 / 0.0 s</span>
@@ -200,6 +220,10 @@ function connect() {
     if (!f || typeof f !== "object" || typeof f.t !== "string") { if (live) live.rejected++; return; }
     if (f.t === "hello") return onHello(f);
     if (f.t === "step") return onStep(f);
+    if (f.t === "text" && typeof f.s === "string")
+    {
+      onText(f);
+    }
   };
   ws.onopen = () => setConn(true);
   ws.onclose = () => { if (rp) return; setConn(false); setTimeout(connect, 1000); };
@@ -222,6 +246,7 @@ function onHello(h) {
   topo = h;
   live = freshState(h);
   live.offset = performance.now() - h.ms;
+  resetAnim();
   $("model").textContent = `${h.model} · ${h.layers} layers × ${h.experts} experts, top ${h.top_k} · ${h.transport}`;
   $("thinkbox").hidden = !/qwen/i.test(h.model);
 }
@@ -240,7 +265,7 @@ function stepInRange(f, h) {
 }
 
 // `rateNow` is the clock for rates: real time when live, the recording's time when replaying.
-function onStep(f, rateNow = performance.now()) {
+function onStep(f, rateNow = performance.now(), word = "") {
   if (!topo || !validStep(f) || !stepInRange(f, topo)) { if (live) live.rejected++; return; }
   const ranks = topo.ranks.length;
   const byRank = new Array(ranks).fill(0);
@@ -287,6 +312,581 @@ function onStep(f, rateNow = performance.now()) {
     const dots = Math.min(byRank[r], f.n > 1 ? 24 : 8);
     for (let i = 0; i < dots; i++) live.packets.push({ t0: now + i * 12, lane: Math.random(), r });
   }
+  animFeed(f, word);
+}
+
+// The "One token" view: one step at a time, climbing the layers and visiting its experts on each machine.
+let view = "flow";
+const anim = { cur: null, next: null, recent: null, dropping: 0 };
+const OUT_MS = 1600;
+
+function resetAnim() {
+  anim.cur = null;
+  anim.next = null;
+  anim.recent = null;
+  anim.dropping = 0;
+}
+
+// Word by word, a replay waits for each token's trip to finish; otherwise the view skips to the newest token.
+function holding() {
+  return wordByWord() && anim.cur !== null;
+}
+
+function ownerOf(e) {
+  return Math.min(topo.owner[e], topo.ranks.length - 1);
+}
+
+function animFeed(f, word) {
+  const layers = [];
+  for (let l = 0; l < topo.layers; l++)
+  {
+    layers.push([]);
+  }
+  for (let i = 0; i < f.x.length; i += 3)
+  {
+    layers[f.x[i]].push({ e: f.x[i + 1], c: f.x[i + 2] });
+  }
+  for (const picks of layers)
+  {
+    picks.sort((a, b) => b.c - a.c);
+  }
+  const us = f.layer_us.filter((v) => typeof v === "number" && v > 0);
+  const entry = {
+    seq: f.seq, n: f.n, layers, word, prev: anim.recent, skipped: 0, l: 0, u: 0, out: 0,
+    realUs: us.length ? us.reduce((a, b) => a + b, 0) / us.length : 0,
+  };
+  anim.recent = entry;
+  if (rp && rp.seeking)
+  {
+    return;
+  }
+  if (anim.cur === null)
+  {
+    anim.cur = entry;
+    return;
+  }
+  if (anim.next !== null)
+  {
+    anim.dropping++;
+  }
+  anim.next = entry;
+}
+
+// The live feed sends a token's text just after its step.
+function onText(f) {
+  for (const e of [anim.recent, anim.next, anim.cur])
+  {
+    if (e && e.seq === f.after)
+    {
+      e.word += f.s;
+      return;
+    }
+  }
+}
+
+function layerMs(c, l) {
+  if (wordByWord())
+  {
+    return 1000 / animSpeed;
+  }
+  const base = Math.max(40, Math.min(200, 3000 / topo.layers)) * (c.n > 1 ? 0.5 : 1);
+  return c.layers[l].some((p) => ownerOf(p.e) > 0) ? base : base * 0.7; // Layers that wait on another machine take longer
+}
+
+// Word by word, the speed menu sets layers per second; otherwise it sets the recording's speed.
+const REAL_SPEEDS = ["0.25", "0.5", "1", "2", "4", "10", "16"], WORD_SPEEDS = ["0.5", "1", "1.5", "2", "4", "8", "16"];
+let animSpeed = 1;
+
+function wordByWord() {
+  return rp !== null && view === "flow" && $("pace").value === "word";
+}
+
+function fillSpeeds() {
+  const word = wordByWord();
+  const list = word ? WORD_SPEEDS : REAL_SPEEDS;
+  $("speed").innerHTML = list.map((v) => `<option value="${v}">${word ? `${v} layer${v === "1" ? "" : "s"}/s` : `${v}×`}</option>`).join("");
+  $("speed").value = String(word ? animSpeed : rp ? rp.speed : 1);
+  $("speed").setAttribute("aria-label", word ? "layers per second" : "replay speed");
+}
+
+function animTick(dt) {
+  const pace = rp && (!rp.playing || rp.dragging) ? 0 : 1;
+  let ms = dt * 1000 * pace;
+  while (ms > 0 && anim.cur)
+  {
+    const c = anim.cur;
+    const span = c.l < topo.layers ? layerMs(c, c.l) : OUT_MS;
+    const left = (1 - (c.l < topo.layers ? c.u : c.out)) * span;
+    if (ms < left)
+    {
+      if (c.l < topo.layers)
+      {
+        c.u += ms / span;
+      }
+      else
+      {
+        c.out += ms / span;
+      }
+      ms = 0;
+    }
+    else if (c.l < topo.layers)
+    {
+      ms -= left;
+      c.l++;
+      c.u = 0;
+    }
+    else
+    {
+      ms -= left;
+      anim.cur = anim.next;
+      anim.next = null;
+      if (anim.cur)
+      {
+        anim.cur.skipped = anim.dropping;
+      }
+      anim.dropping = 0;
+    }
+  }
+}
+
+function ease(t) {
+  return t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
+}
+
+function shownWord(w) {
+  const s = w.replace(/\n/g, "⏎").replace(/\s+/g, " ").trim();
+  return s || (w ? "space" : "…");
+}
+
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect)
+  {
+    ctx.roundRect(x, y, w, h, r);
+  }
+  else
+  {
+    ctx.rect(x, y, w, h);
+  }
+}
+
+function strokePath(pts) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++)
+  {
+    ctx.lineTo(pts[i].x, pts[i].y);
+  }
+  ctx.stroke();
+}
+
+// The largest square cells that fit `n` dots in the area.
+function dotGrid(n, ax, ay, aw, ah) {
+  let s = 0, cols = 1;
+  for (let c = 1; c <= n; c++)
+  {
+    const fit = Math.min(aw / c, ah / Math.ceil(n / c));
+    if (fit > s)
+    {
+      s = fit;
+      cols = c;
+    }
+  }
+  s = Math.min(s, 26); // Large areas keep small dots, so 64 experts don't read as a few big buttons
+  const rows = Math.ceil(n / cols);
+  const ox = ax + (aw - s * cols) / 2 + s / 2, oy = ay + (ah - s * rows) / 2 + s / 2;
+  return { s, cols, rows, at: (i) => ({ x: ox + (i % cols) * s, y: oy + Math.floor(i / cols) * s }) };
+}
+
+function chip(text, cx, cy, maxW, hot) {
+  ctx.font = "600 12px system-ui, sans-serif";
+  let t = text;
+  while (t.length > 2 && ctx.measureText(t).width > maxW - 14)
+  {
+    t = t.slice(0, -2) + "…";
+  }
+  const w = Math.min(maxW, ctx.measureText(t).width + 14);
+  rrect(cx - w / 2, cy - 11, w, 22, 6);
+  ctx.fillStyle = hot ? `rgba(${color("--now")}, 0.28)` : color("--panel");
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = hot ? `rgb(${color("--now")})` : color("--line");
+  ctx.stroke();
+  ctx.fillStyle = color("--ink");
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(t, cx, cy + 1);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function rttPerLayer() {
+  const r0 = live.rtt[0], r1 = live.rtt[live.rtt.length - 1];
+  return r0 && r1.layers > r0.layers ? (r1.us - r0.us) / (r1.layers - r0.layers) : null;
+}
+
+// The diagram keeps a moderate size and sits centered, so big screens don't stretch it.
+function drawFlow(W, H) {
+  const fw = Math.min(W, 900), fh = H;
+  const dx = Math.round((W - fw) / 2), dy = Math.round((H - fh) / 2);
+  const headH = 30;
+  const big = "600 15px system-ui, sans-serif";
+  ctx.font = big;
+  const heads = flowHeading(anim.cur);
+  addText(heads.find((t) => ctx.measureText(t).width <= fw - 28) || "", dx + fw / 2, dy + 22, big, "--ink", "center");
+  ctx.save();
+  ctx.translate(dx, dy + headH);
+  textShift.x = dx;
+  textShift.y = dy + headH;
+  drawFlowIn(fw, fh - headH);
+  ctx.restore();
+  textShift.x = 0;
+  textShift.y = 0;
+}
+
+function drawFlowIn(W, H) {
+  const L = topo.layers, ranks = topo.ranks.length, c = anim.cur;
+  const small = W < 560, pad = 14;
+  const font = "12px system-ui, sans-serif", bold = "600 12px system-ui, sans-serif";
+  const cellBg = color("--cell"), link = color("--link"), rgbOf = rankRgb;
+  const bare = live.cols[0].length === 0; // Rank 0 may only route, with every expert on other machines
+  const sw = small ? 26 : Math.max(36, Math.min(56, W * 0.06));
+  const sx = pad, sTop = pad + 60, sBot = H - pad - 54;
+  const rr = small ? 15 : Math.max(18, Math.min(26, H * 0.045));
+  const lane = small ? 10 : 18;
+  const top = pad + 26, bot = H - pad - 44, gapB = ranks > 1 ? 26 : 0;
+  const slotH = (bot - top - gapB * (ranks - 1)) / ranks;
+  // Machine boxes fit their dots, and the router and blend sit just outside them.
+  const areaL = sx + sw + (small ? 24 : 40), areaR = W - pad - 2;
+  const maxBW = Math.max(60, areaR - areaL - 4 * rr - 4 * lane);
+  ctx.font = bold;
+  const heads = [];
+  for (let r = 0; r < ranks; r++)
+  {
+    const ids = live.cols[r];
+    const range = ids.length && ids[ids.length - 1] - ids[0] === ids.length - 1 ? `experts ${ids[0]} to ${ids[ids.length - 1]}` : `${ids.length} experts`;
+    const options = [`rank ${r} · ${topo.ranks[r]} · ${range}`, `${topo.ranks[r]} · ${range}`, topo.ranks[r]];
+    heads.push(options.find((t) => ctx.measureText(t).width <= maxBW - 16) || `rank ${r}`);
+  }
+  const fits = live.cols.map((ids) => dotGrid(ids.length, 0, 0, maxBW - 16, slotH - 30));
+  const headW = Math.max(...heads.map((t) => ctx.measureText(t).width));
+  const bw = Math.min(maxBW, Math.max(160, headW + 16, ...fits.map((f) => f.cols * f.s + 16)));
+  const bh = Math.min(slotH, Math.max(Math.max(...fits.map((f) => f.rows * f.s)) + 34, 2 * rr + 60));
+  const x0 = areaL + Math.max(0, (areaR - areaL - bw - 4 * rr - 4 * lane) / 2);
+  const rx = x0 + rr, ry = top + slotH / 2; // The router and blend run on rank 0, so they sit level with its experts
+  const ch1 = rx + rr + lane, mx0 = ch1 + lane, mx1 = mx0 + bw, ch2 = mx1 + lane;
+  const bx = ch2 + lane + rr, by = ry;
+  const loopY = pad + 6, loopX = sx + sw + 16, outY = pad + 34;
+  const cl = c ? Math.min(c.l, L) : -1, u = c && c.l < L ? c.u : 0;
+  const picks = c && cl < L ? c.layers[cl] : [];
+  const peak = picks.reduce((m, p) => Math.max(m, p.c), 1);
+
+  // The layer stack, layer 1 at the bottom.
+  const g = L > 24 ? 1 : 2;
+  const slab = Math.max(1, (sBot - sTop - g * (L - 1)) / L);
+  const ly = (i) => sBot - i * (slab + g) - slab / 2;
+  for (let i = 0; i < L; i++)
+  {
+    ctx.fillStyle = i < cl ? color("--muted") : i === cl ? `rgb(${color("--now")})` : cellBg; // Gray, so no machine's color is implied
+    ctx.globalAlpha = i < cl ? 0.6 : 1;
+    ctx.fillRect(sx, ly(i) - slab / 2, sw, slab);
+    ctx.globalAlpha = 1;
+  }
+
+  // Machines, with their experts as dots.
+  const boxes = [];
+  for (let r = 0; r < ranks; r++)
+  {
+    const y0 = top + r * (slotH + gapB) + (slotH - bh) / 2;
+    const ids = live.cols[r];
+    boxes.push({ y0, my: y0 + bh / 2, grid: dotGrid(ids.length, mx0 + 8, y0 + 24, mx1 - mx0 - 16, bh - 30) });
+  }
+  const outPath = (r) => [{ x: rx + rr, y: ry }, { x: ch1, y: ry }, { x: ch1, y: boxes[r].my }, { x: mx0, y: boxes[r].my }];
+  const backPath = (r) => [{ x: mx1, y: boxes[r].my }, { x: ch2, y: boxes[r].my }, { x: ch2, y: by }, { x: bx - rr, y: by }];
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = link;
+  for (let r = bare ? 1 : 0; r < ranks; r++)
+  {
+    ctx.lineWidth = r === 0 ? 2 : small ? 4 : 6; // Thin wires inside rank 0's machine, a thick cable to each other one
+    strokePath(outPath(r));
+    strokePath(backPath(r));
+  }
+
+  // The token's way in from its layer, and back up to the next one (or out, after the last).
+  const nextY = cl + 1 < L ? ly(cl + 1) : outY;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  strokePath([{ x: bx, y: by - rr }, { x: bx, y: loopY }, { x: loopX, y: loopY }, { x: loopX, y: nextY }, { x: sx + sw + 2, y: nextY }]);
+  ctx.setLineDash([]);
+  if (c && cl < L)
+  {
+    ctx.strokeStyle = `rgb(${color("--now")})`;
+    strokePath([{ x: sx + sw + 2, y: ly(cl) }, { x: rx - rr, y: ry }]);
+  }
+
+  for (let r = 0; r < ranks; r++)
+  {
+    const b = boxes[r], ids = live.cols[r], rgb = rgbOf(r);
+    if (r === 0)
+    {
+      // Rank 0's machine holds the router, the blend and its own experts.
+      const ox0 = rx - rr - 12, ox1 = bx + rr + 12;
+      rrect(ox0, b.y0, ox1 - ox0, bh, 10);
+      ctx.fillStyle = `rgba(${rgb}, 0.06)`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb}, 0.75)`;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.font = bold;
+      let options;
+      if (bare)
+      {
+        addText("no experts here: this machine only routes and blends", (mx0 + mx1) / 2, b.my + 4, font, "--muted", "center");
+        options = [`rank 0 · ${topo.ranks[0]} · router and blend only`, `${topo.ranks[0]} · router and blend`, topo.ranks[0]];
+      }
+      else
+      {
+        rrect(mx0, b.y0 + 24, mx1 - mx0, bh - 30, 6);
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = `rgba(${rgb}, 0.45)`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const range = heads[0].includes("experts") ? heads[0].slice(heads[0].indexOf("experts")) : "its experts";
+        options = [`rank 0 · ${topo.ranks[0]} · router, blend and ${range}`, `${topo.ranks[0]} · router, blend, ${range}`, `${topo.ranks[0]} · router and blend`, topo.ranks[0]];
+      }
+      addText(options.find((t) => ctx.measureText(t).width <= ox1 - ox0 - 16) || "rank 0", ox0 + 8, b.y0 + 16, bold, "--ink");
+    }
+    else
+    {
+      rrect(mx0, b.y0, mx1 - mx0, bh, 8);
+      ctx.strokeStyle = `rgba(${rgb}, 0.75)`;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      addText(heads[r], mx0 + 8, b.y0 + 16, bold, "--ink");
+    }
+    const rad = Math.max(1, b.grid.s * 0.36);
+    for (let i = 0; i < ids.length; i++)
+    {
+      const p = b.grid.at(i);
+      ctx.fillStyle = cellBg;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Each picked expert goes from waiting for the token, to working on it, to sending its answer back.
+  const arriveOf = (remote) => (remote ? 0.42 : 0.3);
+  const shown = picks.slice(0, c && c.n > 1 ? 48 : picks.length);
+  for (const p of picks)
+  {
+    const r = ownerOf(p.e), remote = r > 0;
+    const a0 = arriveOf(remote), b0 = 0.58, b1 = remote ? 0.97 : 0.85;
+    const b = boxes[r], q = b.grid.at(live.colOf[p.e]);
+    const rad = Math.max(1.5, b.grid.s * 0.36);
+    if (u < a0)
+    {
+      drawExpert(q.x, q.y, rad, rgbOf(r), "picked", 0);
+    }
+    else if (u < b0)
+    {
+      drawExpert(q.x, q.y, rad, rgbOf(r), "working", (u - a0) / (b0 - a0));
+    }
+    else if (u < b1)
+    {
+      drawExpert(q.x, q.y, rad, rgbOf(r), "answered", 0);
+    }
+  }
+  for (const p of shown)
+  {
+    const r = ownerOf(p.e), remote = r > 0;
+    const q = boxes[r].grid.at(live.colOf[p.e]);
+    const a0 = arriveOf(remote), b0 = 0.58, b1 = remote ? 0.97 : 0.85;
+    let path = null, t = 0;
+    if (u < a0)
+    {
+      path = [...outPath(r), q];
+      t = u / a0;
+    }
+    else if (u >= b0 && u < b1)
+    {
+      path = [q, ...backPath(r)];
+      t = (u - b0) / (b1 - b0);
+    }
+    if (path)
+    {
+      // Eased, with a fading tail, so each packet reads as one thing travelling a route.
+      for (let k = 4; k >= 0; k--)
+      {
+        const tk = t - k * 0.035;
+        if (tk < 0)
+        {
+          continue;
+        }
+        const at = pointAt(path, ease(tk), 0);
+        ctx.fillStyle = `rgba(${rgbOf(r)}, ${k === 0 ? 1 : 0.45 - k * 0.09})`;
+        ctx.beginPath();
+        ctx.arc(at.x, at.y, (small ? 3 : 4.5) * (1 - k * 0.12), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // The router picks the experts; the blend mixes their answers by the router's weights.
+  const node = (x, y, name, glow) => {
+    ctx.beginPath();
+    ctx.arc(x, y, rr, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${color(name === "router" ? "--router" : "--blend")}, ${glow ? 0.45 : 0.16})`;
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = `rgb(${color(name === "router" ? "--router" : "--blend")})`;
+    ctx.stroke();
+    if (rr >= 18)
+    {
+      ctx.font = bold;
+      ctx.fillStyle = color("--ink");
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(name, x, y + 1);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+    }
+  };
+  node(rx, ry, "router", c && cl < L && u < 0.12);
+  node(bx, by, "blend", c && cl < L && u >= 0.85);
+  const many = c && c.n > 1;
+  addText(rr >= 18 ? (many ? `${topo.top_k} per token` : `picks ${topo.top_k} of ${topo.experts}`) : "router", rx, ry + rr + 16, font, "--muted", "center");
+  addText(rr >= 18 ? "weighted mix" : "blend", bx, by + rr + 16, font, "--muted", rr >= 18 ? "center" : "right");
+  if (ranks > 1)
+  {
+    const rtt = rttPerLayer();
+    addText(`${topo.transport} cable${rtt !== null && !small ? ` · ${rtt.toFixed(0)} µs round trip per layer` : ""}`, (mx0 + mx1) / 2, top + slotH + gapB / 2 + 4, font, "--muted", "center");
+  }
+
+  // The word moving through: the input at the bottom, the next token at the top, then off to the chat.
+  if (c && cl < L && u >= 0.88)
+  {
+    ctx.strokeStyle = `rgb(${color("--now")})`; // The blended result heads up to the next layer
+    ctx.lineWidth = 2;
+    strokePath([{ x: bx, y: by - rr }, { x: bx, y: loopY }, { x: loopX, y: loopY }, { x: loopX, y: nextY }, { x: sx + sw + 2, y: nextY }]);
+  }
+  const cx = sx + sw / 2, chipW = sw + 24;
+  const input = !c ? "" : c.n > 1 ? `${c.n} tokens` : c.prev ? shownWord(c.prev.word) : "…";
+  chip(input || "…", cx, sBot + 22, chipW, false);
+  const done = c && c.l >= L;
+  chip(done ? shownWord(c.word) : "?", cx, outY, chipW, done);
+  const chatAbove = innerWidth <= 800;
+  addText(done ? (chatAbove ? "▲ to the chat" : "◀ to the chat") : "next token", sx - 2, pad + 10, done ? bold : font, done ? "--ink" : "--muted");
+  addText(c && c.n > 1 ? "prompt" : "input", sx - 2, sBot + 48, font, "--muted");
+  if (c && cl < L)
+  {
+    addText(`layer ${cl + 1}`, sx + sw + 4, ly(cl) - 7, bold, "--ink");
+  }
+
+  ctx.font = font;
+  const room = W - areaL - pad;
+
+  // A key: what each expert dot's look means, then each machine's color.
+  const stateY = H - pad - 22, keyY = H - pad - 4;
+  const keyRgb = rgbOf(bare ? 1 : 0);
+  const states = [["idle", "idle"], ["picked", "token on its way"], ["working", "working"], ["answered", "answer on its way back"]];
+  const short = [["idle", "idle"], ["picked", "picked"], ["working", "working"], ["answered", "answering"]];
+  const width = (list) => list.reduce((w, s) => w + 30 + ctx.measureText(s[1]).width, ctx.measureText("Expert:").width + 8);
+  let sxk = areaL + ctx.measureText("Expert:").width + 12;
+  addText("Expert:", areaL, stateY, font, "--muted");
+  for (const [state, text] of width(states) <= room ? states : short)
+  {
+    drawExpert(sxk + 6, stateY - 4, 5, keyRgb, state, 0.7);
+    addText(text, sxk + 16, stateY, font, "--ink");
+    sxk += 30 + ctx.measureText(text).width;
+  }
+  const lead = ["Color = the machine an expert is on:", "Machine:", ""].find((t) => {
+    let w = ctx.measureText(t).width + 8;
+    for (let r = bare ? 1 : 0; r < ranks; r++)
+    {
+      w += ctx.measureText(topo.ranks[r]).width + 26;
+    }
+    return w <= room || t === "";
+  });
+  let kx = areaL;
+  if (lead)
+  {
+    addText(lead, kx, keyY, font, "--muted");
+    kx += ctx.measureText(lead).width + 12;
+  }
+  for (let r = bare ? 1 : 0; r < ranks; r++)
+  {
+    ctx.fillStyle = `rgb(${rgbOf(r)})`;
+    ctx.beginPath();
+    ctx.arc(kx + 5, keyY - 4, 5, 0, Math.PI * 2);
+    ctx.fill();
+    addText(topo.ranks[r], kx + 14, keyY, font, "--ink");
+    kx += ctx.measureText(topo.ranks[r]).width + 26;
+  }
+}
+
+// One expert dot: idle (gray), picked (a ring while the token travels to it), working (solid, with a
+// ring filling as it computes), or answered (dimmer, with a dashed ring while its result travels back).
+function drawExpert(x, y, rad, rgb, state, done) {
+  ctx.beginPath();
+  ctx.arc(x, y, rad, 0, Math.PI * 2);
+  ctx.fillStyle = state === "working" ? `rgb(${rgb})` : state === "answered" ? `rgba(${rgb}, 0.6)` : color("--cell");
+  ctx.fill();
+  if (state === "answered")
+  {
+    ctx.beginPath();
+    ctx.arc(x, y, rad + 3, 0, Math.PI * 2);
+    ctx.setLineDash([2, 2]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = `rgb(${rgb})`;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  else if (state === "picked")
+  {
+    ctx.lineWidth = Math.max(1.5, rad * 0.3);
+    ctx.strokeStyle = `rgb(${rgb})`;
+    ctx.stroke();
+  }
+  else if (state === "working")
+  {
+    ctx.beginPath();
+    ctx.arc(x, y, rad + 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * done);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgb(${rgb})`;
+    ctx.stroke();
+  }
+}
+
+// Each machine's color, shared by both views: rank 0 blue, then orange, purple and pink.
+function rankRgb(r) {
+  return color(r === 0 ? "--rank0" : `--rank${1 + (r - 1) % 3}`);
+}
+
+// The heading over the "One token" view, longest wording first: how much slower than the engine the animation runs.
+function flowHeading(c) {
+  if (!c)
+  {
+    return rp ? ["Each token climbs the layers, and in every layer the router sends it to a few experts", "Each token visits a few experts in every layer"] : ["Waiting for the next token"];
+  }
+  let ms = 0;
+  for (let l = 0; l < topo.layers; l++)
+  {
+    ms += layerMs(c, l);
+  }
+  ms /= topo.layers;
+  let slow = "Animation slowed down to follow one token";
+  if (c.realUs > 0)
+  {
+    const x = ms * 1000 / c.realUs;
+    const round = x >= 100 ? Number(x.toPrecision(2)) : Math.max(1, Math.round(x));
+    slow = `Animation about ${round.toLocaleString()}× slower than real time`;
+  }
+  const lead = c.n > 1 ? `Reading the ${c.n.toLocaleString()}-token prompt at once · ` : "";
+  const skip = c.skipped ? " · skipping tokens to keep up" : "";
+  return [lead + slow + skip, slow + skip, slow];
 }
 
 const canvas = $("canvas");
@@ -312,20 +912,45 @@ function draw(now) {
     requestAnimationFrame(draw);
     return;
   }
-  const ranks = topo.ranks.length;
+  animTick(dt);
   // Replays fade at the speed they play, and hold still while paused.
   const speed = rp ? (rp.playing ? rp.speed : 0) : 1;
   const decay = Math.exp(-dt * speed / 0.35);
   for (const h of live.heat) for (let i = 0; i < h.length; i++) h[i] *= decay;
+  labels.length = 0;
+  if (view === "flow")
+  {
+    drawFlow(W, H);
+    live.packets.length = 0;
+    live.linkCalls = live.linkCalls.filter((c) => (rp ? rp.clock : now) - c.t < 1000);
+  }
+  else
+  {
+    drawHeat(W, H, now);
+  }
+  if (loadingFor !== "fetch") {
+    const pending = rp && !holding() ? stepInFlight() : null;
+    if (pending) {
+      const what = pending.v.n > 1 ? `Reading the ${pending.v.n.toLocaleString()}-token prompt` : "Working on the next token";
+      setLoading(`${what}... ${((rp.clock - pending.start) / 1000).toFixed(1)} of ${((pending.t - pending.start) / 1000).toFixed(1)} s`, "step");
+    } else if (loadingFor === "step") {
+      setLoading(null);
+    }
+  }
+  drawLabels();
+  requestAnimationFrame(draw);
+}
 
+// The "All experts" view: every layer's experts as a grid per machine, glowing as they run.
+function drawHeat(W, H, now) {
+  const ranks = topo.ranks.length;
   const stacked = ranks > 1 && W < 640;
   const boxes = layout(W, H, ranks, stacked);
   const cellBg = color("--cell");
   const floor = parseFloat(color("--heat-floor")) || 0.08, span = parseFloat(color("--heat-span")) || 0.22;
-  labels.length = 0;
   for (let r = 0; r < ranks; r++) {
     const b = boxes[r];
-    const rgb = color(r === 0 ? "--rank0" : "--rank1");
+    const rgb = rankRgb(r);
     const cols = live.cols[r].length || 1;
     const fit = (font, long, short) => {
       ctx.font = font;
@@ -378,24 +1003,14 @@ function draw(now) {
       ctx.restore();
     }
   }
-  if (loadingFor !== "fetch") {
-    const pending = rp ? stepInFlight() : null;
-    if (pending) {
-      const what = pending.v.n > 1 ? `Reading the ${pending.v.n.toLocaleString()}-token prompt` : "Working on the next token";
-      setLoading(`${what}... ${((rp.clock - pending.start) / 1000).toFixed(1)} of ${((pending.t - pending.start) / 1000).toFixed(1)} s`, "step");
-    } else if (loadingFor === "step") {
-      setLoading(null);
-    }
-  }
   if (ranks > 1) drawLinks(boxes, stacked, now, rp ? rp.clock : now, stacked ? W : H);
-  drawLabels();
-  requestAnimationFrame(draw);
 }
 
 // Diagram text, drawn after everything else on a small backdrop so lines and packets never cover it.
 const labels = [];
+const textShift = { x: 0, y: 0 };
 function addText(text, x, y, font, fill, align = "left") {
-  labels.push({ text, x, y, font, fill, align });
+  labels.push({ text, x: x + textShift.x, y: y + textShift.y, font, fill, align });
 }
 
 function drawLabels() {
@@ -529,7 +1144,7 @@ function drawLinks(boxes, stacked, now, rateNow, extent) {
     const out = t < 0.5;
     const u = out ? t * 2 : 2 - t * 2;
     const { x, y } = pointAt(paths[p.r], u, (p.lane - 0.5) * 6);
-    ctx.fillStyle = `rgba(${color(out ? "--rank0" : "--rank1")}, 0.9)`;
+    ctx.fillStyle = `rgba(${rankRgb(p.r)}, ${out ? 0.9 : 0.55})`; // Colored by the machine it visits, as in the key
     ctx.beginPath();
     ctx.arc(x, y, 2.5, 0, Math.PI * 2);
     ctx.fill();
@@ -537,8 +1152,7 @@ function drawLinks(boxes, stacked, now, rateNow, extent) {
   live.linkCalls = live.linkCalls.filter((c) => rateNow - c.t < 1000);
   const perLink = new Array(boxes.length).fill(0);
   for (const c of live.linkCalls) perLink[c.r] += c.calls;
-  const r0 = live.rtt[0], r1 = live.rtt[live.rtt.length - 1];
-  const rtt = r0 && r1.layers > r0.layers ? (r1.us - r0.us) / (r1.layers - r0.layers) : null;
+  const rtt = rttPerLayer();
   const font = "12px system-ui, sans-serif";
   const label = (x, y, lines, align = "center") => lines.forEach((t, i) => addText(t, x, y + i * 16, font, "--muted", align));
   const pk = (calls) => `${Math.round(calls * topo.chunks * 2).toLocaleString()} packets/s`;
@@ -816,6 +1430,22 @@ function parseTrace(text) {
     }
   }
   if (!steps) throw new Error("it holds no engine steps");
+  // Each step's token, from the text that became visible after it.
+  const words = new Map();
+  for (const it of items)
+  {
+    if (!it.step && it.v.t === "text" && Number.isInteger(it.v.after))
+    {
+      words.set(it.v.after, (words.get(it.v.after) || "") + it.v.s);
+    }
+  }
+  for (const it of items)
+  {
+    if (it.step)
+    {
+      it.word = words.get(it.v.seq) || "";
+    }
+  }
   // Recording time, with idle stretches between requests cut to a second.
   let t = 0, prevEnd = null;
   for (const it of items) {
@@ -936,11 +1566,9 @@ function showProblem(text) {
 // `label` describes a recording from the public site's list, and may name its machines more plainly than the file does.
 function startReplay(name, trace, label) {
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
-  if (label && [...$("speed").options].some((o) => o.value === String(label.speed)))
-  {
-    $("speed").value = String(label.speed);
-  }
-  rp = { ...trace, name, label, i: 0, clock: 0, speed: parseFloat($("speed").value) || 1, playing: true, dragging: false, reply: null, shown: 0 };
+  const speed = label && REAL_SPEEDS.includes(String(label.speed)) ? Number(label.speed) : 1;
+  rp = { ...trace, name, label, i: 0, clock: 0, speed, playing: true, dragging: false, reply: null, shown: 0 };
+  fillSpeeds();
   const ranks = label && Array.isArray(label.ranks) && label.ranks.length === trace.hello.ranks.length ? label.ranks : trace.hello.ranks;
   topo = { ...trace.hello, ranks };
   $("dot").classList.remove("on");
@@ -971,7 +1599,7 @@ function resetReplayChat() {
 }
 
 function applyItem(it) {
-  if (it.step) return onStep(it.v, it.t);
+  if (it.step) return onStep(it.v, it.t, it.word);
   const n = it.v;
   if (n.t === "chat") {
     // Each request carries the whole conversation; show what is new.
@@ -1006,15 +1634,27 @@ function seekReplay(t) {
   resetReplayChat();
   rp.i = 0;
   rp.clock = Math.max(0, Math.min(t, rp.duration));
+  resetAnim();
+  rp.seeking = true;
   while (rp.i < rp.items.length && rp.items[rp.i].t <= rp.clock) applyItem(rp.items[rp.i++]);
+  rp.seeking = false;
   for (const h of live.heat) h.fill(0);
   live.packets = [];
 }
 
 function advanceReplay(dt) {
-  if (!rp.playing || rp.dragging) return;
+  if (!rp.playing || rp.dragging || holding()) return;
   rp.clock += dt * 1000 * rp.speed;
-  while (rp.i < rp.items.length && rp.items[rp.i].t <= rp.clock) applyItem(rp.items[rp.i++]);
+  while (rp.i < rp.items.length && rp.items[rp.i].t <= rp.clock)
+  {
+    const it = rp.items[rp.i++];
+    applyItem(it);
+    if (holding())
+    {
+      rp.clock = Math.min(rp.clock, it.t);
+      return;
+    }
+  }
   if (rp.clock >= rp.duration) {
     rp.clock = rp.duration;
     rp.playing = false;
@@ -1028,7 +1668,32 @@ $("play").addEventListener("click", () => {
   rp.playing = !rp.playing;
   $("play").textContent = rp.playing ? "Pause" : "Play";
 });
-$("speed").addEventListener("change", () => { if (rp) rp.speed = parseFloat($("speed").value) || 1; });
+$("speed").addEventListener("change", () => {
+  const v = parseFloat($("speed").value) || 1;
+  if (wordByWord())
+  {
+    animSpeed = v;
+  }
+  else if (rp)
+  {
+    rp.speed = v;
+  }
+});
+$("pace").addEventListener("change", fillSpeeds);
+for (const b of document.querySelectorAll("[data-view]"))
+{
+  b.addEventListener("click", () => {
+    view = b.dataset.view;
+    for (const o of document.querySelectorAll("[data-view]"))
+    {
+      o.classList.toggle("on", o === b);
+      o.setAttribute("aria-pressed", String(o === b));
+    }
+    $("pace").disabled = view !== "flow";
+    fillSpeeds();
+    resetAnim();
+  });
+}
 $("scrub").addEventListener("input", () => {
   if (!rp) return;
   rp.dragging = true;

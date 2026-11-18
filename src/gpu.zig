@@ -314,6 +314,10 @@ fn experts(job: olmoe.ExpertJob) bool
     var down: [max_group]u64 = undefined;
     var first: [max_group + 1]c_int = undefined;
     const e0 = job.experts[0];
+    if (!e0.plain())
+    {
+        return onCpu(e0.gate, .biased);
+    }
     const fg = expertFormatOf(e0.gate) orelse return onCpu(e0.gate, .no_kernel);
     const fd = expertFormatOf(e0.down) orelse return onCpu(e0.down, .no_kernel);
     for (job.experts, 0..) |e, i|
@@ -340,10 +344,10 @@ fn experts(job: olmoe.ExpertJob) bool
 
 const max_group = 1024;
 
-const Fallback = enum { no_kernel, unmapped, mixed };
+const Fallback = enum { no_kernel, unmapped, mixed, biased };
 const n_formats = std.enums.values(quant.Format).len;
 /// Calls that stayed on the CPU, by reason and weight format, reported when the run ends.
-var fallbacks: [3][n_formats]u64 = @splat(@splat(0));
+var fallbacks: [std.enums.values(Fallback).len][n_formats]u64 = @splat(@splat(0));
 
 /// Notes a weight that stays on the CPU, saying so the first time for each reason and format.
 fn onCpu(m: olmoe.Mat, why: Fallback) bool
@@ -356,6 +360,7 @@ fn onCpu(m: olmoe.Mat, why: Fallback) bool
             .no_kernel => "no GPU kernel reads its format or width",
             .unmapped => "it is outside the memory mapped for the GPU",
             .mixed => "its experts' formats differ within one layer",
+            .biased => "the GPU's expert kernels add no biases and use no gpt-oss SwiGLU",
         };
         std.log.warn("gpu: a {s} weight ({d}x{d}) runs on the CPU: {s}", .{ @tagName(m.format), m.rows, m.cols, reason });
     }

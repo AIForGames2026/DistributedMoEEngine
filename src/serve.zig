@@ -335,6 +335,7 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
         .stop_ids = prompts.stopIds(tok, &stop_buf),
         .think = if (prompts.thinks and think_open != null and think_close != null) .{ .open = think_open.?, .close = think_close.? } else null,
         .reasoning_first = chat.promptOpensReasoning(text.items),
+        .harmony = completion.harmonyOf(tok),
         .chunk = opts.chunk,
         .reuse = opts.reuse,
         .clock = opts.clock,

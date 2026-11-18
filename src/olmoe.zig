@@ -37,6 +37,8 @@ const pool = @import("pool.zig");
 const kv_format = @import("kv_format.zig");
 const qwen38 = @import("qwen38.zig");
 const glm53 = @import("glm53.zig");
+const deepseek = @import("deepseek.zig");
+const gptoss = @import("gptoss.zig");
 pub const KvFormat = kv_format.KvFormat;
 
 /// The model families the engine runs.
@@ -51,6 +53,12 @@ pub const Arch = enum {
     qwen4exp,
     /// GLM-5.3-Flash (TASK-32, GGUF "glm5-next"): KDA and MLA layers with a DSA indexer, mHC, dense leading layers.
     glm5next,
+    /// Mixtral (TASK-39, GGUF "llama" with experts): grouped KV heads, no QK norm, rope on adjacent pairs.
+    mixtral,
+    /// DeepSeek V3 and Kimi K2 (TASK-39, GGUF "deepseek2"): MLA with decoupled rope, grouped sigmoid routing.
+    deepseek2,
+    /// gpt-oss (TASK-39, GGUF "gpt-oss"): attention sinks, sliding windows, biases, and its own SwiGLU.
+    gptoss,
 };
 
 pub const Config = struct {
@@ -70,8 +78,12 @@ pub const Config = struct {
     /// YaRN rope scaling (TASK-12): 0 for none, else the factor over `rope_original` positions.
     yarn: f32 = 0,
     rope_original: usize = 0,
+    /// YaRN's ramp starts and ends on whole dimensions (transformers' `truncate`, false for gpt-oss).
+    yarn_truncate: bool = true,
     /// Dimensions of each head that rotate (the first ones); 0 for all of them.
     rope_dim: usize = 0,
+    /// Rope rotates adjacent pairs (llama.cpp's "norm" rope) rather than each half against the other.
+    rope_adjacent: bool = false,
     /// Every this-many-th layer uses attention, the others a Gated DeltaNet; 0 for attention everywhere.
     attn_interval: usize = 0,
     /// Attention multiplies its output by a sigmoid gate that comes with the query projection.
@@ -124,6 +136,15 @@ pub const Config = struct {
     route_scale: f32 = 0,
     /// SwiGLU inputs clamped at this, 0 for none.
     swiglu_limit: f32 = 0,
+    /// DeepSeek V3 (TASK-39): experts in groups, the best groups whose experts may be chosen,
+    /// and whether the chosen scores are renormalized before `route_scale`.
+    route_groups: usize = 1,
+    route_groups_used: usize = 1,
+    route_norm: bool = true,
+    /// Attention's score scale, 0 for one over the square root of the key size.
+    attn_scale: f32 = 0,
+    /// gpt-oss (TASK-39): every other layer, from the first, attends over this many positions; 0 for none.
+    sliding_window: usize = 0,
 
     pub fn qDim(self: Config) usize
     {
@@ -213,10 +234,21 @@ pub const Config = struct {
 
     pub fn fromGguf(h: gguf.Header) !Config {
         const name = h.getString("general.architecture") orelse return error.NotOlmoe;
-        const arch = if (std.mem.eql(u8, name, "glm5-next")) .glm5next else std.meta.stringToEnum(Arch, name) orelse return error.NotOlmoe;
+        const arch: Arch = if (std.mem.eql(u8, name, "glm5-next"))
+            .glm5next
+        else if (std.mem.eql(u8, name, "llama"))
+            .mixtral
+        else if (std.mem.eql(u8, name, "gpt-oss"))
+            .gptoss
+        else
+            std.meta.stringToEnum(Arch, name) orelse return error.NotOlmoe;
         if (arch == .glm5next)
         {
             return glm53.config(h);
+        }
+        if (arch == .deepseek2)
+        {
+            return deepseek.config(h);
         }
         const Keys = struct {
             hh: gguf.Header,
@@ -274,6 +306,19 @@ pub const Config = struct {
             .eps = g.float("attention.layer_norm_rms_epsilon", 1e-5),
             .rope_theta = g.float("rope.freq_base", 10000),
         };
+        if (arch == .mixtral)
+        {
+            // A dense Llama has no experts; llama.cpp converts Mixtral as "llama", rotating adjacent pairs.
+            if (g.opt("expert_count") == null or (g.opt("rope.dimension_count") orelse cfg.head_dim) != cfg.head_dim or h.get("llama.rope.scaling.type") != null)
+            {
+                return error.Unsupported;
+            }
+            cfg.rope_adjacent = true;
+        }
+        if (arch == .gptoss)
+        {
+            try gptoss.configure(h, &cfg);
+        }
         if (arch == .qwen35moe or arch == .qwen4exp)
         {
             cfg.rope_dim = g.opt("rope.dimension_count") orelse 0;
@@ -728,6 +773,10 @@ pub fn rmsnorm(x: []const f32, w: []const f32, eps: f32, out: []f32) void {
 /// or over each head (Qwen3).
 fn qkNorm(cfg: Config, v: []f32, w: []const f32) void
 {
+    if (w.len == 0)
+    {
+        return;
+    }
     if (cfg.arch == .olmoe)
     {
         rmsnorm(v, w, cfg.eps, v);
@@ -1065,13 +1114,15 @@ pub const Rope = struct {
     inv_freq: [max_half]f32,
     half: usize,
     scale: f32,
+    /// Pairs are (2i, 2i + 1) rather than (i, i + half).
+    adjacent: bool = false,
 
     pub const max_half = 256;
 
     pub fn init(cfg: Config) Rope
     {
         const dim = cfg.rotaryDim();
-        var r: Rope = .{ .inv_freq = undefined, .half = dim / 2, .scale = 1 };
+        var r: Rope = .{ .inv_freq = undefined, .half = dim / 2, .scale = 1, .adjacent = cfg.rope_adjacent };
         const fdim: f32 = @floatFromInt(dim);
         for (0..r.half) |i|
         {
@@ -1090,8 +1141,13 @@ pub const Rope = struct {
             }
         }.dimFor;
         const orig: f64 = @floatFromInt(cfg.rope_original);
-        var low = @floor(correction(32, fdim, cfg.rope_theta, orig));
-        var high = @ceil(correction(1, fdim, cfg.rope_theta, orig));
+        var low = correction(32, fdim, cfg.rope_theta, orig);
+        var high = correction(1, fdim, cfg.rope_theta, orig);
+        if (cfg.yarn_truncate)
+        {
+            low = @floor(low);
+            high = @ceil(high);
+        }
         low = @max(low, 0);
         high = @min(high, fdim - 1);
         if (low == high)
@@ -1133,6 +1189,21 @@ pub const Rope = struct {
     /// `apply` with the cos and sin from `angles`.
     pub fn applyAt(self: *const Rope, x: []f32, heads: usize, head_dim: usize, cs_all: []const f32, sn_all: []const f32) void
     {
+        if (self.adjacent)
+        {
+            for (0..heads) |h|
+            {
+                const v = x[h * head_dim ..];
+                for (0..self.half) |i|
+                {
+                    const a = v[2 * i];
+                    const b = v[2 * i + 1];
+                    v[2 * i] = a * cs_all[i] - b * sn_all[i];
+                    v[2 * i + 1] = b * cs_all[i] + a * sn_all[i];
+                }
+            }
+            return;
+        }
         for (0..self.half) |i|
         {
             const cs = cs_all[i];
@@ -1154,6 +1225,66 @@ pub const Expert = struct {
     gate: Mat,
     up: Mat,
     down: Mat,
+    /// Biases of each projection (gpt-oss, TASK-39); empty for none.
+    gate_b: []const f32 = &.{},
+    up_b: []const f32 = &.{},
+    down_b: []const f32 = &.{},
+
+    /// After the gate and up projections of `rows` calls: their biases, then the activation, into `g`.
+    pub fn activate(self: Expert, g: []f32, u: []f32, rows: usize) void
+    {
+        const f = self.gate.rows;
+        for (0..rows) |r|
+        {
+            const gr = g[r * f ..][0..f];
+            const ur = u[r * f ..][0..f];
+            if (self.gate_b.len > 0)
+            {
+                for (gr, self.gate_b, ur, self.up_b) |*a, ab, *b, bb|
+                {
+                    a.* += ab;
+                    b.* += bb;
+                }
+            }
+            if (swiglu_oai)
+            {
+                for (gr, ur) |*a, b|
+                {
+                    a.* = gptoss.swiglu(a.*, b, swiglu_limit);
+                }
+            }
+            else
+            {
+                for (gr, ur) |*a, b|
+                {
+                    a.* = glm53.swiglu(a.*, b, swiglu_limit);
+                }
+            }
+        }
+    }
+
+    /// After the down projection of `rows` calls: its bias.
+    pub fn finish(self: Expert, y: []f32, rows: usize) void
+    {
+        if (self.down_b.len == 0)
+        {
+            return;
+        }
+        const d = self.down.rows;
+        for (0..rows) |r|
+        {
+            for (y[r * d ..][0..d], self.down_b) |*o, b|
+            {
+                o.* += b;
+            }
+        }
+    }
+
+    /// Whether the GPU's expert kernels can run it: no biases or gpt-oss activation.
+    pub fn plain(self: Expert) bool
+    {
+        return self.gate_b.len == 0 and self.down_b.len == 0 and !swiglu_oai;
+    }
 
     /// `scratch` needs 3 * d_ff + max(d_model, d_ff) values.
     pub fn forward(self: Expert, x: []const f32, out: []f32, scratch: []f32) void {
@@ -1178,17 +1309,18 @@ pub const Expert = struct {
         const row = scratch[2 * f ..][0..@max(self.gate.cols, f)];
         self.gate.matmul(x, 1, g, row);
         self.up.matmul(x, 1, u, row);
-        for (g, u) |*a, b|
-        {
-            a.* = glm53.swiglu(a.*, b, swiglu_limit);
-        }
+        self.activate(g, u, 1);
         self.down.matmul(g, 1, out, row);
+        self.finish(out, 1);
     }
 };
 
 /// SwiGLU input clamp for routed experts (TASK-32's GLM-5.3-Flash), 0 for none. Every process
 /// that runs experts sets it from its model's config (`LocalExperts.init`, the expert cache).
 pub var swiglu_limit: f32 = 0;
+
+/// Routed experts use gpt-oss's SwiGLU (TASK-39), set with `swiglu_limit`.
+pub var swiglu_oai: bool = false;
 
 /// How the MoE block reaches its experts.
 pub const Moe = struct {
@@ -1470,6 +1602,10 @@ pub const Layer = struct {
     ple: ?PleLayer = null,
     /// GLM-5.3-Flash's blocks (TASK-32); `router` is empty in its dense layers.
     glm: ?glm53.Parts = null,
+    /// DeepSeek V3's blocks (TASK-39); `router` is empty in its dense layers.
+    ds: ?deepseek.Parts = null,
+    /// gpt-oss's biases and sinks (TASK-39).
+    oss: ?gptoss.Parts = null,
 };
 
 /// A hyper-connection (TASK-31): an RMSNorm over each stream (`norm`, streams x d_model),
@@ -1559,6 +1695,10 @@ pub const Weights = struct {
         if (cfg.arch == .glm5next)
         {
             return glm53.weights(gpa, h, cfg, plan, region);
+        }
+        if (cfg.arch == .deepseek2)
+        {
+            return deepseek.weights(gpa, h, cfg, plan, region);
         }
         var self: Weights = .{ .cfg = cfg, .embed = undefined, .layers = undefined, .out_norm = undefined, .head = undefined, .arena = .init(gpa) };
         errdefer self.arena.deinit();
@@ -1668,7 +1808,7 @@ pub const Weights = struct {
             const kn = if (cfg.arch == .olmoe) cfg.kvDim() else cfg.head_dim;
             l.* = .{
                 .attn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, "attn_norm"), d),
-                .ffn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, if (cfg.arch == .qwen35moe) "post_attention_norm" else "ffn_norm"), d),
+                .ffn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, if (cfg.arch == .qwen35moe or cfg.arch == .gptoss) "post_attention_norm" else "ffn_norm"), d),
                 .router = try g.mat(n(&buf, i, "ffn_gate_inp"), cfg.experts, d),
             };
             if (hyper)
@@ -1732,8 +1872,16 @@ pub const Weights = struct {
                 l.k = try g.mat(n(&buf, i, "attn_k"), cfg.kvDim(), d);
                 l.v = try g.mat(n(&buf, i, "attn_v"), cfg.kvDim(), d);
                 l.o = try g.mat(n(&buf, i, "attn_output"), d, cfg.qDim());
-                l.q_norm = try g.vec(n(&buf, i, "attn_q_norm"), qn);
-                l.k_norm = try g.vec(n(&buf, i, "attn_k_norm"), kn);
+                // Mixtral and gpt-oss have no QK norm.
+                if (cfg.arch != .mixtral and cfg.arch != .gptoss)
+                {
+                    l.q_norm = try g.vec(n(&buf, i, "attn_q_norm"), qn);
+                    l.k_norm = try g.vec(n(&buf, i, "attn_k_norm"), kn);
+                }
+                if (cfg.arch == .gptoss)
+                {
+                    l.oss = try gptoss.parts(h, plan, region, a, cfg, i);
+                }
                 if (cfg.qsa_heads > 0)
                 {
                     l.indexer = .{
@@ -1937,8 +2085,8 @@ pub const KvCache = struct {
         _ = a;
         const d = cfg.kvDim();
         var row = format.rows(d, cfg.kv_heads);
-        // GLM-5.3-Flash keeps one MLA latent per position and no values.
-        if (cfg.arch == .glm5next)
+        // MLA models keep one latent per position (with DeepSeek's rotated key part) and no values.
+        if (cfg.mla_kv_rank > 0)
         {
             row[1] = 0;
         }
@@ -2202,6 +2350,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     {
         return glm53.step(gpa, w, moe, cache, tokens, logits, trace);
     }
+    if (w.cfg.arch == .deepseek2)
+    {
+        return deepseek.step(gpa, w, moe, cache, tokens, logits, trace);
+    }
     const cfg = w.cfg;
     const n = tokens.len;
     const d = cfg.d_model;
@@ -2333,6 +2485,12 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                 l.k.matmul(x, n, kn, scratch);
                 l.v.matmul(x, n, vn, scratch);
             }
+            if (l.oss) |os|
+            {
+                gptoss.addRows(qp[0 .. n * qd], os.q_b);
+                gptoss.addRows(kn[0 .. n * kvd], os.k_b);
+                gptoss.addRows(vn[0 .. n * kvd], os.v_b);
+            }
             if (cfg.attn_gate)
             {
                 pool.parallelFor(threads, n, TokenLoops.SplitGate{ .qg = qg, .q = q, .gate = gate, .heads = cfg.heads, .hd = cfg.head_dim }, TokenLoops.SplitGate.run);
@@ -2396,7 +2554,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                 on_gpu = true; // `att` is done, so the dense loops below are skipped
 
             }
-            else if (gpu_attention != null and (cache.dev_k != 0 or cache.tier != null))
+            else if (gpu_attention != null and l.oss == null and (cache.dev_k != 0 or cache.tier != null))
             {
                 if (cache.tier) |tr|
                 {
@@ -2438,14 +2596,23 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                     break;
                 }
                 const last = pos0 + t;
+                // gpt-oss: a sliding layer sees the last `sliding_window` positions, and a sink per head joins each softmax.
+                const window = if (l.oss) |os| os.window else 0;
+                const from = if (window > 0 and last + 1 > window) last + 1 - window else 0;
                 for (0..cfg.heads) |hd|
                 {
                     const off = hd * cfg.head_dim;
                     const kv_off = hd / group * cfg.head_dim;
                     const qh = q[t * qd + off ..][0..cfg.head_dim];
-                    var mx: f32 = -std.math.inf(f32);
+                    const sink: ?f32 = if (l.oss) |os| os.sinks[hd] else null;
+                    var mx: f32 = if (sink) |sv| sv else -std.math.inf(f32);
                     for (0..last + 1) |s|
                     {
+                        if (s < from)
+                        {
+                            scores[s] = -std.math.inf(f32);
+                            continue;
+                        }
                         const ks = if (plain) layer_k[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
                             cache.format.part(0).decodeHead(cache.keys(ai)[s * cache.row[0] ..][0..cache.row[0]], kvd, hd / group, kh);
                             break :blk kh;
@@ -2453,15 +2620,15 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
                         scores[s] = dot(qh, ks) * scale;
                         mx = @max(mx, scores[s]);
                     }
-                    var sum: f32 = 0;
-                    for (scores[0 .. last + 1]) |*sc|
+                    var sum: f32 = if (sink) |sv| @exp(sv - mx) else 0;
+                    for (scores[from .. last + 1]) |*sc|
                     {
                         sc.* = @exp(sc.* - mx);
                         sum += sc.*;
                     }
                     const out = att[t * qd + off ..][0..cfg.head_dim];
                     @memset(out, 0);
-                    for (0..last + 1) |s|
+                    for (from..last + 1) |s|
                     {
                         const p = scores[s] / sum;
                         const vs = if (plain) layer_v[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
@@ -2481,6 +2648,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             }
             Profile.lap(&profile.attention, &pt);
             l.o.matmul(att, n, tmp, scratch);
+            if (l.oss) |os|
+            {
+                gptoss.addRows(tmp[0 .. n * d], os.o_b);
+            }
         }
         const attn_max = if (nanTrace()) maxAbs(tmp[0 .. n * d]) else 0;
         if (l.hc_attn != null)
@@ -2512,6 +2683,10 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         }
         Profile.lap(&profile.output, &pt);
         l.router.matmul(x, n, probs, scratch);
+        if (l.oss) |os|
+        {
+            gptoss.addRows(probs[0 .. n * cfg.experts], os.router_b);
+        }
         pool.parallelFor(threads, n, TokenLoops.Route{ .cfg = cfg, .probs = probs, .idx = idx, .wts = wts }, TokenLoops.Route.run);
         if (la) |p|
         {
@@ -3031,6 +3206,7 @@ pub const LocalExperts = struct {
 
     pub fn init(a: std.mem.Allocator, cfg: Config, m: loader.Model, owned: []const bool, plan: loader.Plan, region: []const u8) !LocalExperts {
         swiglu_limit = cfg.swiglu_limit;
+        swiglu_oai = cfg.arch == .gptoss;
         const ex = try a.alloc(?Expert, cfg.layers * cfg.experts);
         for (ex, 0..) |*e, i| {
             const layer: u32 = @intCast(i / cfg.experts);
@@ -3048,6 +3224,9 @@ pub const LocalExperts = struct {
                 .gate = mk(m.weight(layer, .gate, id), plan, region),
                 .up = mk(m.weight(layer, .up, id), plan, region),
                 .down = mk(m.weight(layer, .down, id), plan, region),
+                .gate_b = loader.biasOf(m.weight(layer, .gate, id), plan.partsOf(region, m.weight(layer, .gate, id))),
+                .up_b = loader.biasOf(m.weight(layer, .up, id), plan.partsOf(region, m.weight(layer, .up, id))),
+                .down_b = loader.biasOf(m.weight(layer, .down, id), plan.partsOf(region, m.weight(layer, .down, id))),
             };
         }
         return .{
@@ -3247,11 +3426,9 @@ pub const LocalExperts = struct {
             const cnt = starts[gi + 1] - first;
             ex.gate.matmul(xb[first * d ..], cnt, gb, self.scratch);
             ex.up.matmul(xb[first * d ..], cnt, ub, self.scratch);
-            for (gb[0 .. cnt * f], ub[0 .. cnt * f]) |*a, b|
-            {
-                a.* = glm53.swiglu(a.*, b, swiglu_limit);
-            }
+            ex.activate(gb, ub, cnt);
             ex.down.matmul(gb, cnt, yb[first * d ..], self.scratch);
+            ex.finish(yb[first * d ..], cnt);
         }
         for (kept, 0..) |c, i|
         {
@@ -4296,4 +4473,121 @@ test "topK keeps order and breaks ties toward the lower index" {
     var val: [3]f32 = undefined;
     topK(&.{ 0.1, 0.3, 0.3, 0.05, 0.25 }, 3, &idx, &val);
     try std.testing.expectEqualSlices(u32, &.{ 1, 2, 4 }, &idx);
+}
+
+/// Runs a TASK-39 tiny model against transformers' outputs from its tools/ref script: logits,
+/// each recorded hidden state, each MoE layer's chosen experts as a set, and greedy generation.
+fn checkTiny(comptime stem: []const u8, arch: Arch) !void
+{
+    const tfref = @import("tfref.zig");
+    const gpa = std.testing.allocator;
+    const file = @embedFile(stem ++ ".gguf");
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    const cfg = try Config.fromGguf(h);
+    try std.testing.expectEqual(arch, cfg.arch);
+    var m = try loader.Model.fromGguf(gpa, h);
+    defer m.deinit(gpa);
+    var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
+    var plan = try loader.Plan.fromRanges(gpa, &whole, 1, 0, file.len);
+    defer plan.deinit(gpa);
+    var w = try Weights.init(gpa, h, cfg, plan, file);
+    defer w.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var owned: [64]bool = @splat(true);
+    var local = try LocalExperts.init(arena.allocator(), cfg, m, owned[0..cfg.experts], plan, file);
+    defer local.deinit();
+    const golden = try tfref.File.parse(@embedFile(stem ++ ".tfref"));
+    const prompts: usize = @intCast((try golden.get("config")).i32s()[0]);
+    const d = cfg.d_model;
+    const k = cfg.top_k;
+    for (0..prompts) |p|
+    {
+        var buf: [64]u8 = undefined;
+        const ids = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.tokens", .{p}))).i32s();
+        const n = ids.len;
+        const tokens = try gpa.alloc(u32, n);
+        defer gpa.free(tokens);
+        for (tokens, ids) |*t, id|
+        {
+            t.* = @intCast(id);
+        }
+        const logits = try gpa.alloc(f32, n * cfg.vocab);
+        defer gpa.free(logits);
+        const trace: Trace = .{ .hidden = try gpa.alloc(f32, cfg.layers * n * d), .topk = try gpa.alloc(u32, cfg.layers * n * k) };
+        defer gpa.free(trace.hidden);
+        defer gpa.free(trace.topk);
+        try forward(gpa, &w, local.moe(), tokens, logits, trace);
+        for (0..cfg.layers) |l|
+        {
+            if (golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.hidden", .{ p, l }))) |hw|
+            {
+                for (trace.hidden[l * n * d ..][0 .. n * d], hw.f32s(), 0..) |a, b, i|
+                {
+                    if (@abs(a - b) > 1e-4)
+                    {
+                        std.debug.print("{s}: prompt {d}, layer {d}, token {d}, value {d}: {d} against {d}\n", .{ stem, p, l, i / d, i % d, a, b });
+                        return error.TestHiddenMismatch;
+                    }
+                }
+            }
+            else |_|
+            {}
+            const gi = (golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.layer{d}.topk_idx", .{ p, l })) catch continue).i32s();
+            var want: [64]u32 = undefined;
+            for (0..n) |t|
+            {
+                const row = trace.topk[(l * n + t) * k ..][0..k];
+                for (want[0..k], gi[t * k ..][0..k]) |*o, v|
+                {
+                    o.* = @intCast(v);
+                }
+                std.mem.sort(u32, row, {}, std.sort.asc(u32));
+                std.mem.sort(u32, want[0..k], {}, std.sort.asc(u32));
+                try std.testing.expectEqualSlices(u32, want[0..k], row);
+            }
+        }
+        const want = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.logits", .{p}))).f32s();
+        for (logits, want) |a, b|
+        {
+            try std.testing.expectApproxEqAbs(b, a, 1e-4);
+        }
+
+        const want_tokens = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_tokens", .{p}))).i32s();
+        const want_logits = (try golden.get(try std.fmt.bufPrint(&buf, "prompt{d}.gen_logits", .{p}))).f32s();
+        const g = want_tokens.len;
+        const all = try gpa.alloc(u32, n + g);
+        defer gpa.free(all);
+        @memcpy(all[0..n], tokens);
+        var cache = try KvCache.init(gpa, cfg, n + g);
+        defer cache.deinit(gpa);
+        var sampler: Sampler = .{};
+        const step_logits = try gpa.alloc(f32, g * cfg.vocab);
+        defer gpa.free(step_logits);
+        try generate(gpa, &w, local.moe(), &cache, all[0..n], &sampler, all[n..], step_logits);
+        for (all[n..], want_tokens) |got, exp|
+        {
+            try std.testing.expectEqual(@as(u32, @intCast(exp)), got);
+        }
+        for (step_logits, want_logits) |got, exp|
+        {
+            try std.testing.expectApproxEqAbs(exp, got, 1e-4);
+        }
+    }
+}
+
+test "tiny Mixtral (GGUF llama with experts, rope on adjacent pairs) matches transformers (tools/ref/ref_mixtral.py --tiny)"
+{
+    try checkTiny("mixtral_tiny", .mixtral);
+}
+
+test "tiny DeepSeek V3 (MLA with decoupled rope, grouped routing, YaRN) matches transformers (tools/ref/ref_deepseek.py --tiny)"
+{
+    try checkTiny("deepseek_tiny", .deepseek2);
+}
+
+test "tiny gpt-oss (sinks, sliding window, biases, MXFP4 experts) matches transformers (tools/ref/ref_gptoss.py --tiny)"
+{
+    try checkTiny("gptoss_tiny", .gptoss);
 }

@@ -1,0 +1,17 @@
+load: non-expert weights and 8 of 8 experts, 28.45 GB in 5.12 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (28.45 GB in 0.74 s)
+local: prompt 0 (6 tokens, 176 ms): logits max err 1.26e-4 (last 6 positions), top-1 6/6, hidden max err 1.34e-2, experts chosen 384/384 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (23 tokens, 305 ms): logits max err 8.68e-5 (last 23 positions), top-1 23/23, hidden max err 1.29e-2, experts chosen 1472/1472 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (18 tokens, 277 ms): logits max err 1.57e-4 (last 18 positions), top-1 18/18, hidden max err 1.29e-2, experts chosen 1152/1152 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: Mixtral logits within 1e-2 of the PyTorch reference (worst 1.57e-4), every top-1 token identical
+local: generate prompt 0: 32 tokens in 2.08 s (15.4 tokens/s, prompt included)
+local:   tokens: 264 2990 369 349 2651 354 871 9689 28725 5679 28725 304 3340 28723 661 349 264 2990 369 349 2173 302 1411 304 3408 28725 304 736 349 1743 1545 298
+local:   same as transformers' generate(): 32/32 tokens, logits max err 1.66e-4 at step 20 ok
+local: generate prompt 1: 32 tokens in 2.20 s (14.5 tokens/s, prompt included)
+local:   tokens: 16182 266 28127 28732 28711 28733 28740 28731 648 16182 266 28127 28732 28711 28733 28750 28731 13 13 1270 16182 266 28127 28730 3271 28709 28732 28711 28725 27667 2408 28752
+local:   same as transformers' generate(): 32/32 tokens, logits max err 7.94e-5 at step 11 ok
+local: generate prompt 2: 32 tokens in 2.18 s (14.7 tokens/s, prompt included)
+local:   tokens: 369 1430 7583 865 3208 298 2822 264 1741 19804 302 272 7901 24000 28723 851 349 297 9349 298 7062 4994 369 2822 544 16246 297 272 7901 24000 28723 13
+local:   same as transformers' generate(): 32/32 tokens, logits max err 1.01e-4 at step 31 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: heap: 366 allocations, 366 frees, peak 79.3 MB, 0 bytes still allocated at exit (balanced)

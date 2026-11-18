@@ -143,6 +143,17 @@ pub const Model = struct {
                     return error.BadShape;
                 }
                 const per = t.bytes / m.experts;
+                // gpt-oss (TASK-39) gives each expert's projection a bias: part 1, in f32.
+                var bias_buf: [64]u8 = undefined;
+                const bias = h.tensor(std.fmt.bufPrint(&bias_buf, "blk.{d}.ffn_{t}_exps.bias", .{ l, p }) catch unreachable);
+                if (bias) |b|
+                {
+                    if (b.format != .f32 or b.ndim != 2 or b.dims[0] != s[0] or b.dims[1] != m.experts)
+                    {
+                        std.log.warn("blk.{d}.ffn_{t}_exps.bias: dims {any}, expected [{d}, {d}] in f32", .{ l, p, b.dims[0..b.ndim], s[0], m.experts });
+                        return error.BadShape;
+                    }
+                }
                 for (0..m.experts) |e| {
                     m.weights[(l * 3 + @backingInt(p)) * m.experts + e] = .{
                         .layer = @intCast(l),
@@ -152,7 +163,11 @@ pub const Model = struct {
                         .cols = s[1],
                         .layout = .gguf,
                         .format = t.format,
-                        .parts = .{ .{ .offset = t.offset + e * per, .len = per }, .{}, .{} },
+                        .parts = .{
+                            .{ .offset = t.offset + e * per, .len = per },
+                            if (bias) |b| .{ .offset = b.offset + e * s[0] * 4, .len = s[0] * 4 } else .{},
+                            .{},
+                        },
                     };
                 }
             }
@@ -350,6 +365,16 @@ pub const Index = struct {
         };
     }
 };
+
+/// A GGUF expert projection's bias (part 1) as floats, or empty without one.
+pub fn biasOf(w: ExpertWeight, bytes: [3][]const u8) []const f32
+{
+    if (w.layout != .gguf or bytes[1].len == 0)
+    {
+        return &.{};
+    }
+    return @alignCast(std.mem.bytesAsSlice(f32, bytes[1]));
+}
 
 pub fn crc32c(bytes: []const u8) u32 {
     return tf_crc32c(bytes.ptr, bytes.len);

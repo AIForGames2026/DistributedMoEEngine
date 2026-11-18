@@ -2,7 +2,8 @@
 """Writes src/unicode_tables.zig (TASK-30): the Unicode data the tokenizer
 needs, from Python's unicodedata. Letter, mark, number, punctuation and
 symbol ranges for the pre-tokenizer patterns (the letter cases for gpt-oss's,
-TASK-37), and canonical combining classes, decompositions, and
+TASK-37), Han characters for Kimi's (TASK-39, from the regex package, since
+unicodedata has no scripts), and canonical combining classes, decompositions, and
 compositions for NFC.
 
 Usage:
@@ -10,6 +11,8 @@ Usage:
 """
 import sys
 import unicodedata
+
+import regex
 
 MAX = 0x110000
 HANGUL_FIRST, HANGUL_LAST = 0xAC00, 0xD7A3
@@ -51,6 +54,8 @@ def main():
     other_letters = ranges(lambda cp: cat(cp) in ("Lm", "Lo"))
     punctuation = ranges(lambda cp: cat(cp).startswith("P"))
     symbols = ranges(lambda cp: cat(cp).startswith("S"))
+    han_re = regex.compile(r"\p{Han}")
+    han = ranges(lambda cp: han_re.match(chr(cp)) is not None)
 
     ccc = []
     for cp in range(MAX):
@@ -102,6 +107,7 @@ def main():
     emit("other_letters", "[2]u21", other_letters, tup)
     emit("punctuation", "[2]u21", punctuation, tup)
     emit("symbols", "[2]u21", symbols, tup)
+    emit("han", "[2]u21", han, tup)
     emit("combining", "[3]u21", ccc, tup)
     emit("decomp_index", "[3]u21", decomp_index, tup)
     emit("decomp_data", "u21", decomp_data, lambda r: f"0x{r:X}")

@@ -582,13 +582,36 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-39] Mixtral, DeepSeek V3 and gpt-oss from llama.cpp's Specs
 - **Milestone**: None (after v1)
-- **Status**: Backlog (added Nov 17)
+- **Status**: Review (built Nov 18)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 17. Each architecture is written by hand (5 so far), at 1 to 3 days each plus a transformers reference. The engine loads GGUFs made by llama.cpp's converter, so llama.cpp's per-architecture code (MIT) is the most exact record of each model's tensor names, shapes, converter transformations and forward pass; reading it replaces working out the GGUF layout by hand, as TASK-32's reference script had to. The reference is still transformers, not llama.cpp. Three popular families, each needing something new:
   - **Mixtral:** grouped-query attention with a softmax router and no shared expert; mostly a check that the existing blocks generalize, plus SentencePiece (TASK-37).
   - **DeepSeek V3 (and Kimi K2, which shares its architecture):** MLA with decoupled rope (TASK-32's MLA has none), group-limited routing, and dense leading layers.
   - **gpt-oss:** attention sinks, alternating sliding-window and full attention, and MXFP4 experts (MXFP4 already loads).
 - **Acceptance Criteria**: each family passes the TASK-10 and TASK-24 checks against transformers (in float32 on the GGUF's dequantized weights, loaded lazily where the model is large), in one process and split; a tiny random model of each runs in `zig build test`; and each chats through TASK-38's templates.
+- **Results (Nov 18)**: acceptance met (`bench/olmoe/2026-11-18-families.md`).
+  - **Models** (the user's choices): Mixtral-8x7B-Instruct (mradermacher's Q4_K_M; TheBloke's stores experts as separate tensors) and gpt-oss-20b (ggml-org's MXFP4). For DeepSeek V3, which at 671B fits on no machine we have, Moonlight-16B-A3B (Moonshot's, the same architecture; gabriellarson's Q4_K_M).
+  - **Built:**
+    - Mixtral on the existing layer loop: rope on adjacent pairs, no QK norm.
+    - `src/deepseek.zig`: MLA with decoupled rope, the cache holding the latent and the rotated key part. Sigmoid routing limited to the best expert groups, shared experts, dense leading layers, YaRN.
+    - `src/gptoss.zig`: attention sinks, sliding windows, biases, gpt-oss's SwiGLU, and YaRN without truncation.
+    - Expert biases through the loader and every CPU expert path.
+    - Kimi's `kimi-k2` pre-tokenizer, with a Han table.
+    - gpt-oss's analysis channel as `reasoning_content` in the server.
+    - llama.cpp's code was read as the record of each layout; none was copied.
+  - **Checked** on `gx10-02` against transformers, with 3 prompts and 32 generated tokens each, every expert choice and generated token the same:
+    - In one process on the GPU and the CPU, and split over three processes on the GPU with f32 activations.
+    - Mixtral: logits within 1.57e-4.
+    - Moonlight: logits within 6.09e-4.
+    - gpt-oss: logits within 1.26e-4.
+    - Tiny models of each pass in `zig build test` and through `olmoe` (133 tests on `gx10-02`, 115 plus 1 skipped on Windows).
+    - The three GGUFs' templates render as transformers does on 140 of 140 prompts, and each answers through the server.
+    - Moonlight's tokenizer matches Moonshot's on 5,038 of 5,038 texts.
+  - **Found:** mradermacher's Mixtral GGUF says `add_space_prefix = false`, unlike Mixtral's own tokenizer. The engine follows the GGUF, as llama.cpp does, so a prompt's first piece differs from Hugging Face's. gpt-oss's split with the default fp8 activations misses the bar, because its hidden states run into the hundreds.
+  - **Not done:**
+    - gpt-oss's experts and attention, and DeepSeek's attention, stay on the CPU.
+    - gpt-oss does not run with `--cache`.
+    - The full DeepSeek V3 and Kimi K2 weights were not run.
 
 ---
 
@@ -661,10 +684,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-39 (three model families, borrowing from llama.cpp), TASK-40 (native Windows engine) |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-40 (native Windows engine) |
 | **To Do** | (none) |
 | **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
-| **Review** | TASK-38 (chat templates read from the GGUF, Nov 18; `bench/olmoe/2026-11-18-chat-templates.md`), TASK-37 (SentencePiece and more pre-tokenizers, Nov 18; `bench/olmoe/2026-11-18-tokenizers.md`), TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
+| **Review** | TASK-39 (Mixtral, DeepSeek V3 as Moonlight-16B, and gpt-oss, Nov 18; `bench/olmoe/2026-11-18-families.md`), TASK-38 (chat templates read from the GGUF, Nov 18; `bench/olmoe/2026-11-18-chat-templates.md`), TASK-37 (SentencePiece and more pre-tokenizers, Nov 18; `bench/olmoe/2026-11-18-tokenizers.md`), TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |

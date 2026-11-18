@@ -43,6 +43,11 @@ pub fn isSymbol(cp: u21) bool {
     return inRanges(&tables.symbols, cp);
 }
 
+/// The Han script, which Kimi's pattern (TASK-39) splits out.
+pub fn isHan(cp: u21) bool {
+    return inRanges(&tables.han, cp);
+}
+
 /// The White_Space property, which `\s` matches in the tokenizers' regexes.
 pub fn isSpace(cp: u21) bool {
     return switch (cp) {

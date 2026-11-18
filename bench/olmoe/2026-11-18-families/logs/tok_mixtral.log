@@ -1,0 +1,41 @@
+MISMATCH (golden) 'The capital of France is'
+  at token 1: engine [1, 1014, 5565, 302, 4843, 349]
+             hf     [1, 415, 5565, 302, 4843, 349]
+  hf tokens ['<s>', '▁The', '▁capital', '▁of', '▁France', '▁is']
+MISMATCH (golden) 'def fibonacci(n):\n    if n < 2:\n        return n\n    return'
+  at token 1: engine [1, 1270, 16182, 266, 28127, 28732]
+             hf     [1, 801, 16182, 266, 28127, 28732]
+  hf tokens ['<s>', '▁def', '▁fib', 'on', 'acci', '(']
+MISMATCH (golden) 'Mixture-of-experts models route each token to a few experts, so'
+  at token 1: engine [1, 28755, 28710, 8440, 28733, 1009]
+             hf     [1, 13609, 8440, 28733, 1009, 28733]
+  hf tokens ['<s>', '▁Mi', 'xture', '-', 'of', '-']
+MISMATCH (edge) '\n'
+  at token 1: engine [1, 13]
+             hf     [1, 28705, 13]
+  hf tokens ['<s>', '▁', '<0x0A>']
+MISMATCH (edge) 'a  b'
+  at token 1: engine [1, 28708, 28705, 287]
+             hf     [1, 264, 28705, 287]
+  hf tokens ['<s>', '▁a', '▁', '▁b']
+MISMATCH (edge) 'x                              y'
+  at token 1: engine [1, 28744, 359, 569, 337]
+             hf     [1, 1318, 359, 569, 337]
+  hf tokens ['<s>', '▁x', '▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁', '▁▁▁▁▁▁▁▁▁▁▁▁▁', '▁y']
+MISMATCH (edge) 'def f():\n        return 1\n\n\n\tpass\r\n'
+  at token 1: engine [1, 1270, 285, 5888, 13, 5390]
+             hf     [1, 801, 285, 5888, 13, 5390]
+  hf tokens ['<s>', '▁def', '▁f', '():', '<0x0A>', '▁▁▁▁▁▁▁']
+MISMATCH (edge) "It's it'S IT'RE we've I'm you'll he'd 'ſ ''s"
+  at token 1: engine [1, 1313, 28742, 28713, 378, 28742]
+             hf     [1, 661, 28742, 28713, 378, 28742]
+  hf tokens ['<s>', '▁It', "'", 's', '▁it', "'"]
+MISMATCH (edge) 'café é Å Å ḍ̇'
+  at token 1: engine [1, 2591, 1512, 28949, 1233, 330]
+             hf     [1, 7913, 1512, 28949, 1233, 330]
+  hf tokens ['<s>', '▁ca', 'fe', '́', '▁é', '▁A']
+MISMATCH (edge) '각 한국어'
+  at token 1: engine [1, 228, 135, 131, 228, 136]
+             hf     [1, 28705, 228, 135, 131, 228]
+  hf tokens ['<s>', '▁', '<0xE1>', '<0x84>', '<0x80>', '<0xE1>']
+117/5038 texts identical (188294 tokens); decode round trip ok

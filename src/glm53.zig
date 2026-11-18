@@ -638,7 +638,7 @@ pub fn swiglu(g: f32, u: f32, limit: f32) f32
 }
 
 /// A dense block or shared expert on `n` inputs, added into `out`. `g` and `u` take n x hidden each.
-fn mlp(e: Expert, limit: f32, x: []const f32, n: usize, g: []f32, u: []f32, y: []f32, out: []f32, scratch: []f32) void
+pub fn mlp(e: Expert, limit: f32, x: []const f32, n: usize, g: []f32, u: []f32, y: []f32, out: []f32, scratch: []f32) void
 {
     const f = e.gate.rows;
     const d = e.down.rows;
@@ -995,7 +995,7 @@ fn layerNorm(x: []f32, w: []const f32, bias: []const f32, eps: f32) void
 
 /// `m` (heads blocks of `rows` rows) applied per head to the head slices of `src`
 /// (n x heads x m.cols), into `dst` (n x heads x rows), through contiguous buffers.
-fn perHead(m: Mat, heads: usize, rows: usize, src: []const f32, n: usize, dst: []f32, gather: []f32, gather_out: []f32, scratch: []f32) void
+pub fn perHead(m: Mat, heads: usize, rows: usize, src: []const f32, n: usize, dst: []f32, gather: []f32, gather_out: []f32, scratch: []f32) void
 {
     const cols = m.cols;
     for (0..heads) |hh|
@@ -1249,7 +1249,7 @@ const Attend = struct {
 };
 
 /// y += a x.
-fn axpy(y: []f32, a: f32, x: []const f32) void
+pub fn axpy(y: []f32, a: f32, x: []const f32) void
 {
     const V = @Vector(16, f32);
     const av: V = @splat(a);
@@ -1557,7 +1557,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, cac
     }
 }
 
-fn normRows(threads: usize, x: []f32, w: []const f32, eps: f32, d: usize, n: usize) void
+pub fn normRows(threads: usize, x: []f32, w: []const f32, eps: f32, d: usize, n: usize) void
 {
     const Rows = struct {
         x: []f32,

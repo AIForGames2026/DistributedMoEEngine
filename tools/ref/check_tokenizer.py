@@ -75,7 +75,7 @@ def golden_prompts():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tokenizer", required=True, help="Hugging Face tokenizer.json")
+    ap.add_argument("--tokenizer", required=True, help="Hugging Face tokenizer.json, or a directory with the model's tokenizer code")
     ap.add_argument("--tftok", required=True)
     ap.add_argument("--source", required=True, help="what tftok loads: GGUF or tokenizer.json")
     ap.add_argument("--long", action="append", default=[])
@@ -91,7 +91,16 @@ def main():
         with open(path, encoding="utf-8") as f:
             texts.append((os.path.basename(path), f.read()))
 
-    hf = Tokenizer.from_file(args.tokenizer)
+    if os.path.isdir(args.tokenizer):
+        from transformers import AutoTokenizer
+
+        auto = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
+        encode = auto.encode
+        names = auto.convert_ids_to_tokens
+    else:
+        hf = Tokenizer.from_file(args.tokenizer)
+        encode = lambda t: hf.encode(t).ids  # noqa: E731
+        names = lambda ids: [hf.id_to_token(i) for i in ids]  # noqa: E731
     with tempfile.TemporaryDirectory() as d:
         files = []
         for i, (_, t) in enumerate(texts):
@@ -108,7 +117,7 @@ def main():
     total = 0
     for (kind, text), line in zip(texts, lines):
         got = [int(x) for x in line.split()]
-        want = hf.encode(text).ids
+        want = encode(text)
         total += len(want)
         if got != want:
             bad += 1
@@ -117,7 +126,7 @@ def main():
                 print(f"MISMATCH ({kind}) {text[:80]!r}")
                 print(f"  at token {at}: engine {got[max(0, at - 3):at + 5]}")
                 print(f"  {'':>{len(str(at)) + 10}}hf     {want[max(0, at - 3):at + 5]}")
-                print(f"  hf tokens {[hf.id_to_token(i) for i in want[max(0, at - 3):at + 5]]}")
+                print(f"  hf tokens {names(want[max(0, at - 3):at + 5])}")
     print(f"{len(texts) - bad}/{len(texts)} texts identical ({total} tokens); decode round trip {'ok' if run.returncode == 0 else 'FAILED'}")
     sys.exit(1 if bad or run.returncode != 0 else 0)
 

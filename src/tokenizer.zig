@@ -30,12 +30,15 @@
 //!                  [^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|...)?|
 //!                  \p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+
 //!                  with merges ignored as for glm4.
+//!   kimi_k2 (Kimi K2 and Moonlight, TASK-39): gpt4o with Han split out, as
+//!                  Moonshot's tiktoken pattern: [\p{Han}]+ first, the word forms' letters
+//!                  excluding Han, and punctuation runs ending in [\r\n]* only.
 const std = @import("std");
 const gguf = @import("gguf.zig");
 const unicode = @import("unicode.zig");
 
 /// `none` is SentencePiece's: the text is not split.
-pub const Pattern = enum { gpt2, qwen2, qwen35, glm4, deepseek_v3, gpt4o, none };
+pub const Pattern = enum { gpt2, qwen2, qwen35, glm4, deepseek_v3, gpt4o, kimi_k2, none };
 
 /// When SentencePiece puts U+2581 in front of the text: never, only at its start, or before every piece between added tokens.
 pub const Prepend = enum { never, first, always };
@@ -48,6 +51,7 @@ const pre_names = [_]struct { name: []const u8, pattern: Pattern }{
     .{ .name = "glm4", .pattern = .glm4 },
     .{ .name = "deepseek-v3", .pattern = .deepseek_v3 },
     .{ .name = "gpt-4o", .pattern = .gpt4o },
+    .{ .name = "kimi-k2", .pattern = .kimi_k2 },
 };
 
 fn patternOf(pre: []const u8) ?Pattern {
@@ -118,13 +122,13 @@ pub const Tokenizer = struct {
         }
         const pre = h.getString("tokenizer.ggml.pre") orelse "(none)";
         const pattern = patternOf(pre) orelse {
-            std.log.err("tokenizer: pre-tokenizer \"{s}\" is not supported (olmo, qwen2, qwen35, glm4, deepseek-v3 and gpt-4o are)", .{pre});
+            std.log.err("tokenizer: pre-tokenizer \"{s}\" is not supported (olmo, qwen2, qwen35, glm4, deepseek-v3, gpt-4o and kimi-k2 are)", .{pre});
             return error.UnsupportedTokenizer;
         };
 
         var b = try Builder.init(gpa, pattern);
         // A GGUF does not record ignore_merges; GLM-5.3-Flash's and gpt-oss's tokenizer.json set it.
-        b.ignore_merges = pattern == .glm4 or pattern == .gpt4o;
+        b.ignore_merges = pattern == .glm4 or pattern == .gpt4o or pattern == .kimi_k2;
         errdefer b.arena.deinit();
         const a = b.arena.allocator();
         var toks = h.strings("tokenizer.ggml.tokens") orelse return error.BadTokenizer;
@@ -745,6 +749,7 @@ const class_lower: Class = 64;
 const class_other_letter: Class = 128;
 const class_punct: Class = 256;
 const class_symbol: Class = 512;
+const class_han: Class = 1024;
 /// gpt-oss's two letter classes: the start of a word, and the rest of it.
 const class_cased_start = class_upper | class_other_letter | class_mark;
 const class_cased_rest = class_lower | class_other_letter | class_mark;
@@ -800,6 +805,10 @@ fn classOf(cp: u21) Class {
     {
         c |= class_space;
     }
+    if (unicode.isHan(cp))
+    {
+        c |= class_han;
+    }
     return c;
 }
 
@@ -835,6 +844,7 @@ fn split(gpa: std.mem.Allocator, pattern: Pattern, text: []const u8, s: *Scratch
             .qwen35 => matchQwen(cps, i, class_letter | class_mark),
             .glm4 => matchQwenDigits(cps, i, class_letter, 3),
             .gpt4o => matchGpt4o(cps, i),
+            .kimi_k2 => matchKimi(cps, i),
             .deepseek_v3, .none => unreachable,
         };
         std.debug.assert(end > i);
@@ -964,13 +974,27 @@ fn isWordLead(cps: []const u21, i: usize) bool {
     return i < cps.len and classOf(cps[i]) & (class_newline | class_letter | class_number) == 0;
 }
 
-/// gpt-oss's first word form: optional capitals, then at least one lower-case letter.
-fn casedLower(cps: []const u21, s: usize) ?usize {
-    const u = runOf(cps, s, class_cased_start);
-    var end: usize = undefined;
-    if (is(cps, u, class_cased_rest))
+/// Whether `cps[i]` is in `class` and not in `except`.
+fn isBut(cps: []const u21, i: usize, class: Class, except: Class) bool {
+    return i < cps.len and classOf(cps[i]) & class != 0 and classOf(cps[i]) & except == 0;
+}
+
+fn runOfBut(cps: []const u21, from: usize, class: Class, except: Class) usize {
+    var j = from;
+    while (isBut(cps, j, class, except))
     {
-        end = runOf(cps, u, class_cased_rest);
+        j += 1;
+    }
+    return j;
+}
+
+/// gpt-oss's first word form: optional capitals, then at least one lower-case letter, none in `except`.
+fn casedLower(cps: []const u21, s: usize, except: Class) ?usize {
+    const u = runOfBut(cps, s, class_cased_start, except);
+    var end: usize = undefined;
+    if (isBut(cps, u, class_cased_rest, except))
+    {
+        end = runOfBut(cps, u, class_cased_rest, except);
     }
     else
     {
@@ -983,7 +1007,7 @@ fn casedLower(cps: []const u21, s: usize) ?usize {
                 return null;
             }
             p -= 1;
-            if (is(cps, p, class_cased_rest))
+            if (isBut(cps, p, class_cased_rest, except))
             {
                 break;
             }
@@ -993,37 +1017,70 @@ fn casedLower(cps: []const u21, s: usize) ?usize {
     return contraction(cps, end, true) orelse end;
 }
 
-/// gpt-oss's second word form: at least one capital, then any lower-case letters.
-fn casedUpper(cps: []const u21, s: usize) ?usize {
-    if (!is(cps, s, class_cased_start))
+/// gpt-oss's second word form: at least one capital, then any lower-case letters, none in `except`.
+fn casedUpper(cps: []const u21, s: usize, except: Class) ?usize {
+    if (!isBut(cps, s, class_cased_start, except))
     {
         return null;
     }
-    const end = runOf(cps, runOf(cps, s, class_cased_start), class_cased_rest);
+    const end = runOfBut(cps, runOfBut(cps, s, class_cased_start, except), class_cased_rest, except);
     return contraction(cps, end, true) orelse end;
 }
 
-fn matchGpt4o(cps: []const u21, i: usize) usize {
+/// gpt-oss's two word forms at `i`, each with an optional lead, with no letter in `except`.
+fn casedWord(cps: []const u21, i: usize, except: Class) ?usize {
     const lead = isWordLead(cps, i);
     if (lead)
     {
-        if (casedLower(cps, i + 1)) |end|
+        if (casedLower(cps, i + 1, except)) |end|
         {
             return end;
         }
     }
-    if (casedLower(cps, i)) |end|
+    if (casedLower(cps, i, except)) |end|
     {
         return end;
     }
     if (lead)
     {
-        if (casedUpper(cps, i + 1)) |end|
+        if (casedUpper(cps, i + 1, except)) |end|
         {
             return end;
         }
     }
-    if (casedUpper(cps, i)) |end|
+    return casedUpper(cps, i, except);
+}
+
+/// Kimi's pattern: a run of Han first, then gpt4o's alternatives with Han left out of
+/// words and punctuation runs ending in line breaks only.
+fn matchKimi(cps: []const u21, i: usize) usize {
+    if (is(cps, i, class_han))
+    {
+        return runOf(cps, i, class_han);
+    }
+    if (casedWord(cps, i, class_han)) |end|
+    {
+        return end;
+    }
+    if (is(cps, i, class_number))
+    {
+        return @min(runOf(cps, i, class_number), i + 3);
+    }
+    const s = if (cps[i] == ' ' and isOther(cps, i + 1)) i + 1 else i;
+    if (isOther(cps, s))
+    {
+        var j = runOfOther(cps, s);
+        while (j < cps.len and (cps[j] == '\r' or cps[j] == '\n'))
+        {
+            j += 1;
+        }
+        return j;
+    }
+    return spaceOrBreaks(cps, i);
+}
+
+fn matchGpt4o(cps: []const u21, i: usize) usize {
+    if (casedWord(cps, i, 0)) |end|
     {
         return end;
     }
@@ -1554,6 +1611,12 @@ test "gpt4o pattern splits like Hugging Face" {
     try expectSplit(.gpt4o, "HelloWORLDfoo DON'T can't", &.{ "Hello", "WORLDfoo", " DON'T", " can't" });
     try expectSplit(.gpt4o, "path/to\n x  y", &.{ "path", "/to", "\n", " x", " ", " y" });
     try expectSplit(.gpt4o, "\u{1C5}ungla \u{2B0}ello 12345", &.{ "\u{1C5}ungla", " \u{2B0}ello", " ", "123", "45" });
+}
+
+test "kimi_k2 pattern splits like Moonshot's" {
+    // Pieces from the regex package (V1, for its && sets) on tokenization_moonshot.py's pat_str.
+    try expectSplit(.kimi_k2, "Hello\u{4E16}\u{754C}abc\u{4E2D}\u{6587}DEF can'T", &.{ "Hello", "\u{4E16}\u{754C}", "abc", "\u{4E2D}\u{6587}", "DEF", " can'T" });
+    try expectSplit(.kimi_k2, "\u{2E80}!x\u{3007}\u{3007}1 \u{4E00}\u{4E01}. a/b\n\n c", &.{ "\u{2E80}", "!x", "\u{3007}\u{3007}", "1", " ", "\u{4E00}\u{4E01}", ".", " a", "/b", "\n\n", " c" });
 }
 
 test "an unknown pre-tokenizer is refused by name" {

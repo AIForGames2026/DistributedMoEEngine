@@ -5,8 +5,9 @@
 //!
 //! Text handling: stop tokens end the reply unprinted; special tokens print
 //! nothing; for Qwen3, text between <think> and </think> goes to the reasoning
-//! channel; text that could still become a stop string is held back until it
-//! cannot, and a stop string ends the reply before it.
+//! channel, and for gpt-oss a message on its analysis channel does (TASK-39);
+//! text that could still become a stop string is held back until it cannot,
+//! and a stop string ends the reply before it.
 const std = @import("std");
 const olmoe = @import("olmoe.zig");
 const tokenizer = @import("tokenizer.zig");
@@ -39,6 +40,8 @@ pub const Params = struct {
     think: ?struct { open: u32, close: u32 } = null,
     /// The prompt opened the reasoning itself (Qwen3.8), so the reply starts on that channel.
     reasoning_first: bool = false,
+    /// gpt-oss's message markers (TASK-39), which pick the channel and print nothing.
+    harmony: ?Harmony = null,
     /// Prefill this many positions per engine call.
     chunk: usize = 2048,
     /// Start from the longest prefix the cache shares with the prompt.
@@ -46,6 +49,26 @@ pub const Params = struct {
     /// Monotonic nanoseconds, for the timings.
     clock: *const fn () u64,
 };
+
+/// gpt-oss's harmony format: a role follows `start`, a channel name follows `channel` up to
+/// `message`, and `end` closes a message. The analysis channel is reasoning, the others content.
+pub const Harmony = struct {
+    start: u32,
+    channel: u32,
+    message: u32,
+    end: u32,
+};
+
+/// The tokenizer's harmony markers, if it has all four.
+pub fn harmonyOf(tok: *const tokenizer.Tokenizer) ?Harmony
+{
+    return .{
+        .start = tok.addedId("<|start|>") orelse return null,
+        .channel = tok.addedId("<|channel|>") orelse return null,
+        .message = tok.addedId("<|message|>") orelse return null,
+        .end = tok.addedId("<|end|>") orelse return null,
+    };
+}
 
 /// What the engine's cache holds, so the next request can reuse a shared prefix.
 pub const Session = struct {
@@ -97,6 +120,7 @@ pub fn run(gpa: std.mem.Allocator, engine: Engine, session: *Session, tok: *cons
     var stats: openai.Stats = .{ .prompt_tokens = prompt.len, .cached_tokens = common, .ttft_ns = p.clock() - t0 };
     var text: Text = .{ .sink = sink, .stop = p.stop, .channel = if (p.reasoning_first and p.think != null) .reasoning else .content, .trim = p.reasoning_first and p.think != null };
     defer text.pending.deinit(gpa);
+    defer text.name.deinit(gpa);
     var sampler = p.sampler;
     const budget = @min(p.max_tokens orelse std.math.maxInt(usize), engine.cap - prompt.len);
     var finish: openai.Finish = .length;
@@ -110,7 +134,7 @@ pub fn run(gpa: std.mem.Allocator, engine: Engine, session: *Session, tok: *cons
             finish = .stop;
             break;
         }
-        if (try text.take(gpa, tok, id, p.think))
+        if (try text.take(gpa, tok, id, p.think, p.harmony))
         {
             finish = .stop;
             break;
@@ -144,9 +168,31 @@ const Text = struct {
     /// Drop the line breaks that follow a reasoning marker.
     trim: bool = false,
     stopped: bool = false,
+    /// A harmony header being read, and its text so far.
+    header: enum { none, role, channel } = .none,
+    name: std.ArrayList(u8) = .empty,
 
     /// Adds token `id`; true if a stop string ended the reply.
-    fn take(self: *Text, gpa: std.mem.Allocator, tok: *const tokenizer.Tokenizer, id: u32, think: anytype) !bool {
+    fn take(self: *Text, gpa: std.mem.Allocator, tok: *const tokenizer.Tokenizer, id: u32, think: anytype, harmony: ?Harmony) !bool {
+        if (harmony) |hm|
+        {
+            if (id == hm.start or id == hm.channel or id == hm.message or id == hm.end)
+            {
+                try self.flush(gpa);
+                if (id == hm.message and self.header == .channel)
+                {
+                    self.channel = if (std.mem.eql(u8, self.name.items, "analysis")) .reasoning else .content;
+                }
+                self.header = if (id == hm.start) .role else if (id == hm.channel) .channel else .none;
+                self.name.clearRetainingCapacity();
+                return false;
+            }
+            if (self.header != .none)
+            {
+                try tokenizer.decode(gpa, tok, &.{id}, &self.name);
+                return false;
+            }
+        }
         if (think) |t|
         {
             if (id == t.open or id == t.close)
@@ -342,6 +388,13 @@ test "splits reasoning from content and stops on a stop token" {
 test "a prompt that opened the reasoning starts the reply on that channel" {
     const script = [_]u32{ '\n', 'h', 'm', 257, '\n', '\n', 'H', 'i', 258 };
     try expectRun(&script, .{ .stop_ids = &.{258}, .think = .{ .open = 256, .close = 257 }, .reasoning_first = true, .clock = fakeClock }, "Hi", "hm", .stop, 9);
+}
+
+test "gpt-oss's analysis channel is reasoning and its final channel content" {
+    // <|channel|>analysis<|message|>hm<|end|><|start|>assistant<|channel|>final<|message|>Hi, with the test tokenizer's ids.
+    const hm: Harmony = .{ .start = 259, .channel = 256, .message = 257, .end = 258 };
+    const script = [_]u32{ 256, 'a', 'n', 'a', 'l', 'y', 's', 'i', 's', 257, 'h', 'm', 258, 259, 'a', 's', 's', 'i', 's', 't', 'a', 'n', 't', 256, 'f', 'i', 'n', 'a', 'l', 257, 'H', 'i', 'Z' };
+    try expectRun(&script, .{ .stop_ids = &.{'Z'}, .harmony = hm, .clock = fakeClock }, "Hi", "hm", .stop, script.len);
 }
 
 test "stop strings end the reply before them, and a partial one is sent at the end" {

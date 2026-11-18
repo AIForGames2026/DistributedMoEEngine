@@ -595,7 +595,17 @@ const Loaded = struct {
             defer gpa.free(r);
             try ranges.appendSlice(gpa, r);
         }
-        for (selected.items) |w| try ranges.append(gpa, w.parts[0]);
+        // Every part: a GGUF expert's bias (gpt-oss) is part 1.
+        for (selected.items) |w|
+        {
+            for (w.parts) |r|
+            {
+                if (r.len > 0)
+                {
+                    try ranges.append(gpa, r);
+                }
+            }
+        }
         var plan = try loader.Plan.fromRanges(gpa, ranges.items, mf.alignment, mf.max_gap, file.bytes);
         errdefer plan.deinit(gpa);
 
@@ -2015,6 +2025,9 @@ fn modelName(cfg: olmoe.Config) []const u8
         .qwen35moe => "Qwen3.5-MoE",
         .qwen4exp => "Qwen3.8-Flash-Next",
         .glm5next => "GLM-5.3-Flash",
+        .mixtral => "Mixtral",
+        .deepseek2 => "DeepSeek V3",
+        .gptoss => "gpt-oss",
     };
 }
 

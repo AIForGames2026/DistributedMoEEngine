@@ -192,13 +192,23 @@ pub fn openModel(gpa: std.mem.Allocator, path: []const u8, file: File, config_pa
 }
 
 pub fn describe(m: loader.Model, path: []const u8, kind: []const u8) void {
+    // The first layer with experts: leading dense layers (DeepSeek, GLM) have none.
+    var layer: u32 = 0;
+    while (layer + 1 < m.layers and m.weight(layer, .gate, 0).parts[0].len == 0)
+    {
+        layer += 1;
+    }
     var expert_bytes: u64 = 0;
-    for (m.weights[0..3]) |w| {
-        for (w.parts) |r| expert_bytes += r.len;
+    for ([_]loader.Projection{ .gate, .up, .down }) |p|
+    {
+        for (m.weight(layer, p, 0).parts) |r|
+        {
+            expert_bytes += r.len;
+        }
     }
     std.debug.print("{s}: {s}, {d} layers x {d} experts, d_model {d}, d_ff {d}; gate/up/down {t}/{t}/{t}; {d:.2} MB per expert per layer\n", .{
-        std.fs.path.basename(path), kind,                        m.layers,                        m.experts,                                   m.d_model, m.d_ff,
-        m.weights[0].format,        m.weights[m.experts].format, m.weights[2 * m.experts].format, @as(f64, @floatFromInt(expert_bytes)) / 1e6,
+        std.fs.path.basename(path), kind, m.layers, m.experts, m.d_model, m.d_ff,
+        m.weight(layer, .gate, 0).format, m.weight(layer, .up, 0).format, m.weight(layer, .down, 0).format, @as(f64, @floatFromInt(expert_bytes)) / 1e6,
     });
 }
 

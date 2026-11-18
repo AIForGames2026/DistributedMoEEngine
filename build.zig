@@ -37,6 +37,15 @@ pub fn build(b: *std.Build) void {
     engine.addAnonymousImport("qwen38_tiny.tfref", .{ .root_source_file = b.path("tests/golden/qwen38_tiny.tfref") });
     engine.addAnonymousImport("glm53_tiny.gguf", .{ .root_source_file = b.path("tests/golden/glm53_tiny.gguf") });
     engine.addAnonymousImport("glm53_tiny.tfref", .{ .root_source_file = b.path("tests/golden/glm53_tiny.tfref") });
+    // TASK-39's three families, from tools/ref/ref_{mixtral,deepseek,gptoss}.py --tiny.
+    for ([_][]const u8{ "mixtral_tiny", "deepseek_tiny", "gptoss_tiny" }) |stem|
+    {
+        for ([_][]const u8{ ".gguf", ".tfref" }) |ext|
+        {
+            const name = b.fmt("{s}{s}", .{ stem, ext });
+            engine.addAnonymousImport(name, .{ .root_source_file = b.path(b.fmt("tests/golden/{s}", .{name})) });
+        }
+    }
     // The TCP transport uses Winsock on Windows.
     if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 

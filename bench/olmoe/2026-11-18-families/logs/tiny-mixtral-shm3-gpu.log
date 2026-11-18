@@ -1,0 +1,30 @@
+load: 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+load: 2 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+load: non-expert weights and 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+shm: prompt 0 (5 tokens, 4 ms): logits max err 1.67e-6 (last 5 positions), top-1 5/5, hidden max err 1.43e-6, experts chosen 20/20 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: prompt 1 (20 tokens, 2 ms): logits max err 2.64e-6 (last 20 positions), top-1 20/20, hidden max err 1.91e-6, experts chosen 80/80 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: prompt 2 (7 tokens, 2 ms): logits max err 2.38e-6 (last 7 positions), top-1 7/7, hidden max err 1.67e-6, experts chosen 28/28 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: PASS: Mixtral logits within 1e-2 of the PyTorch reference (worst 2.64e-6), every top-1 token identical
+shm: generate prompt 0: 16 tokens in 0.01 s (1125.7 tokens/s, prompt included)
+shm:   tokens: 204 74 33 204 212 164 233 157 157 157 157 157 196 33 13 200
+shm:   same as transformers' generate(): 16/16 tokens, logits max err 1.91e-6 at step 5 ok
+shm: generate prompt 1: 16 tokens in 0.01 s (1127.5 tokens/s, prompt included)
+shm:   tokens: 161 203 217 183 175 14 15 107 160 186 80 226 41 114 151 237
+shm:   same as transformers' generate(): 16/16 tokens, logits max err 2.80e-6 at step 5 ok
+shm: generate prompt 2: 16 tokens in 0.02 s (1043.2 tokens/s, prompt included)
+shm:   tokens: 235 38 121 248 236 171 249 43 16 182 162 249 43 16 213 75
+shm:   same as transformers' generate(): 16/16 tokens, logits max err 2.94e-6 at step 1 ok
+shm: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+shm: 276 expert calls sent to 2 peers, 160 run locally; payload f32
+shm: rank 1 (GX10-02): 153 expert calls
+shm: rank 2 (GX10-02): 123 expert calls
+expert: rank 2 ran 123 expert FFNs for rank 0 in 53 grouped jobs, expert: rank 1 ran 153 expert FFNs for rank 0 in 68 grouped jobs, 252 us each on average (max 1430 us), 0.01 s in all; resident memory 218 us each on average (max 1805 us), 0.01 s in all; resident memory 117 MB; 0 non-finite GPU outputs replaced by the CPU's
+117 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 46 allocations, 46 frees, peak 0.5 MB, 0 bytes still allocated at exitexpert: heap: 46 allocations, 46 frees, peak 0.5 MB, 0 bytes still allocated at exit (balanced)
+ (balanced)
+shm: heap: 236 allocations, 236 frees, peak 0.9 MB, 0 bytes still allocated at exit (balanced)

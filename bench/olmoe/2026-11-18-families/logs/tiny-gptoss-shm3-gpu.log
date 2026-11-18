@@ -1,0 +1,36 @@
+load: non-expert weights and 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+warning: gpu: a mxfp4 weight (64x64) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+load: 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+warning: gpu: a mxfp4 weight (64x64) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+load: 2 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+warning: gpu: a mxfp4 weight (64x64) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+shm: prompt 0 (5 tokens, 31 ms): logits max err 1.67e-6 (last 5 positions), top-1 5/5, hidden max err 2.15e-6, experts chosen 30/30 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: prompt 1 (20 tokens, 23 ms): logits max err 4.41e-6 (last 20 positions), top-1 20/20, hidden max err 5.48e-6, experts chosen 120/120 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: prompt 2 (7 tokens, 7 ms): logits max err 3.16e-6 (last 7 positions), top-1 7/7, hidden max err 3.46e-6, experts chosen 42/42 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: PASS: gpt-oss logits within 1e-2 of the PyTorch reference (worst 4.41e-6), every top-1 token identical
+shm: generate prompt 0: 16 tokens in 0.03 s (624.0 tokens/s, prompt included)
+shm:   tokens: 153 158 188 67 229 58 178 102 69 146 187 84 12 180 65 72
+shm:   same as transformers' generate(): 16/16 tokens, logits max err 1.17e-5 at step 8 ok
+shm: generate prompt 1: 16 tokens in 0.05 s (342.4 tokens/s, prompt included)
+shm:   tokens: 143 192 154 72 36 205 145 60 220 222 60 156 77 101 208 222
+shm:   same as transformers' generate(): 16/16 tokens, logits max err 6.56e-6 at step 2 ok
+shm: generate prompt 2: 16 tokens in 0.03 s (492.8 tokens/s, prompt included)
+shm:   tokens: 16 123 156 65 206 7 21 154 214 214 98 129 217 72 24 113
+shm:   same as transformers' generate(): 16/16 tokens, logits max err 2.68e-6 at step 1 ok
+shm: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+shm: 430 expert calls sent to 2 peers, 224 run locally; payload f32
+shm: rank 1 (GX10-02): 194 expert calls
+shm: rank 2 (GX10-02): 236 expert calls
+expert: rank 1 ran 194 expert FFNs for rank 0 in 95 grouped jobs, expert: rank 2 ran 236 expert FFNs for rank 0 in 108 grouped jobs, 849 us each on average (max 7973 us), 0.08 s in all; resident memory 117 MB; 0 non-finite GPU outputs replaced by the CPU's
+821 us each on average (max 8074 us), 0.09 s in all; resident memory 117 MB; 0 non-finite GPU outputs replaced by the CPU's
+gpu: 93 calls on mxfp4 weights ran on the CPU (biased)
+gpu: 95 calls on mxfp4 weights ran on the CPU (biased)
+gpu: 108 calls on mxfp4 weights ran on the CPU (biased)
+expert: heap: 48 allocations, 48 frees, peak 0.5 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 48 allocations, 48 frees, peak 0.5 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 238 allocations, 238 frees, peak 1.0 MB, 0 bytes still allocated at exit (balanced)

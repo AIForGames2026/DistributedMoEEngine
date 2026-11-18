@@ -24,6 +24,8 @@
 #define MM_BM 128 /* tf_mm_q8 and tf_mm_f32 */
 #define MM_BN 64
 #define MV_TOK 8 /* tf_mv_q8 */
+/* An expert with at most this many rows takes the matrix-vector (or 8-row Q4_K) kernels. */
+#define SMALL_ROWS MV_TOK
 #define TM_BM 64 /* tf_tm_q8 */
 #define TM_BN 64
 /* Calls that move at most this much go through pinned memory and wait once. */
@@ -462,7 +464,7 @@ int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const in
 
 int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
                    const int *first, const int *src, const int *inv, const float *w, const float *x, int n, int k,
-                   int d, int f, float *y, int fmt, float limit, int most_hint)
+                   int d, int f, float *y, int fmt, float limit)
 {
     if (groups <= 0 || n <= 0 || k <= 0 || d <= 0 || f <= 0 || d % 32 || f % 32)
     {
@@ -479,15 +481,35 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
     {
         return -1;
     }
-    // The caller's layer-wide count picks the kernels when this call holds only part of a layer.
-    int most = most_hint > 0 ? most_hint : 0;
+    // Each expert's kernels follow its own row count, so how calls are grouped never changes the rounding.
+    // Callers put the experts with at most SMALL_ROWS rows first; `small` counts them.
+    int small = 0;
+    while (small < groups && first[small + 1] - first[small] <= SMALL_ROWS)
+    {
+        small++;
+    }
+    int most_small = 0, most = 0, ordered = 1;
     for (int e = 0; e < groups; e++)
     {
-        if (first[e + 1] - first[e] > most)
+        const int cnt = first[e + 1] - first[e];
+        ordered = ordered && (e < small || cnt > SMALL_ROWS);
+        if (e < small && cnt > most_small)
         {
-            most = first[e + 1] - first[e];
+            most_small = cnt;
+        }
+        if (e >= small && cnt > most)
+        {
+            most = cnt;
         }
     }
+    if (!ordered)
+    {
+        // Unordered: the whole call takes the large experts' kernels, as before.
+        small = 0;
+        most = most > most_small ? most : most_small;
+        most_small = 0;
+    }
+    const int large = groups - small, row0 = first[small];
     const size_t calls = (size_t)n * k;
     const size_t tables = 3 * (size_t)groups * sizeof(uint64_t);
     const size_t meta = tables + ((size_t)groups + 1 + (size_t)rows + calls) * sizeof(int) + calls * sizeof(float);
@@ -541,26 +563,57 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
     {
         return -(int)r;
     }
+    // The large experts' tables and rows start after the small ones'.
+    CUdeviceptr gt2 = gt + small * sizeof(uint64_t), ut2 = ut + small * sizeof(uint64_t);
+    CUdeviceptr dt2 = dt + small * sizeof(uint64_t), dfirst2 = dfirst + small * sizeof(int);
+    CUdeviceptr eg2 = g->eg + (size_t)row0 * f * sizeof(float), eu2 = g->eu + (size_t)row0 * f * sizeof(float);
+    CUdeviceptr up2 = g->up2 + (size_t)row0 * sizeof(float);
     if (fmt == TF_GPU_Q4_K)
     {
         int count = rows * f;
-        void *ga[] = {&gt, &dfirst, &g->exg, &g->eg, &f, &d};
-        void *ua[] = {&ut, &dfirst, &g->exg, &g->eu, &f, &d};
         void *sa[] = {&g->eg, &g->eu, &count, &limit};
-        void *da[] = {&dt, &dfirst, &g->eg, &g->ey, &d, &f};
         CUfunction act = limit > 0 ? g->silu_mul_clamp : g->silu_mul;
-        // Past 8 inputs per expert, the wide kernel's blocks cover 32 rows instead of 8.
-        const CUfunction mm = most > 8 ? g->q4k_grouped_wide : g->q4k_grouped;
-        const int span = most > 8 ? 32 : 8;
-        if ((r = cuLaunchKernel(mm, (unsigned)((f + span - 1) / span), 1, (unsigned)groups, 256, 1, 1, 0, 0, ga, NULL)) !=
-                CUDA_SUCCESS ||
-            (r = cuLaunchKernel(mm, (unsigned)((f + span - 1) / span), 1, (unsigned)groups, 256, 1, 1, 0, 0, ua, NULL)) !=
-                CUDA_SUCCESS ||
-            (r = cuLaunchKernel(act, (unsigned)((count + 255) / 256), 1, 1, 256, 1, 1, 0, 0, sa, NULL)) != CUDA_SUCCESS ||
-            (r = cuLaunchKernel(mm, (unsigned)((d + span - 1) / span), 1, (unsigned)groups, 256, 1, 1, 0, 0, da, NULL)) !=
-                CUDA_SUCCESS)
+        // Small experts take the 8-row kernel; the rest the wide one, whose blocks cover 32 rows.
+        for (int pass = 0; pass < 2; pass++)
+        {
+            const int sets = pass == 0 ? small : large;
+            if (sets == 0)
+            {
+                continue;
+            }
+            CUdeviceptr *tg = pass == 0 ? &gt : &gt2, *tu = pass == 0 ? &ut : &ut2, *tf = pass == 0 ? &dfirst : &dfirst2;
+            const CUfunction mm = pass == 0 ? g->q4k_grouped : g->q4k_grouped_wide;
+            const int span = pass == 0 ? 8 : 32;
+            void *ga[] = {tg, tf, &g->exg, &g->eg, &f, &d};
+            void *ua[] = {tu, tf, &g->exg, &g->eu, &f, &d};
+            if ((r = cuLaunchKernel(mm, (unsigned)((f + span - 1) / span), 1, (unsigned)sets, 256, 1, 1, 0, 0, ga, NULL)) !=
+                    CUDA_SUCCESS ||
+                (r = cuLaunchKernel(mm, (unsigned)((f + span - 1) / span), 1, (unsigned)sets, 256, 1, 1, 0, 0, ua, NULL)) !=
+                    CUDA_SUCCESS)
+            {
+                return -(int)r;
+            }
+        }
+        if ((r = cuLaunchKernel(act, (unsigned)((count + 255) / 256), 1, 1, 256, 1, 1, 0, 0, sa, NULL)) != CUDA_SUCCESS)
         {
             return -(int)r;
+        }
+        for (int pass = 0; pass < 2; pass++)
+        {
+            const int sets = pass == 0 ? small : large;
+            if (sets == 0)
+            {
+                continue;
+            }
+            CUdeviceptr *td = pass == 0 ? &dt : &dt2, *tf = pass == 0 ? &dfirst : &dfirst2;
+            const CUfunction mm = pass == 0 ? g->q4k_grouped : g->q4k_grouped_wide;
+            const int span = pass == 0 ? 8 : 32;
+            void *da[] = {td, tf, &g->eg, &g->ey, &d, &f};
+            if ((r = cuLaunchKernel(mm, (unsigned)((d + span - 1) / span), 1, (unsigned)sets, 256, 1, 1, 0, 0, da, NULL)) !=
+                CUDA_SUCCESS)
+            {
+                return -(int)r;
+            }
         }
     }
     else if (g->mm_kernel == 1)
@@ -588,23 +641,25 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
             }
         }
     }
-    else if (most <= MV_TOK)
+    else
     {
+        // Small experts: the matrix-vector kernels, gate, up and SwiGLU fused.
         void *args[] = {&gt, &ut, &dfirst, &g->exg, &g->eg, &f, &d};
-        if ((r = cuLaunchKernel(g->mv_gateup, (unsigned)((f + 7) / 8), 1, (unsigned)groups, 256, 1, 1, 0, 0, args,
-                                NULL)) != CUDA_SUCCESS ||
-            (r = launch_mm(g, TF_GPU_Q8_0, 0, dt, dfirst, groups, most, 0, g->eg, g->ey, d, f)) != CUDA_SUCCESS)
+        if (small > 0 &&
+            ((r = cuLaunchKernel(g->mv_gateup, (unsigned)((f + 7) / 8), 1, (unsigned)small, 256, 1, 1, 0, 0, args, NULL)) !=
+                 CUDA_SUCCESS ||
+             (r = launch_mm(g, TF_GPU_Q8_0, 0, dt, dfirst, small, most_small, 0, g->eg, g->ey, d, f)) != CUDA_SUCCESS))
         {
             return -(int)r;
         }
-    }
-    else
-    {
-        void *sargs[] = {&g->eg, &g->eu, &f, &g->up2};
-        if ((r = launch_mm(g, TF_GPU_Q8_0, 0, gt, dfirst, groups, most, g->up, g->exg, g->eg, f, d)) != CUDA_SUCCESS ||
-            (r = launch_mm(g, TF_GPU_Q8_0, 0, ut, dfirst, groups, most, g->up, g->exg, g->eu, f, d)) != CUDA_SUCCESS ||
-            (r = cuLaunchKernel(g->silu_rows, (unsigned)rows, 1, 1, 256, 1, 1, 0, 0, sargs, NULL)) != CUDA_SUCCESS ||
-            (r = launch_mm(g, TF_GPU_Q8_0, 0, dt, dfirst, groups, most, g->up2, g->eg, g->ey, d, f)) != CUDA_SUCCESS)
+        // The rest: tiled kernels, with SwiGLU per row in between.
+        void *sargs[] = {&eg2, &eu2, &f, &up2};
+        if (large > 0 &&
+            ((r = launch_mm(g, TF_GPU_Q8_0, 0, gt2, dfirst2, large, most, g->up, g->exg, g->eg, f, d)) != CUDA_SUCCESS ||
+             (r = launch_mm(g, TF_GPU_Q8_0, 0, ut2, dfirst2, large, most, g->up, g->exg, g->eu, f, d)) != CUDA_SUCCESS ||
+             (r = cuLaunchKernel(g->silu_rows, (unsigned)(rows - row0), 1, 1, 256, 1, 1, 0, 0, sargs, NULL)) !=
+                 CUDA_SUCCESS ||
+             (r = launch_mm(g, TF_GPU_Q8_0, 0, dt2, dfirst2, large, most, g->up2, g->eg, g->ey, d, f)) != CUDA_SUCCESS))
         {
             return -(int)r;
         }

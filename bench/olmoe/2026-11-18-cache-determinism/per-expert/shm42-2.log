@@ -1,0 +1,14 @@
+load: 64 of 128 experts, 15.40 GB in 5.96 s, expert CRC32C OK
+load: non-expert weights and 64 of 128 experts, 17.08 GB in 6.24 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (15.40 GB in 0.40 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 15540 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (17.08 GB in 0.45 s)
+shm: context 1024 tokens + 128 generated, chunks of 2048; KV cache all in memory, f32, 196608 bytes per token: 0.23 GB in memory (all of it would be 0.23 GB), GPU attention on
+shm: prefill time: projections 0.1 s, QK norm and rope 0.1 s, attention 0.1 s, Gated DeltaNet 0.0 s, output 0.2 s, router 0.1 s, experts 1.7 s, LM head 0.0 s
+shm: decode time: projections 1.0 s, QK norm and rope 0.0 s, attention 0.4 s, Gated DeltaNet 0.0 s, output 0.4 s, router 0.2 s, experts 2.7 s, LM head 0.3 s
+shm: time to first token 2.262 s (453 tokens/s prefill); decode 0.040 s per token (25.23 tokens/s) over 127 steps from position 1024; resident memory 17685 MB
+shm: PASS: all 128 generated tokens and their logits match bench-t41/det43/ref42.ref bit for bit
+shm: 222157 expert calls sent to 1 peer, 219827 run locally; payload f32
+expert: rank 1 ran 222157 expert FFNs for rank 0 in 6129 grouped jobs, 366 us each on average (max 87009 us), 2.24 s in all; resident memory 15723 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 60 allocations, 60 frees, peak 691.9 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 457 allocations, 457 frees, peak 1020.2 MB, 0 bytes still allocated at exit (balanced)

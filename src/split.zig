@@ -103,8 +103,6 @@ const Grouped = struct {
     ones: []f32,
     xg: []f32,
     yg: []f32,
-    /// The most calls any expert has in this layer, so every job of the layer picks the same kernels.
-    most: usize = 0,
 
     fn init(gpa: std.mem.Allocator, cfg: olmoe.Config, calls: usize) !*Grouped
     {
@@ -360,13 +358,11 @@ pub const Experts = struct {
             }
         }
         var at: u32 = 0;
-        g.most = 0;
         for (0..ne) |e|
         {
             g.start[e] = at;
             g.fill[e] = at;
             at += g.count[e];
-            g.most = @max(g.most, g.count[e]);
         }
         g.start[ne] = at;
         for (0..n * k) |s|
@@ -458,6 +454,17 @@ pub const Experts = struct {
     fn runBatch(self: *Experts, g: *Grouped, layer: usize, x: []const f32, idx: []const u32, k: usize, contrib: []f32, m: usize) usize
     {
         const d = self.local.cfg.d_model;
+        // Experts with few calls first, as the GPU's kernels expect (gpu_small_rows).
+        var few: usize = 0;
+        for (0..m) |j|
+        {
+            if (g.count[g.held_expert[j]] <= olmoe.gpu_small_rows)
+            {
+                std.mem.swap(ExpertCache.Held, &g.held[j], &g.held[few]);
+                std.mem.swap(u32, &g.held_expert[j], &g.held_expert[few]);
+                few += 1;
+            }
+        }
         var rows: usize = 0;
         for (0..m) |j|
         {
@@ -482,7 +489,6 @@ pub const Experts = struct {
             .n = rows,
             .k = 1,
             .y = g.yg[0 .. rows * d],
-            .most = g.most,
         });
         for (0..m) |j|
         {

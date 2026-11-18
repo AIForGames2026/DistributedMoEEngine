@@ -89,11 +89,11 @@ int tf_gpu_qsa(tf_gpu *g, const float *q, const float *iq, int n, int pos0, int 
                int bsize, int top, float scale, uint64_t blocks, const uint64_t *tiles_k, const uint64_t *tiles_v, int tiles,
                float *out, int *kept);
 
-/* One layer's experts for n tokens, k calls each (see olmoe.ExpertJob). `most`, if larger
- * than any expert's rows here, picks the kernels, so a layer split into calls rounds as one. */
+/* One layer's experts for n tokens, k calls each (see olmoe.ExpertJob). Experts with at most 8
+ * rows must come first; each expert's kernels follow its own row count. */
 int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
                    const int *first, const int *src, const int *inv, const float *w, const float *x, int n, int k,
-                   int d, int f, float *y, int fmt, float limit, int most);
+                   int d, int f, float *y, int fmt, float limit);
 
 /* Attention kernel: 1 first, 2 wide, 3 and 4 tensor cores (64 or 128 rows), 5 decode,
  * 0 chosen by shape (default; TF_ATT_KERNEL sets it). Returns the previous choice. */

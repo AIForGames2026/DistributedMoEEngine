@@ -393,6 +393,10 @@ pub const DeltaJob = struct {
     n: usize,
 };
 
+/// An expert with at most this many rows in a GPU job runs on the small-batch kernels (SMALL_ROWS in tf_gpu.c).
+/// A job lists those experts first.
+pub const gpu_small_rows = 8;
+
 /// One layer's experts for `n` tokens with `k` calls each: batch row i is token src[i],
 /// and y[t] adds call j's batch row inv[t k + j] times w[t k + j], in order.
 pub const ExpertJob = struct {
@@ -405,9 +409,6 @@ pub const ExpertJob = struct {
     n: usize,
     k: usize,
     y: []f32,
-    /// The most rows any expert of the whole layer has, when this job holds only some of its experts.
-    /// Kernels are chosen by it, so how a layer is split into jobs never changes the rounding.
-    most: usize = 0,
 };
 
 /// Set with a GPU (TASK-12): runs one layer's attention there and returns
@@ -3128,7 +3129,7 @@ pub const LocalExperts = struct {
         const inv: []u32 = @ptrCast(self.batch[calls..][0..calls]);
         const sum = self.batch[2 * calls ..][0 .. n * d];
         // Calls grouped by expert, each group in call order; dropped calls get no row.
-        var count: [max_group + 1]u32 = @splat(0);
+        var count: [max_group]u32 = @splat(0);
         var rows: usize = 0;
         for (idx[0..calls]) |e|
         {
@@ -3140,15 +3141,25 @@ pub const LocalExperts = struct {
             {
                 return error.BadExpert;
             }
-            count[e + 1] += 1;
+            count[e] += 1;
             rows += 1;
         }
-        for (1..ne + 1) |e|
+        // Experts with few calls come first, as the GPU's kernels expect (gpu_small_rows).
+        var start: [max_group]u32 = undefined;
+        var at: u32 = 0;
+        for ([_]bool{ true, false }) |few|
         {
-            count[e] += count[e - 1];
+            for (0..ne) |e|
+            {
+                if (count[e] > 0 and (count[e] <= gpu_small_rows) == few)
+                {
+                    start[e] = at;
+                    at += count[e];
+                }
+            }
         }
         var fill: [max_group]u32 = undefined;
-        @memcpy(fill[0..ne], count[0..ne]);
+        @memcpy(fill[0..ne], start[0..ne]);
         for (idx[0..calls], 0..) |e, c|
         {
             if (e == Capacity.skip)
@@ -3165,15 +3176,18 @@ pub const LocalExperts = struct {
         var used: [max_group]Expert = undefined;
         var starts: [max_group + 1]u32 = undefined;
         var groups: usize = 0;
-        for (0..ne) |e|
+        for ([_]bool{ true, false }) |few|
         {
-            if (count[e + 1] == count[e])
+            for (0..ne) |e|
             {
-                continue;
+                if (count[e] == 0 or (count[e] <= gpu_small_rows) != few)
+                {
+                    continue;
+                }
+                used[groups] = self.get(layer, e) orelse return error.ExpertNotLocal;
+                starts[groups] = start[e];
+                groups += 1;
             }
-            used[groups] = self.get(layer, e) orelse return error.ExpertNotLocal;
-            starts[groups] = count[e];
-            groups += 1;
         }
         starts[groups] = @intCast(rows);
         if (rows == 0)

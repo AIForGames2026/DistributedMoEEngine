@@ -1,0 +1,9 @@
+load: non-expert weights and 128 of 128 experts (through the expert cache), 1.68 GB in 0.36 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.68 GB in 0.04 s)
+local: expert cache: 3000 slots (15.11 GB), 2 loader threads, 128 experts of layers below 1 loaded and kept in 0.87 s; cached experts run on the GPU
+local: prompt 0 (5 tokens, 1714 ms): logits max err 1.87e-4 (last 5 positions), top-1 5/5, hidden max err 1.34e-3, experts chosen 1920/1920 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (17 tokens, 1713 ms): logits max err 2.80e-4 (last 17 positions), top-1 17/17, hidden max err 1.95e-3, experts chosen 6528/6528 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 1564 ms): logits max err 1.07e-4 (last 15 positions), top-1 15/15, hidden max err 1.83e-3, experts chosen 5760/5760 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 2.80e-4), every top-1 token identical
+local: expert cache: 5459 expert calls: 27.1% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 72.9% missed; 10602 calls set aside while others ran; 4439.8 ms with nothing to run but loads; 4110 loads (0 for hints, 20.61 GB, 2.35 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 105 allocations, 105 frees, peak 488.3 MB, 0 bytes still allocated at exit (balanced)

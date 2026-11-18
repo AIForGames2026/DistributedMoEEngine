@@ -11,7 +11,9 @@ Two separate differences, both on the GPU path only:
 
 ## Fix
 
-- `ExpertJob` carries `most`, the largest count of any expert in the whole layer, which `runGrouped` computes before splitting the layer into jobs. `tf_gpu_experts` takes the larger of it and its own count, so every job of a layer picks the kernels a single job would (`src/olmoe.zig`, `src/split.zig`, `src/gpu.zig`, `csrc/tf_gpu.c`, `include/tf_gpu.h`). Raising it is safe: the kernels read each expert's rows from `first[]` and stop past them.
+First version (later replaced by per-expert kernel choice, below):
+
+- `ExpertJob` carried `most`, the largest count of any expert in the whole layer, which `runGrouped` computed before splitting the layer into jobs; `tf_gpu_experts` took the larger of it and its own count, so every job of a layer picked the kernels a single job would.
 - With a GPU, `addInOrder` sums each token's calls first with fused multiply-adds, then adds the sum to the residual, as the GPU's combine does. It serves both the cache path and rank 0 of a split. CPU-only runs keep the old order, so TASK-33's bit-for-bit CPU results stand.
 
 ## Checks on `gx10-02`
@@ -34,6 +36,27 @@ The "after" rows compare against an all-in-memory GPU run (`after-d0.log`). With
 - OLMoE-1B-7B split over shared memory with `--gpu --payload f32` passes, as before (`olmoe-shm32-t42.log`). With the default fp8 payload it fails with or without the fix.
 - GLM-5.3-Flash: the long prompt's top-1 at position 2598 now differs. Transformers' own top two there are 0.005 apart, while the long prompt's logits differ from transformers by 3.7. The user chose to excuse long-prompt top-1 differences where transformers' top two are less than 0.1 apart (TASK-32's amended criteria); the next closest position is 0.059 apart and every other one over 0.15. With that, it passes forward and generation (`glm53-tie.log`). The golden check now prints each differing top-1 with transformers' gap there.
 
-## Not covered
+## Follow-up the same day: kernels chosen per expert
 
-An expert rank (`serveGrouped`) gathers calls from rank 0 until its queue is idle, so its GPU jobs can also mix experts by timing. Its jobs do not know the layer's full count, so a split across machines on the GPU may still vary in rounding between runs. Rank 0's own share is now fixed.
+The layer-wide count above could not reach an expert rank: `serveGrouped` gathers calls from rank 0 until its queue is idle, so its jobs never see a layer's full count. The user chose the general fix instead, which replaces the layer-wide count:
+
+- `tf_gpu_experts` picks each expert's kernels from that expert's own row count: up to 8 rows (`SMALL_ROWS`, the old `MV_TOK` cut) the matrix-vector kernels (Q8_0) or the 8-row kernel (Q4_K), above that the tiled or wide kernels. A job holding both kinds launches both, the small experts' on the first part of the expert table and rows, the rest on the second. No kernel changed. How calls are grouped into jobs can no longer change any expert's rounding, on rank 0 or an expert rank.
+- Callers list the small experts first (`gpu_small_rows` in `src/olmoe.zig`): `LocalExperts.run` lays out its rows in two passes, and `runBatch` partitions its held experts. A job that is not ordered falls back to the old rule for the whole job instead of failing.
+- Grouping itself is unchanged: ready experts still go to the GPU together.
+
+This changes all-in-memory rounding too: an expert with 8 or fewer rows in a prefill whose largest expert has more now runs on the matrix-vector kernels.
+
+**Checks** (build `t43`, logs in `2026-11-18-cache-determinism/per-expert/`), the same Qwen3-30B-A3B run against an all-in-memory GPU run of the new build:
+
+| Run | Result |
+|---|---|
+| All in memory, again | identical |
+| Cache of 3,000 slots | identical |
+| Cache with `--lookahead 1` | identical |
+| Two processes over shared memory (`--payload f32`), twice | identical |
+
+The two-process split matched with the previous build too (`shm42-*.log`), so this test never caught the expert rank mixing kernels; the change rules it out rather than fixing an observed difference.
+
+**Speed**, decode at 1,024 tokens of context: all in memory, 36.24 tokens/s on average over five runs against 36.43 for the previous build (whose own runs spread from 35.98 to 36.58); with the cache, 18.74 and 18.75 against 18.51 and 19.11. First token unchanged (about 1.0 s in memory, 6.6 s through the cache).
+
+**Goldens** (`per-expert/*.log`): OLMoE-1B-7B in one process and over shared memory (`--payload f32`), Qwen3-30B-A3B in memory, through the cache and with YaRN, and GLM-5.3-Flash (forward with its one near-tie, and generation) all pass. Qwen3.6-35B-A3B passes forward, but its generation check fails at step 3 (logits 0.335 apart, all 32 tokens the same), with this build and both earlier ones (`qwen36-t41.log`, `qwen36-t42.log`). That step is the exact router tie in transformers recorded in TASK-29; its golden file predates TASK-31's router gaps (`gen_gaps`), so the near-tie rule cannot excuse it. Regenerating that golden is left as its own task.

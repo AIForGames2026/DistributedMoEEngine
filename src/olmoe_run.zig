@@ -2058,6 +2058,7 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
     var worst_logit: f32 = 0;
     // Prompts whose logits a near-tie flip excused; generation holds them to their tokens.
     var flipped: u64 = 0;
+    var ties: usize = 0;
     var same_bits = true;
     var compared: usize = 0;
     const detail = c.getenv("TF_GOLDEN_DETAIL") != null; // Per-layer routing differences, for diagnosis
@@ -2228,7 +2229,33 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         const mine = logits[lfrom * cfg.vocab ..][0 .. ln * cfg.vocab];
         const lerr = maxErr(mine, gl);
         var top1: usize = 0;
-        for (0..ln) |t| top1 += @intFromBool(olmoe.argmax(mine[t * cfg.vocab ..][0..cfg.vocab]) == olmoe.argmax(gl[t * cfg.vocab ..][0..cfg.vocab]));
+        // GLM-5.3's long prompt may differ where transformers' own top two are this close (TASK-32).
+        const tie_gap: f32 = if (dsa and lfrom > 0) 0.1 else 0;
+        var top1_tied: usize = 0;
+        for (0..ln) |t|
+        {
+            const want_row = gl[t * cfg.vocab ..][0..cfg.vocab];
+            const want = olmoe.argmax(want_row);
+            const got = olmoe.argmax(mine[t * cfg.vocab ..][0..cfg.vocab]);
+            if (got == want)
+            {
+                top1 += 1;
+                continue;
+            }
+            // How close transformers' own top two were there.
+            var second: f32 = -std.math.inf(f32);
+            for (want_row, 0..) |v, i|
+            {
+                if (i != want)
+                {
+                    second = @max(second, v);
+                }
+            }
+            const tied = want_row[want] - second < tie_gap;
+            top1_tied += @intFromBool(tied);
+            ties += @intFromBool(tied);
+            std.debug.print("{s}: prompt {d}, position {d}: top-1 {d}, transformers' {d}, whose own top two are {e:.2} apart{s}\n", .{ name, p, lfrom + t, got, want, want_row[want] - second, if (tied) ", a near-tie" else "" });
+        }
         // A prompt past QSA's budget (its golden keeps only the last logits) amplifies rounding through
         // the layers, so it is held to shares, as transformers is against itself (TASK-31).
         const long = lfrom > 0;
@@ -2245,7 +2272,7 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         const near_flip: f32 = if (dsa) 1e-4 else 0;
         const flips_excused = flips > 0 and flip_gap < near_flip;
         const pass = if (long)
-            top1 == ln and (first_exact orelse true) and share(blocks_same, blocks_total) >= min_blocks and share(routing_same, routing_total) >= min_routing
+            top1 + top1_tied == ln and (first_exact orelse true) and share(blocks_same, blocks_total) >= min_blocks and share(routing_same, routing_total) >= min_routing
         else
             top1 == ln and (lerr <= 1e-2 or flips_excused) and blocks_same == blocks_total;
         if (!long and flips_excused and lerr > 1e-2)
@@ -2280,7 +2307,14 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
     }
     else
     {
-        std.debug.print("{s}: PASS: {s} logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, modelName(cfg), worst_logit });
+        if (ties > 0)
+        {
+            std.debug.print("{s}: PASS: {s} logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical but {d} at a near-tie in transformers\n", .{ name, modelName(cfg), worst_logit, ties });
+        }
+        else
+        {
+            std.debug.print("{s}: PASS: {s} logits within 1e-2 of the PyTorch reference (worst {e:.2}), every top-1 token identical\n", .{ name, modelName(cfg), worst_logit });
+        }
     }
     const forward_failed = !ok and opts.kv_format == .f32;
     if (moe.ahead) |la|

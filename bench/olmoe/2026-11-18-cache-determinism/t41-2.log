@@ -1,0 +1,9 @@
+load: non-expert weights and 128 of 128 experts (through the expert cache), 1.68 GB in 0.26 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.68 GB in 0.04 s)
+local: expert cache: 3000 slots (15.11 GB), 2 loader threads, 128 experts of layers below 1 loaded and kept in 0.84 s; cached experts run on the GPU
+local: context 1024 tokens + 128 generated, chunks of 2048; KV cache all in memory, f32, 196608 bytes per token: 0.23 GB in memory (all of it would be 0.23 GB), GPU attention on
+local: prefill time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.1 s, Gated DeltaNet 0.0 s, output 0.2 s, router 0.0 s, experts 5.4 s, LM head 0.0 s
+local: decode time: projections 0.5 s, QK norm and rope 0.0 s, attention 0.4 s, Gated DeltaNet 0.0 s, output 0.4 s, router 0.2 s, experts 4.9 s, LM head 0.3 s
+local: time to first token 5.892 s (174 tokens/s prefill); decode 0.053 s per token (18.78 tokens/s) over 127 steps from position 1024; resident memory 17439 MB
+local: expert cache: 54163 expert calls: 85.2% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 14.8% missed; 387746 calls set aside while others ran; 6616.8 ms with nothing to run but loads; 8123 loads (0 for hints, 40.72 GB, 1.88 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 466 allocations, 466 frees, peak 809.8 MB, 0 bytes still allocated at exit (balanced)

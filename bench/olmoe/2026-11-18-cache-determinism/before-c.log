@@ -1,0 +1,11 @@
+load: non-expert weights and 128 of 128 experts (through the expert cache), 1.68 GB in 0.27 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.68 GB in 0.04 s)
+local: expert cache: 3000 slots (15.11 GB), 2 loader threads, 128 experts of layers below 1 loaded and kept in 0.83 s; cached experts run on the GPU
+local: context 1024 tokens + 128 generated, chunks of 2048; KV cache all in memory, f32, 196608 bytes per token: 0.23 GB in memory (all of it would be 0.23 GB), GPU attention on
+local: prefill time: projections 0.1 s, QK norm and rope 0.1 s, attention 0.1 s, Gated DeltaNet 0.0 s, output 0.4 s, router 0.1 s, experts 4.4 s, LM head 0.0 s
+local: decode time: projections 0.5 s, QK norm and rope 0.0 s, attention 0.4 s, Gated DeltaNet 0.0 s, output 0.6 s, router 0.2 s, experts 4.0 s, LM head 0.3 s
+local: time to first token 5.102 s (201 tokens/s prefill); decode 0.048 s per token (20.80 tokens/s) over 127 steps from position 1024; resident memory 17439 MB
+local: FAIL: generated tokens match (128 of 128 the same before the first difference), logits differ (by up to 7.88e-4 through it) compared with bench-t41/det/a.ref
+local: expert cache: 54163 expert calls: 84.5% already loaded, 3.0% loaded by a hint in time, 3.1% hinted but still loading, 9.4% missed; 164039 calls set aside while others ran; 4867.9 ms with nothing to run but loads; 9077 loads (3858 for hints, 45.51 GB, 1.87 ms each); 277 hinted experts evicted unused; 5596 hints dropped as stale, 0 for a full queue
+local: heap: 468 allocations, 468 frees, peak 887.6 MB, 0 bytes still allocated at exit (balanced)
+error: CompareFailed

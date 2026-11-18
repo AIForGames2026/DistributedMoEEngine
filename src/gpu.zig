@@ -24,7 +24,7 @@ extern fn tf_gpu_unregister(g: *Handle, host: *anyopaque) void;
 extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int, hd: c_int) c_int;
 extern fn tf_gpu_qsa(g: *Handle, q: [*]const f32, iq: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, ih: c_int, dim: c_int, bsize: c_int, top: c_int, scale: f32, blocks: u64, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, out: [*]f32, kept: ?[*]i32) c_int;
 extern fn tf_gpu_delta_rule(g: *Handle, mixed: [*]const f32, beta: [*]const f32, decay: [*]const f32, n: c_int, cd: c_int, kh: c_int, dk: c_int, vh: c_int, dv: c_int, state: u64, core: [*]f32) c_int;
-extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32, fmt: c_int, limit: f32) c_int;
+extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32, fmt: c_int, limit: f32, most: c_int) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
 extern fn tf_gpu_device_bytes() usize;
 
@@ -313,7 +313,7 @@ fn experts(job: olmoe.ExpertJob) bool
     }
     first[job.experts.len] = @intCast(job.first[job.experts.len]);
     const e0 = job.experts[0];
-    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, @ptrCast(job.src.ptr), @ptrCast(job.inv.ptr), job.w.ptr, job.x.ptr, @intCast(job.n), @intCast(job.k), @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr, if (e0.gate.format == .q4_k) 2 else 0, olmoe.swiglu_limit);
+    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, @ptrCast(job.src.ptr), @ptrCast(job.inv.ptr), job.w.ptr, job.x.ptr, @intCast(job.n), @intCast(job.k), @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr, if (e0.gate.format == .q4_k) 2 else 0, olmoe.swiglu_limit, @intCast(job.most));
     if (rc != 0)
     {
         std.log.err("gpu: expert batch failed ({d}); using the CPU from here on", .{-rc});

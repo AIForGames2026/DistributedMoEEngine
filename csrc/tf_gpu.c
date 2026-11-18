@@ -462,7 +462,7 @@ int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const in
 
 int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
                    const int *first, const int *src, const int *inv, const float *w, const float *x, int n, int k,
-                   int d, int f, float *y, int fmt, float limit)
+                   int d, int f, float *y, int fmt, float limit, int most_hint)
 {
     if (groups <= 0 || n <= 0 || k <= 0 || d <= 0 || f <= 0 || d % 32 || f % 32)
     {
@@ -479,7 +479,8 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
     {
         return -1;
     }
-    int most = 0;
+    // The caller's layer-wide count picks the kernels when this call holds only part of a layer.
+    int most = most_hint > 0 ? most_hint : 0;
     for (int e = 0; e < groups; e++)
     {
         if (first[e + 1] - first[e] > most)

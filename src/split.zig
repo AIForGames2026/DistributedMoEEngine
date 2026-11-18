@@ -103,6 +103,8 @@ const Grouped = struct {
     ones: []f32,
     xg: []f32,
     yg: []f32,
+    /// The most calls any expert has in this layer, so every job of the layer picks the same kernels.
+    most: usize = 0,
 
     fn init(gpa: std.mem.Allocator, cfg: olmoe.Config, calls: usize) !*Grouped
     {
@@ -358,11 +360,13 @@ pub const Experts = struct {
             }
         }
         var at: u32 = 0;
+        g.most = 0;
         for (0..ne) |e|
         {
             g.start[e] = at;
             g.fill[e] = at;
             at += g.count[e];
+            g.most = @max(g.most, g.count[e]);
         }
         g.start[ne] = at;
         for (0..n * k) |s|
@@ -478,6 +482,7 @@ pub const Experts = struct {
             .n = rows,
             .k = 1,
             .y = g.yg[0 .. rows * d],
+            .most = g.most,
         });
         for (0..m) |j|
         {
@@ -553,11 +558,38 @@ pub const Experts = struct {
     }
 };
 
-/// Adds each call's output, weighted, in (token, choice) order.
+/// Adds each call's output, weighted, in (token, choice) order. With a GPU, a token's calls are
+/// summed first with fused multiply-adds, as the GPU's own combine does, so results match one process.
 fn addInOrder(cfg: olmoe.Config, n: usize, idx: []const u32, w: []const f32, contrib: []const f32, out: []f32) void
 {
     const d = cfg.d_model;
     const k = cfg.top_k;
+    var row: [16384]f32 = undefined;
+    if (olmoe.gpu_experts != null and d <= row.len)
+    {
+        const sum = row[0..d];
+        for (0..n) |t|
+        {
+            @memset(sum, 0);
+            for (0..k) |j|
+            {
+                const s = t * k + j;
+                if (idx[s] == olmoe.Capacity.skip)
+                {
+                    continue;
+                }
+                for (sum, contrib[s * d ..][0..d]) |*a, y|
+                {
+                    a.* = @mulAdd(f32, w[s], y, a.*);
+                }
+            }
+            for (out[t * d ..][0..d], sum) |*o, v|
+            {
+                o.* += v;
+            }
+        }
+        return;
+    }
     for (0..n) |t|
     {
         for (0..k) |j|

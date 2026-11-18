@@ -405,6 +405,9 @@ pub const ExpertJob = struct {
     n: usize,
     k: usize,
     y: []f32,
+    /// The most rows any expert of the whole layer has, when this job holds only some of its experts.
+    /// Kernels are chosen by it, so how a layer is split into jobs never changes the rounding.
+    most: usize = 0,
 };
 
 /// Set with a GPU (TASK-12): runs one layer's attention there and returns

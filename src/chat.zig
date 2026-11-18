@@ -13,7 +13,11 @@
 //!     that opens the reply's <think>
 //!   glm (GLM-5.3-Flash, TASK-32): [gMASK]<sop>, a reasoning-effort system turn,
 //!     <|user|>Hi, <|assistant|><think>...</think>reply, and a prompt that opens <think>
+//!
+//! Since TASK-38 `Chat` renders the GGUF's own Jinja template (src/jinja.zig) and
+//! keeps these formats as a fallback for a template the interpreter refuses.
 const std = @import("std");
+const jinja = @import("jinja.zig");
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 
 pub const Format = enum { tulu, qwen3, qwen3_release, qwen38, glm };
@@ -36,8 +40,8 @@ pub const Options = struct {
     add_generation_prompt: bool = true,
     /// Qwen3's `enable_thinking`: false asks for a reply without reasoning; null leaves it unset.
     thinking: ?bool = null,
-    /// Qwen3.8 only, and only while thinking is on.
-    effort: Effort = .xhigh,
+    /// `reasoning_effort`, when the client set it; each template has its own default.
+    effort: ?Effort = null,
 };
 
 /// Whether the prompt itself opens the reply's reasoning, so generation starts inside it.
@@ -121,10 +125,174 @@ pub fn render(gpa: std.mem.Allocator, format: Format, messages: []const Message,
     }
 }
 
+/// A model's chat prompt (TASK-38): the GGUF's own Jinja template, rendered as
+/// transformers does, or else one of the hand-written formats above.
+pub const Chat = struct {
+    arena: std.heap.ArenaAllocator,
+    template: ?jinja.Template = null,
+    format: ?Format = null,
+    /// Why the template could not be used, when it could not.
+    refused: []const u8 = "",
+    /// bos_token, eos_token and the like, as transformers passes them to the template.
+    specials: jinja.Dict = .empty,
+    /// Whether replies may hold reasoning between <think> and </think>.
+    thinks: bool = false,
+
+    /// From the tokenizer's chat template and special tokens.
+    pub fn init(gpa: std.mem.Allocator, tok: *const Tokenizer) !Chat {
+        var c: Chat = .{ .arena = std.heap.ArenaAllocator.init(gpa) };
+        errdefer c.arena.deinit();
+        const a = c.arena.allocator();
+        const names = [_]struct { []const u8, ?u32 }{ .{ "bos_token", tok.bos }, .{ "eos_token", tok.eos }, .{ "unk_token", tok.unk }, .{ "pad_token", tok.pad } };
+        for (names) |n|
+        {
+            if (n[1]) |id|
+            {
+                if (tok.piece(id).len > 0)
+                {
+                    try c.specials.put(a, n[0], .{ .string = tok.piece(id) });
+                }
+            }
+        }
+        if (tok.chat_template) |t|
+        {
+            try c.useTemplate(t);
+        }
+        c.format = detect(tok);
+        c.thinks = if (c.format) |f| f != .tulu else if (tok.chat_template) |t| std.mem.indexOf(u8, t, "<think>") != null else false;
+        if (c.template == null and c.format == null and c.refused.len == 0)
+        {
+            c.refused = "the model has no chat template";
+        }
+        return c;
+    }
+
+    /// From a template's text alone, with special tokens given by name (for checking templates of models we cannot load).
+    pub fn fromTemplate(gpa: std.mem.Allocator, text: []const u8, specials: []const [2][]const u8) !Chat {
+        var c: Chat = .{ .arena = std.heap.ArenaAllocator.init(gpa) };
+        errdefer c.arena.deinit();
+        for (specials) |s|
+        {
+            try c.specials.put(c.arena.allocator(), try c.arena.allocator().dupe(u8, s[0]), .{ .string = try c.arena.allocator().dupe(u8, s[1]) });
+        }
+        try c.useTemplate(text);
+        c.thinks = std.mem.indexOf(u8, text, "<think>") != null;
+        return c;
+    }
+
+    pub fn deinit(self: *Chat) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    fn useTemplate(self: *Chat, text: []const u8) !void {
+        const a = self.arena.allocator();
+        var diag: jinja.Diag = .{};
+        self.template = jinja.Template.parse(a, try a.dupe(u8, text), &diag) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => blk: {
+                self.refused = try std.fmt.allocPrint(a, "{s} (template line {d})", .{ diag.msg, diag.line });
+                break :blk null;
+            },
+        };
+    }
+
+    /// Whether a prompt can be made at all.
+    pub fn usable(self: *const Chat) bool {
+        return self.template != null or self.format != null;
+    }
+
+    /// How prompts are made, for the startup line.
+    pub fn describe(self: *const Chat) []const u8 {
+        if (self.template != null)
+        {
+            return "the GGUF's chat template";
+        }
+        return if (self.format) |f| @tagName(f) else "none";
+    }
+
+    /// Renders `messages`; with a template, its refusals (raise_exception) come back as
+    /// error.TemplateRefused with the template's message in `diag`.
+    pub fn render(self: *const Chat, a: std.mem.Allocator, messages: []const Message, opts: Options, diag: *jinja.Diag, out: *std.ArrayList(u8)) !void {
+        if (self.template == null)
+        {
+            return chatRender(a, self.format orelse return error.NoChatTemplate, messages, opts, out);
+        }
+        const list = try a.alloc(jinja.Value, messages.len);
+        for (messages, list) |m, *v|
+        {
+            const d = try a.create(jinja.Dict);
+            d.* = .empty;
+            try d.put(a, "role", .{ .string = @tagName(m.role) });
+            try d.put(a, "content", .{ .string = m.content });
+            if (m.reasoning) |r|
+            {
+                try d.put(a, "reasoning_content", .{ .string = r });
+            }
+            v.* = .{ .dict = d };
+        }
+        return self.renderValues(a, .{ .list = list }, opts, diag, out);
+    }
+
+    /// Renders messages given as template values, so any fields they carry reach the template.
+    pub fn renderValues(self: *const Chat, a: std.mem.Allocator, messages: jinja.Value, opts: Options, diag: *jinja.Diag, out: *std.ArrayList(u8)) !void {
+        const t = self.template orelse return error.NoChatTemplate;
+        var vars: jinja.Dict = .empty;
+        var it = self.specials.iterator();
+        while (it.next()) |e|
+        {
+            try vars.put(a, e.key_ptr.*, e.value_ptr.*);
+        }
+        try vars.put(a, "messages", messages);
+        try vars.put(a, "tools", .none);
+        try vars.put(a, "documents", .none);
+        try vars.put(a, "add_generation_prompt", .{ .boolean = opts.add_generation_prompt });
+        if (opts.thinking) |th|
+        {
+            try vars.put(a, "enable_thinking", .{ .boolean = th });
+        }
+        if (opts.effort) |e|
+        {
+            try vars.put(a, "reasoning_effort", .{ .string = @tagName(e) });
+        }
+        t.render(a, &vars, diag, out) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Raised => return error.TemplateRefused,
+            else => return error.TemplateFailed,
+        };
+    }
+
+    /// Token ids that end an assistant reply.
+    pub fn stopIds(self: *const Chat, tok: *const Tokenizer, buf: *[4]u32) []const u32 {
+        if (self.format) |f|
+        {
+            return chatStopIds(f, tok, buf);
+        }
+        var n: usize = 0;
+        for ([_]?u32{ tok.eos, tok.eot }) |id|
+        {
+            if (id != null and (n == 0 or buf[0] != id.?))
+            {
+                buf[n] = id.?;
+                n += 1;
+            }
+        }
+        return buf[0..n];
+    }
+};
+
+/// Whether a rendered prompt opens the reply's reasoning, so generation starts inside it.
+pub fn promptOpensReasoning(prompt: []const u8) bool {
+    return std.mem.endsWith(u8, std.mem.trimEnd(u8, prompt, " \t\r\n"), "<think>");
+}
+
+const chatRender = render;
+const chatStopIds = stopIds;
+
 /// GLM-5.3-Flash's template: turns as they are, an assistant turn's reasoning taken from
 /// `reasoning` or else from a </think> in its content, and its reply trimmed.
 fn renderGlm(gpa: std.mem.Allocator, messages: []const Message, opts: Options, out: *std.ArrayList(u8)) !void {
-    const effort: []const u8 = switch (opts.effort) {
+    const effort: []const u8 = switch (opts.effort orelse .max) {
         .low => "Low",
         .high => "High",
         else => "Max",
@@ -161,11 +329,12 @@ fn renderGlm(gpa: std.mem.Allocator, messages: []const Message, opts: Options, o
 
 /// Refuses what Qwen3.8's template raises an exception for: a system turn after the first, or no user query.
 fn renderQwen38(gpa: std.mem.Allocator, messages: []const Message, opts: Options, out: *std.ArrayList(u8)) !void {
-    if (opts.effort == .high or opts.effort == .max)
+    const effort = opts.effort orelse .xhigh;
+    if (opts.thinking != false and (effort == .high or effort == .max))
     {
         return error.UnsupportedEffort;
     }
-    const note: []const u8 = if (opts.thinking == false) "" else switch (opts.effort) {
+    const note: []const u8 = if (opts.thinking == false) "" else switch (effort) {
         .xhigh => "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.",
         .low => "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration.",
         else => "",
@@ -395,4 +564,21 @@ test "qwen38 keeps every turn's reasoning and opens the reply's" {
     defer out.deinit(std.testing.allocator);
     try std.testing.expectError(error.SystemNotFirst, render(std.testing.allocator, .qwen38, &.{ .{ .role = .user, .content = "a" }, .{ .role = .system, .content = "b" } }, .{}, &out));
     try std.testing.expectError(error.NoUserQuery, render(std.testing.allocator, .qwen38, &.{.{ .role = .user, .content = "<tool_response>x</tool_response>" }}, .{}, &out));
+}
+
+test "Chat renders a template with the special tokens and refuses one it cannot run" {
+    const gpa = std.testing.allocator;
+    var c = try Chat.fromTemplate(gpa, "{{ bos_token }}{% for m in messages %}[{{ m.role }}] {{ m.content }}{% endfor %}{% if add_generation_prompt %}[assistant]{% endif %}", &.{.{ "bos_token", "<s>" }});
+    defer c.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    var diag: jinja.Diag = .{};
+    try c.render(arena.allocator(), &.{.{ .role = .user, .content = "Hi" }}, .{}, &diag, &out);
+    try std.testing.expectEqualStrings("<s>[user] Hi[assistant]", out.items);
+
+    var bad = try Chat.fromTemplate(gpa, "{% include 'x' %}", &.{});
+    defer bad.deinit();
+    try std.testing.expect(!bad.usable() and std.mem.indexOf(u8, bad.refused, "include") != null);
+    try std.testing.expect(promptOpensReasoning("<|im_start|>assistant\n<think>\n") and !promptOpensReasoning("<think>\n\n</think>\n\n"));
 }

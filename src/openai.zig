@@ -22,7 +22,7 @@ pub const Request = struct {
     seed: ?u64 = null,
     stop: []const []const u8 = &.{},
     thinking: ?bool = null,
-    effort: chat.Effort = .xhigh,
+    effort: ?chat.Effort = null,
     return_tokens: bool = false,
 };
 

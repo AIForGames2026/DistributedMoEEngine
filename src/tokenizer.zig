@@ -81,6 +81,10 @@ pub const Tokenizer = struct {
     added: []const Added,
     bos: ?u32 = null,
     eos: ?u32 = null,
+    /// The unknown, padding and end-of-turn tokens, when the GGUF names them (TASK-38).
+    unk: ?u32 = null,
+    pad: ?u32 = null,
+    eot: ?u32 = null,
     chat_template: ?[]const u8 = null,
     /// With `ignore_merges`, each vocabulary token's bytes to its id: a piece found here skips BPE.
     whole: std.StringHashMapUnmanaged(u32) = .empty,
@@ -158,14 +162,26 @@ pub const Tokenizer = struct {
     const Common = struct {
         bos: ?u32,
         eos: ?u32,
+        unk: ?u32,
+        pad: ?u32,
+        eot: ?u32,
         add_bos: bool,
         chat_template: ?[]const u8,
 
         fn read(a: std.mem.Allocator, h: gguf.Header) !Common {
-            const bos: ?u32 = if (h.getInt("tokenizer.ggml.bos_token_id")) |v| @intCast(v) else null;
+            const id = struct {
+                fn f(h_: gguf.Header, key: []const u8) ?u32 {
+                    const v = h_.getInt(key) orelse return null;
+                    return if (v <= std.math.maxInt(u32)) @intCast(v) else null;
+                }
+            }.f;
+            const bos = id(h, "tokenizer.ggml.bos_token_id");
             return .{
                 .bos = bos,
-                .eos = if (h.getInt("tokenizer.ggml.eos_token_id")) |v| @intCast(v) else null,
+                .eos = id(h, "tokenizer.ggml.eos_token_id"),
+                .unk = id(h, "tokenizer.ggml.unknown_token_id"),
+                .pad = id(h, "tokenizer.ggml.padding_token_id"),
+                .eot = id(h, "tokenizer.ggml.eot_token_id"),
                 .add_bos = bos != null and (h.getBool("tokenizer.ggml.add_bos_token") orelse false),
                 .chat_template = if (h.getString("tokenizer.chat_template")) |t| try a.dupe(u8, t) else null,
             };
@@ -174,6 +190,9 @@ pub const Tokenizer = struct {
         fn apply(self: Common, tok: *Tokenizer) void {
             tok.bos = self.bos;
             tok.eos = self.eos;
+            tok.unk = self.unk;
+            tok.pad = self.pad;
+            tok.eot = self.eot;
             tok.add_bos = self.add_bos;
             tok.chat_template = self.chat_template;
         }

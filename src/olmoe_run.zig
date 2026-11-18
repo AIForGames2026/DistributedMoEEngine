@@ -1461,16 +1461,22 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
 
     var tok = try tokenizer.Tokenizer.fromGguf(gpa, l.state.gguf_header.?);
     defer tok.deinit();
-    const format = chat.detect(&tok) orelse {
-        std.debug.print("{s}: this model's chat template is not one the server knows (OLMoE's or Qwen3's)\n", .{name});
+    var prompts = try chat.Chat.init(gpa, &tok);
+    defer prompts.deinit();
+    if (prompts.refused.len > 0)
+    {
+        std.debug.print("{s}: the GGUF's chat template cannot be rendered: {s}{s}\n", .{ name, prompts.refused, if (prompts.format != null) "; using the built-in format instead" else "" });
+    }
+    if (!prompts.usable())
+    {
         return error.UnknownChatTemplate;
-    };
+    }
     const w = &l.weights.?;
     var cache = try olmoe.KvCache.initAs(gpa, w.cfg, opts.ctx, opts.kv_format);
     defer cache.deinit(gpa);
     const model_id = modelId(opts.model);
     var eng: ServeEngine = .{ .gpa = gpa, .w = w, .moe = moe, .cache = &cache };
-    return serve.run(gpa, eng.engine(opts.ctx), &tok, format, .{
+    return serve.run(gpa, eng.engine(opts.ctx), &tok, &prompts, .{
         .addr = addr,
         .port = port,
         .model_id = model_id,

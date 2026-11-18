@@ -159,11 +159,12 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
     const tfload = b.addExecutable(.{ .name = "tfload", .root_module = tfload_mod });
     b.step("tfload", "Build the expert loader tool (needs liburing)").dependOn(&b.addInstallArtifact(tfload, .{}).step);
 
-    // Tokenizer check tool (TASK-30); plain Zig, so it builds everywhere.
+    // Tokenizer and chat template check tool (TASK-30, TASK-38); libc for the local date.
     const tftok_mod = b.createModule(.{
         .root_source_file = b.path("src/tftok.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     const tftok = b.addExecutable(.{ .name = "tftok", .root_module = tftok_mod });
     b.step("tftok", "Build the tokenizer check tool").dependOn(&b.addInstallArtifact(tftok, .{}).step);

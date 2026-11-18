@@ -76,6 +76,7 @@ test {
     _ = @import("unicode.zig");
     _ = @import("tokenizer.zig");
     _ = @import("chat.zig");
+    _ = @import("jinja.zig");
     _ = @import("http.zig");
     _ = @import("openai.zig");
     _ = @import("completion.zig");

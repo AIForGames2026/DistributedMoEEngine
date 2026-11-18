@@ -17,6 +17,7 @@ const c = std.c;
 const http = @import("http.zig");
 const openai = @import("openai.zig");
 const chat = @import("chat.zig");
+const jinja = @import("jinja.zig");
 const completion = @import("completion.zig");
 const tokenizer = @import("tokenizer.zig");
 const olmoe = @import("olmoe.zig");
@@ -56,7 +57,7 @@ const Shared = struct {
 };
 
 /// Serves until the process is stopped or the engine fails.
-pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokenizer.Tokenizer, format: chat.Format, opts: Options) !void {
+pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokenizer.Tokenizer, prompts: *const chat.Chat, opts: Options) !void {
     const lfd = try listenOn(opts.addr, opts.port);
     defer _ = c.close(lfd);
     var fds: [2]c.fd_t = undefined;
@@ -73,8 +74,8 @@ pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokeni
     const front = try std.Thread.spawn(.{}, frontLoop, .{&shared});
     front.detach();
     const ip: [4]u8 = @bitCast(opts.addr);
-    std.debug.print("{s}: OpenAI-compatible API at http://{d}.{d}.{d}.{d}:{d}/v1 (model \"{s}\", chat format {t}, context {d} tokens{s})\n", .{
-        opts.name, ip[0], ip[1], ip[2], ip[3], opts.port, opts.model_id, format, engine.cap, if (opts.reuse) ", reusing shared prompt prefixes" else "",
+    std.debug.print("{s}: OpenAI-compatible API at http://{d}.{d}.{d}.{d}:{d}/v1 (model \"{s}\", prompts from {s}, context {d} tokens{s})\n", .{
+        opts.name, ip[0], ip[1], ip[2], ip[3], opts.port, opts.model_id, prompts.describe(), engine.cap, if (opts.reuse) ", reusing shared prompt prefixes" else "",
     });
     if (opts.page != null)
     {
@@ -94,7 +95,7 @@ pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokeni
         }
         const job: *Job = @ptrFromInt(ptr);
         count += 1;
-        const result = answer(gpa, engine, &session, tok, format, &shared, job, count);
+        const result = answer(gpa, engine, &session, tok, prompts, &shared, job, count);
         _ = c.close(job.fd);
         job.arena.deinit();
         std.heap.c_allocator.destroy(job);
@@ -291,7 +292,7 @@ fn upgrade(fd: c.fd_t, head: http.Head, live: *telemetry.Broadcaster) !bool {
 }
 
 /// Generates one chat completion and writes it to the job's connection.
-fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completion.Session, tok: *const tokenizer.Tokenizer, format: chat.Format, shared: *Shared, job: *Job, count: u64) !void {
+fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completion.Session, tok: *const tokenizer.Tokenizer, prompts: *const chat.Chat, shared: *Shared, job: *Job, count: u64) !void {
     const opts = shared.opts;
     const a = job.arena.allocator();
     const req = job.req;
@@ -299,7 +300,10 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
 
     var text: std.ArrayList(u8) = .empty;
     const chat_opts: chat.Options = .{ .thinking = req.thinking, .effort = req.effort };
-    chat.render(a, format, req.messages, chat_opts, &text) catch |err| switch (err) {
+    var diag: jinja.Diag = .{};
+    prompts.render(a, req.messages, chat_opts, &diag, &text) catch |err| switch (err) {
+        error.TemplateRefused => return sendError(fd, 400, try std.fmt.allocPrint(a, "The chat template refused these messages: {s}", .{diag.msg}), "invalid_request_error", "messages"),
+        error.TemplateFailed => return sendError(fd, 400, try std.fmt.allocPrint(a, "The chat template failed on these messages: {s}", .{diag.msg}), "invalid_request_error", "messages"),
         error.SystemNotFirst => return sendError(fd, 400, "A system message must come first.", "invalid_request_error", "messages"),
         error.NoUserQuery => return sendError(fd, 400, "The messages need a user turn that is not a tool response.", "invalid_request_error", "messages"),
         error.UnsupportedEffort => return sendError(fd, 400, "This model does not take that reasoning_effort.", "invalid_request_error", "chat_template_kwargs"),
@@ -328,9 +332,9 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
         .max_tokens = req.max_tokens,
         .sampler = sampler,
         .stop = req.stop,
-        .stop_ids = chat.stopIds(format, tok, &stop_buf),
-        .think = if (format != .tulu and think_open != null and think_close != null) .{ .open = think_open.?, .close = think_close.? } else null,
-        .reasoning_first = chat.opensReasoning(format, chat_opts),
+        .stop_ids = prompts.stopIds(tok, &stop_buf),
+        .think = if (prompts.thinks and think_open != null and think_close != null) .{ .open = think_open.?, .close = think_close.? } else null,
+        .reasoning_first = chat.promptOpensReasoning(text.items),
         .chunk = opts.chunk,
         .reuse = opts.reuse,
         .clock = opts.clock,

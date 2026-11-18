@@ -1,0 +1,11 @@
+deepseek-v3: 140/140 prompts identical (0 refused by both); token ids identical for 140 of 140
+glm53: 140/140 prompts identical (0 refused by both); token ids identical for 140 of 140
+gpt-oss: 140/140 prompts identical (0 refused by both); token ids identical for 140 of 140
+kimi-k2: 140/140 prompts identical (0 refused by both)
+llama4: 140/140 prompts identical (0 refused by both)
+mixtral: 140/140 prompts identical (7 refused by both); token ids identical for 133 of 133
+olmoe: 140/140 prompts identical (0 refused by both); token ids identical for 140 of 140
+qwen3-hf: 140/140 prompts identical (0 refused by both); token ids identical for 140 of 140
+qwen3: 140/140 prompts identical (0 refused by both); token ids identical for 140 of 140
+qwen36: 140/140 prompts identical (14 refused by both); token ids identical for 126 of 126
+qwen38: 140/140 prompts identical (32 refused by both); token ids identical for 108 of 108

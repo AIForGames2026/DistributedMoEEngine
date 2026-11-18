@@ -1,0 +1,5 @@
+Machine: gx10-02 (DGX Spark, GB10), alone.
+Engine: zig-out-t41/bin/olmoe, ReleaseFast with -Dgpu=true -Drdma=true, built Nov 18 from commit 5204040's successor plus the uncommitted TASK-41 changes (src/telemetry.zig, src/expert_cache.zig, src/olmoe_run.zig).
+Binary md5: 6c7ccc7cf5ecad4d609be22a6ea97352
+Model: models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf (48 layers, 128 experts, top 8).
+Client: tools/ref/record_chat.py --thinking --max-tokens 500.

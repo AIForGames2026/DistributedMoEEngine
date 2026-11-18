@@ -35,6 +35,17 @@
       "speed": 1
     },
     {
+      "id": "qwen3-cache-chat",
+      "source": "bench/trace/2026-11-18/chat-qwen3-cache-lookahead.jsonl.gz",
+      "title": "Chat: Qwen3-30B-A3B through an expert cache, with prefetching",
+      "summary": "The same scripted three-turn chat with Qwen3-30B-A3B on gx10-02, its 6,144 experts streamed from NVMe through a 3,000-slot cache, with the lookahead router guessing each next layer's experts (TASK-41). Each expert dot shows whether its call found the expert in memory, prefetched in time, still loading or missed, and the drive shows each load. Over the chat, 95.0% of calls found their expert in memory, 1.2% prefetched in time, 1.9% prefetched but late and 2.0% missed, against 4.2% missed without lookahead.",
+      "results": "bench/trace/2026-11-18-prefetch.md",
+      "ranks": [
+        "gx10-02"
+      ],
+      "speed": 1
+    },
+    {
       "id": "three-sparks-chat",
       "source": "bench/trace/2026-11-16/chat-three-sparks.jsonl.gz",
       "title": "Chat: Qwen3-30B-A3B split across three DGX Sparks over RDMA",

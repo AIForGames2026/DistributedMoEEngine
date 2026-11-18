@@ -10,6 +10,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const olmoe = @import("olmoe.zig");
 const loader = @import("loader.zig");
+const telemetry = @import("telemetry.zig");
 
 /// Where expert bytes come from. Each loader thread has its own.
 pub const Source = struct {
@@ -159,6 +160,8 @@ pub const ExpertCache = struct {
     threads: []std.Thread = &.{},
     /// Updated by the calling thread and the loaders respectively.
     stats: Stats = .{},
+    /// Each call's status for the live view (TASK-41), set by the telemetry tap.
+    trace: ?*telemetry.CacheTrace = null,
     clock: std.atomic.Value(u64) = .init(1),
     allocator: std.mem.Allocator,
 
@@ -351,21 +354,17 @@ pub const ExpertCache = struct {
             {
                 const fresh = slot.from_hint.swap(false, .acq_rel);
                 slot.demanded.store(false, .release);
-                if (w.asked and !w.was_hint)
+                const how: telemetry.CacheStatus = if (w.asked and !w.was_hint) .missed else if (w.loading) .late else if (fresh) .hinted else .resident;
+                switch (how)
                 {
-                    self.stats.missed += 1;
+                    .missed => self.stats.missed += 1,
+                    .late => self.stats.late += 1,
+                    .hinted => self.stats.hinted += 1,
+                    .resident, .none => self.stats.resident += 1,
                 }
-                else if (w.loading)
+                if (self.trace) |t|
                 {
-                    self.stats.late += 1;
-                }
-                else if (fresh)
-                {
-                    self.stats.hinted += 1;
-                }
-                else
-                {
-                    self.stats.resident += 1;
+                    t.note(key, how);
                 }
                 slot.last_use.store(self.clock.fetchAdd(1, .monotonic), .release);
                 return .{ .expert = slot.expert, .slot = s };
@@ -763,6 +762,61 @@ test "a cache of two slots gives the same experts as loading them all" {
     // Layer 0 stays pinned: 3 rounds x 8 experts found in place, at least.
     try std.testing.expect(st.resident >= 3 * cfg.experts);
     try std.testing.expect(st.missed + st.late + st.hinted > 0);
+}
+
+test "the trace gives each call's status, matching the cache's counters" {
+    const gpa = std.testing.allocator;
+    var t: Tiny = undefined;
+    try t.init(gpa);
+    defer t.deinit(gpa);
+    const a = t.arena.allocator();
+    const cfg = t.cfg;
+    const cache = try t.cache(2, 1);
+    defer cache.deinit();
+    var trace: telemetry.CacheTrace = .{ .status = try a.alloc(u8, cfg.layers * cfg.experts) };
+    cache.trace = &trace;
+    for (0..4) |round|
+    {
+        // Round 1 runs with the tap off, so nothing is noted.
+        trace.on = round != 1;
+        @memset(trace.status, 0);
+        const before = cache.stats;
+        for (0..cfg.layers) |l|
+        {
+            const pos = (round + 1) * cfg.layers + l;
+            cache.enter(pos);
+            for (0..cfg.experts) |e|
+            {
+                if (l == 1 and e % 2 == 0)
+                {
+                    cache.hint(pos + 1, l, e + 1);
+                }
+                const held = try cache.acquire(l, e);
+                cache.release(held);
+            }
+        }
+        var seen: [5]u64 = @splat(0);
+        for (trace.status) |s|
+        {
+            seen[s] += 1;
+        }
+        const st = cache.stats;
+        if (!trace.on)
+        {
+            try std.testing.expectEqual(@as(u64, trace.status.len), seen[0]);
+            continue;
+        }
+        try std.testing.expectEqual(@as(u64, 0), seen[0]);
+        try std.testing.expectEqual(st.resident - before.resident, seen[@intFromEnum(telemetry.CacheStatus.resident)]);
+        try std.testing.expectEqual(st.hinted - before.hinted, seen[@intFromEnum(telemetry.CacheStatus.hinted)]);
+        try std.testing.expectEqual(st.late - before.late, seen[@intFromEnum(telemetry.CacheStatus.late)]);
+        try std.testing.expectEqual(st.missed - before.missed, seen[@intFromEnum(telemetry.CacheStatus.missed)]);
+        // Layer 0 is pinned, so its experts are always resident.
+        for (trace.status[0..cfg.experts]) |s|
+        {
+            try std.testing.expectEqual(@intFromEnum(telemetry.CacheStatus.resident), s);
+        }
+    }
 }
 
 test "several loaders, polling, and stale hints give the same experts" {

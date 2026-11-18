@@ -1,0 +1,9 @@
+load: non-expert weights and 128 of 128 experts (through the expert cache), 1.68 GB in 0.34 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.68 GB in 0.04 s)
+local: expert cache: 3000 slots (15.11 GB), 2 loader threads, 128 experts of layers below 1 loaded and kept in 0.89 s; cached experts run on the GPU
+local: recording every step to bench-t41/rec/chat-qwen3-cache-lookahead.jsonl
+local: OpenAI-compatible API at http://127.0.0.1:8094/v1 (model "Qwen3-30B-A3B-Q8_0", chat format qwen3_release, context 8192 tokens, reusing shared prompt prefixes)
+local: chat page with the live diagram at http://127.0.0.1:8094/
+local: request 1: 24 prompt tokens (0 reused), 383 generated in 19.24 s, first token 3763 ms, 24.7 tokens/s decoding, finish stop
+local: request 2: 143 prompt tokens (24 reused), 500 generated in 19.79 s, first token 1616 ms, 27.5 tokens/s decoding, finish length
+local: request 3: 203 prompt tokens (143 reused), 246 generated in 11.81 s, first token 1065 ms, 22.8 tokens/s decoding, finish stop

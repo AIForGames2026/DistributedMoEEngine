@@ -271,6 +271,7 @@ pub fn main(init: std.process.Init) !void {
             .owner = nobody[0..l.cfg.experts],
             .ranks = &.{host},
             .probe = if (box) |b| .{ .ctx = b.cache, .sample = sampleCache } else .{ .ctx = &l.local, .sample = sampleLocal },
+            .cache = if (box) |b| b.cache else null,
         };
         const tel = try openTelemetry(gpa, l.cfg, moe, opts, "local", live);
         const run_moe = if (tel) |t| t.tap.moe() else moe;
@@ -997,6 +998,7 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, eps: []const *transport.Endpoi
         .ranks = rank_names[0 .. eps.len + 1],
         .chunks = wire.chunkCount(opts.payload, cfg.d_model),
         .probe = .{ .ctx = &sm, .sample = SplitMoe.sample },
+        .cache = sm.experts.cache,
     };
     const tel = try openTelemetry(gpa, cfg, moe, opts, name, live);
     const run_moe = if (tel) |t| t.tap.moe() else moe;
@@ -1508,11 +1510,15 @@ fn openTelemetry(gpa: std.mem.Allocator, cfg: olmoe.Config, moe: olmoe.Moe, opts
     feed.* = try telemetry.Feed.init(gpa, cfg.layers, cfg.experts, 256);
     const tap = try gpa.create(telemetry.Tap);
     tap.* = try telemetry.Tap.init(gpa, moe, cfg.top_k, feed, live.probe, mf.nowNs);
+    if (live.cache) |cache|
+    {
+        cache.trace = &tap.trace;
+    }
     const bc = try gpa.create(telemetry.Broadcaster);
     bc.* = .{
         .gpa = std.heap.c_allocator,
         .feed = feed,
-        .topo = .{ .model = modelId(opts.model), .transport = name, .ranks = live.ranks, .owner = live.owner, .chunks = live.chunks },
+        .topo = .{ .model = modelId(opts.model), .transport = name, .ranks = live.ranks, .owner = live.owner, .chunks = live.chunks, .cache_ranks = if (live.cache != null) &.{0} else &.{} },
         .top_k = cfg.top_k,
         .clock = mf.nowNs,
     };
@@ -1546,6 +1552,8 @@ const Live = struct {
     ranks: []const []const u8,
     chunks: usize = 0,
     probe: telemetry.Probe = .{},
+    /// Rank 0's expert cache, whose calls the live view shows one by one (TASK-41).
+    cache: ?*ExpertCache = null,
 };
 
 fn hostName(buf: *[64]u8) []const u8

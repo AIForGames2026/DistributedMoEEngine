@@ -12,10 +12,11 @@
 //! frames, one per line, with the chat's notes placed among the steps.
 //!
 //! Frames (text, one JSON object each):
-//!   {"t":"hello", model, layers, experts, top_k, transport, ranks, owner, chunks, ms}
+//!   {"t":"hello", model, layers, experts, top_k, transport, ranks, owner, chunks, cache_ranks, ms}
 //!   {"t":"step", seq, ms, n, step_us, layer_us, x: [layer, expert, count, ...],
 //!    engine: [rank 0 calls, rank 1 calls, ...] (one per rank, at least two; null where the engine keeps no count),
-//!    rtt_us, rtt_layers, cache: {resident, hinted, late, missed, loads} or null}
+//!    rtt_us, rtt_layers, cache: {resident, hinted, late, missed, loads} or null,
+//!    c: [layer, expert, status, ...] (rank 0's cache), h: [for layer, expert, sent during layer, ...]}
 //! Recordings add `recorded` (Unix seconds) to the hello, notes from the
 //! server (`chat`, `text`, `done`), each with `after`, the seq of the step
 //! before it, and a closing {"t":"end", after, steps, dropped, ms}.
@@ -43,6 +44,24 @@ pub const CacheCounts = struct {
     loads: u64,
 };
 
+/// How an expert call found its expert in rank 0's cache, as step frames send it (`c`).
+pub const CacheStatus = enum(u8) { none = 0, resident = 1, hinted = 2, late = 3, missed = 4 };
+
+/// Each (layer, expert)'s status this step, kept by the cache while the tap is counting. Engine thread only.
+pub const CacheTrace = struct {
+    on: bool = false,
+    status: []u8,
+
+    /// Keeps the first call's status for each (layer, expert) in a step.
+    pub fn note(self: *CacheTrace, key: usize, how: CacheStatus) void
+    {
+        if (self.on and self.status[key] == 0)
+        {
+            self.status[key] = @intFromEnum(how);
+        }
+    }
+};
+
 /// Reads the engine's own counters on the engine thread.
 pub const Probe = struct {
     ctx: ?*anyopaque = null,
@@ -58,6 +77,8 @@ pub const Topology = struct {
     owner: []const u8,
     /// Packets per remote expert call, each way; 0 when nothing is remote.
     chunks: usize = 0,
+    /// Ranks whose experts come through an expert cache (TASK-41).
+    cache_ranks: []const u8 = &.{},
 };
 
 const Slot = struct {
@@ -68,6 +89,12 @@ const Slot = struct {
     counts: []u32,
     layer_ns: []u64,
     counters: Counters = .{},
+    /// Per (layer, expert): a `CacheStatus`.
+    status: []u8,
+    /// Prefetch hints as (layer it is for, expert, layer it was sent during).
+    hints: []u16,
+    hint_count: usize = 0,
+    hints_dropped: usize = 0,
 };
 
 /// The ring between the engine thread (producer) and the broadcaster (consumer).
@@ -83,22 +110,36 @@ pub const Feed = struct {
 
     pub fn init(gpa: std.mem.Allocator, layers: usize, experts: usize, slots: usize) !Feed
     {
+        const le = layers * experts;
         const all = try gpa.alloc(Slot, slots);
         errdefer gpa.free(all);
-        const counts = try gpa.alloc(u32, slots * layers * experts);
+        const counts = try gpa.alloc(u32, slots * le);
         errdefer gpa.free(counts);
         const times = try gpa.alloc(u64, slots * layers);
+        errdefer gpa.free(times);
+        const status = try gpa.alloc(u8, slots * le);
+        errdefer gpa.free(status);
+        // Each layer's experts are guessed at most once per step, so a step has at most one hint per (layer, expert).
+        const hints = try gpa.alloc(u16, slots * le * 3);
         for (all, 0..) |*s, i|
         {
-            s.* = .{ .counts = counts[i * layers * experts ..][0 .. layers * experts], .layer_ns = times[i * layers ..][0..layers] };
+            s.* = .{
+                .counts = counts[i * le ..][0..le],
+                .layer_ns = times[i * layers ..][0..layers],
+                .status = status[i * le ..][0..le],
+                .hints = hints[i * le * 3 ..][0 .. le * 3],
+            };
         }
         return .{ .slots = all, .layers = layers, .experts = experts };
     }
 
     pub fn deinit(self: *Feed, gpa: std.mem.Allocator) void
     {
-        gpa.free(self.slots[0].counts.ptr[0 .. self.slots.len * self.layers * self.experts]);
+        const le = self.layers * self.experts;
+        gpa.free(self.slots[0].counts.ptr[0 .. self.slots.len * le]);
         gpa.free(self.slots[0].layer_ns.ptr[0 .. self.slots.len * self.layers]);
+        gpa.free(self.slots[0].status.ptr[0 .. self.slots.len * le]);
+        gpa.free(self.slots[0].hints.ptr[0 .. self.slots.len * le * 3]);
         gpa.free(self.slots);
     }
 
@@ -128,6 +169,13 @@ pub const Tap = struct {
     clock: *const fn () u64,
     counts: []u32,
     layer_ns: []u64,
+    /// Filled by an expert cache pointed at it (TASK-41).
+    trace: CacheTrace,
+    hints: []u16,
+    hint_count: usize = 0,
+    hints_dropped: usize = 0,
+    /// The layer whose experts run next this step, which hints are sent during.
+    layer_now: usize = 0,
     /// Counting this step: a viewer was connected when it began.
     active: bool = false,
     step_t0: u64 = 0,
@@ -135,16 +183,27 @@ pub const Tap = struct {
 
     pub fn init(gpa: std.mem.Allocator, inner: olmoe.Moe, top_k: usize, feed: *Feed, probe: Probe, clock: *const fn () u64) !Tap
     {
-        const counts = try gpa.alloc(u32, feed.layers * feed.experts);
+        const le = feed.layers * feed.experts;
+        const counts = try gpa.alloc(u32, le);
         errdefer gpa.free(counts);
         const layer_ns = try gpa.alloc(u64, feed.layers);
-        return .{ .inner = inner, .top_k = top_k, .feed = feed, .probe = probe, .clock = clock, .counts = counts, .layer_ns = layer_ns };
+        errdefer gpa.free(layer_ns);
+        const status = try gpa.alloc(u8, le);
+        errdefer gpa.free(status);
+        @memset(status, 0);
+        const hints = try gpa.alloc(u16, le * 3);
+        return .{
+            .inner = inner, .top_k = top_k, .feed = feed, .probe = probe, .clock = clock, .counts = counts, .layer_ns = layer_ns,
+            .trace = .{ .status = status }, .hints = hints,
+        };
     }
 
     pub fn deinit(self: *Tap, gpa: std.mem.Allocator) void
     {
         gpa.free(self.counts);
         gpa.free(self.layer_ns);
+        gpa.free(self.trace.status);
+        gpa.free(self.hints);
     }
 
     pub fn moe(self: *Tap) olmoe.Moe
@@ -179,6 +238,7 @@ pub const Tap = struct {
         const t0 = self.clock();
         try self.inner.run(self.inner.ctx, layer, x, n, idx, w, out);
         self.layer_ns[layer] += self.clock() - t0;
+        self.layer_now = layer + 1;
         const row = self.counts[layer * self.feed.experts ..][0..self.feed.experts];
         for (idx[0 .. n * self.top_k]) |e|
         {
@@ -192,6 +252,19 @@ pub const Tap = struct {
     fn prefetch(ctx: *anyopaque, layer: usize, experts: []const u32) anyerror!void
     {
         const self: *Tap = @ptrCast(@alignCast(ctx));
+        if (self.active)
+        {
+            for (experts) |e|
+            {
+                if (self.hint_count * 3 >= self.hints.len)
+                {
+                    self.hints_dropped += 1;
+                    continue;
+                }
+                self.hints[self.hint_count * 3 ..][0..3].* = .{ @intCast(layer), @intCast(e), @intCast(@min(self.layer_now, self.feed.layers - 1)) };
+                self.hint_count += 1;
+            }
+        }
         return self.inner.prefetch.?(self.inner.ctx, layer, experts);
     }
 
@@ -199,12 +272,17 @@ pub const Tap = struct {
     pub fn beginStep(self: *Tap) void
     {
         self.active = self.feed.viewers.load(.monotonic) > 0;
+        self.trace.on = self.active;
         if (!self.active)
         {
             return;
         }
         @memset(self.counts, 0);
         @memset(self.layer_ns, 0);
+        @memset(self.trace.status, 0);
+        self.hint_count = 0;
+        self.hints_dropped = 0;
+        self.layer_now = 0;
         self.step_t0 = self.clock();
     }
 
@@ -216,6 +294,7 @@ pub const Tap = struct {
             return;
         }
         self.active = false;
+        self.trace.on = false;
         const seq = self.next_seq;
         self.next_seq += 1;
         const f = self.feed;
@@ -233,6 +312,10 @@ pub const Tap = struct {
         s.step_ns = now - self.step_t0;
         @memcpy(s.counts, self.counts);
         @memcpy(s.layer_ns, self.layer_ns);
+        @memcpy(s.status, self.trace.status);
+        @memcpy(s.hints[0 .. self.hint_count * 3], self.hints[0 .. self.hint_count * 3]);
+        s.hint_count = self.hint_count;
+        s.hints_dropped = self.hints_dropped;
         s.counters = .{};
         if (self.probe.sample) |sample|
         {
@@ -351,7 +434,12 @@ pub fn writeHello(gpa: std.mem.Allocator, out: *std.ArrayList(u8), topo: Topolog
     {
         try out.print(gpa, "{s}{d}", .{ if (i == 0) "" else ",", o });
     }
-    try out.print(gpa, "],\"chunks\":{d},\"ms\":{d:.3}", .{ topo.chunks, ms(now_ns) });
+    try out.print(gpa, "],\"chunks\":{d},\"cache_ranks\":[", .{topo.chunks});
+    for (topo.cache_ranks, 0..) |r, i|
+    {
+        try out.print(gpa, "{s}{d}", .{ if (i == 0) "" else ",", r });
+    }
+    try out.print(gpa, "],\"ms\":{d:.3}", .{ms(now_ns)});
     if (recorded) |t|
     {
         try out.print(gpa, ",\"recorded\":{d}", .{t});
@@ -394,12 +482,34 @@ pub fn writeStep(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: *const Slot
     try out.print(gpa, "],\"rtt_us\":{d:.1},\"rtt_layers\":{d},\"cache\":", .{ us(c.rtt_ns), c.rtt_layers });
     if (c.cache) |k|
     {
-        try out.print(gpa, "{{\"resident\":{d},\"hinted\":{d},\"late\":{d},\"missed\":{d},\"loads\":{d}}}}}", .{ k.resident, k.hinted, k.late, k.missed, k.loads });
+        try out.print(gpa, "{{\"resident\":{d},\"hinted\":{d},\"late\":{d},\"missed\":{d},\"loads\":{d}}}", .{ k.resident, k.hinted, k.late, k.missed, k.loads });
     }
     else
     {
-        try out.appendSlice(gpa, "null}");
+        try out.appendSlice(gpa, "null");
     }
+    try out.appendSlice(gpa, ",\"c\":[");
+    first = true;
+    for (s.status, 0..) |st, i|
+    {
+        if (st == 0)
+        {
+            continue;
+        }
+        try out.print(gpa, "{s}{d},{d},{d}", .{ if (first) "" else ",", i / experts, i % experts, st });
+        first = false;
+    }
+    try out.appendSlice(gpa, "],\"h\":[");
+    for (s.hints[0 .. s.hint_count * 3], 0..) |v, i|
+    {
+        try out.print(gpa, "{s}{d}", .{ if (i == 0) "" else ",", v });
+    }
+    try out.append(gpa, ']');
+    if (s.hints_dropped > 0)
+    {
+        try out.print(gpa, ",\"h_dropped\":{d}", .{s.hints_dropped});
+    }
+    try out.append(gpa, '}');
 }
 
 fn ms(ns: u64) f64
@@ -872,6 +982,79 @@ test "the tap counts a step only while someone watches" {
     try std.testing.expectEqual(@as(u64, 1), feed.peek().?.seq);
     feed.pop();
     try std.testing.expect(feed.peek() == null);
+}
+
+test "the tap records cache statuses and hints only while someone watches" {
+    const gpa = std.testing.allocator;
+    const Fake = struct {
+        hints: usize = 0,
+        trace: ?*CacheTrace = null,
+        fn run(ctx: *anyopaque, layer: usize, _: []const f32, _: usize, idx: []const u32, _: []const f32, _: []f32) anyerror!void
+        {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            // Stands in for the cache: layer 0's experts are resident, layer 1's first was hinted, the second missed.
+            for (idx, 0..) |e, i|
+            {
+                self.trace.?.note(layer * 4 + e, if (layer == 0) .resident else if (i == 0) .hinted else .missed);
+            }
+        }
+        fn prefetch(ctx: *anyopaque, _: usize, experts: []const u32) anyerror!void
+        {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.hints += experts.len;
+        }
+        fn clock() u64
+        {
+            return 1000;
+        }
+    };
+    var fake: Fake = .{};
+    var feed = try Feed.init(gpa, 2, 4, 4);
+    defer feed.deinit(gpa);
+    var tap = try Tap.init(gpa, .{ .ctx = &fake, .run = Fake.run, .prefetch = Fake.prefetch }, 2, &feed, .{}, Fake.clock);
+    defer tap.deinit(gpa);
+    fake.trace = &tap.trace;
+    const m = tap.moe();
+
+    const step = struct {
+        fn f(mo: olmoe.Moe, t: *Tap) !void
+        {
+            t.beginStep();
+            // Embedding guesses for layer 0, then layer 0's guess for layer 1, as the forward pass sends them.
+            try mo.prefetch.?(mo.ctx, 0, &.{ 1, 3 });
+            try mo.prefetch.?(mo.ctx, 1, &.{2});
+            try mo.run(mo.ctx, 0, &.{}, 1, &.{ 1, 3 }, &.{}, &.{});
+            try mo.prefetch.?(mo.ctx, 1, &.{0});
+            try mo.run(mo.ctx, 1, &.{}, 1, &.{ 2, 0 }, &.{}, &.{});
+            t.endStep(1);
+        }
+    }.f;
+    // No viewer: hints still reach the engine, but nothing is noted or published.
+    try step(m, &tap);
+    try std.testing.expectEqual(@as(usize, 4), fake.hints);
+    try std.testing.expect(feed.peek() == null);
+    for (tap.trace.status) |s|
+    {
+        try std.testing.expectEqual(@as(u8, 0), s);
+    }
+
+    feed.viewers.store(1, .monotonic);
+    try step(m, &tap);
+    const s = feed.peek().?;
+    try std.testing.expectEqual(@as(usize, 4), s.hint_count);
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(gpa);
+    try writeStep(gpa, &json, s, 4, 1);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"c\":[0,1,1,0,3,1,1,0,4,1,2,2]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"h\":[0,1,0,0,3,0,1,2,0,1,0,1]}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "h_dropped") == null);
+    const step_json = try std.json.parseFromSlice(std.json.Value, gpa, json.items, .{});
+    step_json.deinit();
+    json.clearRetainingCapacity();
+    try writeHello(gpa, &json, .{ .model = "m", .transport = "local", .ranks = &.{"a"}, .owner = &.{ 0, 0, 0, 0 }, .cache_ranks = &.{0} }, 2, 4, 2, 0, null);
+    try std.testing.expect(std.mem.indexOf(u8, json.items, "\"cache_ranks\":[0]") != null);
+    const hello_json = try std.json.parseFromSlice(std.json.Value, gpa, json.items, .{});
+    hello_json.deinit();
 }
 
 test "a recording places each note after the steps published before it" {

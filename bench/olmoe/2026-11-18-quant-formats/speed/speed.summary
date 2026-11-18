@@ -1,0 +1,3 @@
+q8_0: local: time to first token 0.921 s (1112 tokens/s prefill); decode 0.028 s per token (35.66 tokens/s) over 127 steps from position 1024; resident memory 32935 MB
+q4_k_m: local: time to first token 1.338 s (766 tokens/s prefill); decode 0.024 s per token (41.92 tokens/s) over 127 steps from position 1024; resident memory 19083 MB
+iq4_xs: local: time to first token 1.128 s (908 tokens/s prefill); decode 0.021 s per token (48.21 tokens/s) over 127 steps from position 1024; resident memory 16908 MB

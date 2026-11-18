@@ -532,7 +532,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-36] Every GGUF Quant Format on the CPU and GPU
 - **Milestone**: None (after v1)
-- **Status**: Backlog (added Nov 17)
+- **Status**: Review (built Nov 18)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 17. The engine reads 8 weight formats (f32, f16, bf16, Q8_0, Q4_0, Q4_K, MXFP4, NVFP4), and the GPU runs only f32 and Q8_0 matmuls plus Q8_0 and Q4_K experts; everything else runs on the CPU, which TASK-32 measured at about 12 times slower. Most published GGUFs use other K-quants (a Q4_K_M file mixes Q4_K and Q6_K) or the IQ formats.
   - **CPU:** ggml's reference dequantization (llama.cpp, MIT) for the remaining formats: Q2_K, Q3_K, Q5_K, Q6_K, Q4_1, Q5_0, Q5_1, and IQ1 to IQ4 with their lookup tables, vendored as C or ported to `quant.zig`. Borrowed code keeps its MIT notice and is listed in `THIRD_PARTY.md`.
@@ -542,6 +542,12 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - **Decoding:** every format decodes test tensors exactly as ggml's reference does (bit for bit on the CPU), in `zig build test`.
   - **GPU:** every format's GPU matmul agrees with the CPU within 1e-3 under `TF_GPU_CHECK=1`.
   - **Models:** a Q4_K_M and an IQ-format GGUF of Qwen3-30B-A3B pass the TASK-10 and TASK-24 checks against transformers on the GGUF's dequantized weights, with every expert on the GPU.
+- **Results (Nov 18)**: acceptance met (`bench/olmoe/2026-11-18-quant-formats.md`).
+  - **Decoding:** 16 formats ported to Zig from ggml's reference decoders, keeping ggml's order of float operations; the IQ tables are generated from `ggml-common.h`; all are listed in `THIRD_PARTY.md`. A random tensor in each of 21 block formats decodes bit for bit as gguf-py does, in `zig build test` (118 tests on `gx10-02`, 100 plus 1 skipped on Windows), and ggml itself matches gguf-py bit for bit on all 21 (`tools/ref/check_ggml_quants.py`).
+  - **GPU:** one decode function per format feeds one matrix-vector and one tensor-core kernel (`csrc/cuda/blocks.cuh`), for matmuls and experts, including experts whose down is in another format. `olmoe gpu-formats` checks every format but f32 against the CPU: matmuls within 1.14e-5, experts within 1.45e-4.
+  - **Models:** bartowski's Q4_K_M and IQ4_XS GGUFs of Qwen3-30B-A3B pass forward and 32-token generation on the GPU, the CPU, over shared memory and through the cache, with logits within 1.85e-4. No weight ran on the CPU. The existing goldens still pass.
+  - **No silent fallback:** a weight on the CPU is logged with its format, shape and reason, and counted at the end of the run.
+  - **Speed:** decode at 1,024 tokens of context is 35.7 tokens/s for Q8_0, 41.9 for Q4_K_M and 48.2 for IQ4_XS. Prefill for the new formats is 20 to 30% slower than Q8_0's, whose kernel is tuned.
 
 #### [TASK-37] SentencePiece Tokenizer and More Pre-Tokenizers
 - **Milestone**: None (after v1)
@@ -644,10 +650,10 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-36 to TASK-39 (quant formats, tokenizers, chat templates and three model families, borrowing from llama.cpp), TASK-40 (native Windows engine) |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-37 to TASK-39 (tokenizers, chat templates and three model families, borrowing from llama.cpp), TASK-40 (native Windows engine) |
 | **To Do** | (none) |
 | **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
-| **Review** | TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
+| **Review** | TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
 | **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |

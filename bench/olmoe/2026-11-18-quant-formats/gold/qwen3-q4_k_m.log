@@ -1,0 +1,18 @@
+load: non-expert weights and 128 of 128 experts, 18.63 GB in 3.40 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (18.63 GB in 0.49 s)
+local: prompt 0 (5 tokens, 52 ms): logits max err 1.85e-4 (last 5 positions), top-1 5/5, hidden max err 1.95e-3, experts chosen 1920/1920 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (17 tokens, 110 ms): logits max err 1.20e-4 (last 17 positions), top-1 17/17, hidden max err 2.93e-3, experts chosen 6528/6528 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 163 ms): logits max err 6.20e-5 (last 15 positions), top-1 15/15, hidden max err 1.46e-3, experts chosen 5760/5760 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 1.85e-4), every top-1 token identical
+local: generate prompt 0: 32 tokens in 0.71 s (44.8 tokens/s, prompt included)
+local:   tokens: 12095 13 15920 315 279 2701 374 279 6722 315 9856 30 362 13 19846 425 13 46204 356 13 50462 422 13 55184 198 16141 510 32 271 23085 315 279
+local:   same as transformers' generate(): 32/32 tokens, logits max err 1.10e-4 at step 25 ok
+local: generate prompt 1: 32 tokens in 0.77 s (41.4 tokens/s, prompt included)
+local:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 369 600 304 2088 7 16 15 982 286 1173 955 579 39345 1956 4390 333 1304
+local:   same as transformers' generate(): 32/32 tokens, logits max err 7.63e-5 at step 10 ok
+local: generate prompt 2: 32 tokens in 0.77 s (41.4 tokens/s, prompt included)
+local:   tokens: 429 279 2790 1372 315 11211 15233 553 1817 6203 374 11046 13 4354 11 279 1372 315 11211 15233 553 1817 6203 374 537 23831 11 892 11508 311 279 1212
+local:   same as transformers' generate(): 32/32 tokens, logits max err 7.06e-5 at step 7 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: heap: 372 allocations, 372 frees, peak 155.9 MB, 0 bytes still allocated at exit (balanced)
+EXIT 0

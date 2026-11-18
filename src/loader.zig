@@ -418,6 +418,33 @@ test "GGUF fixture: every tensor decodes to gguf-py's values" {
     }
 }
 
+test "every block format decodes random blocks bit for bit as gguf-py does (TASK-36)"
+{
+    const gpa = std.testing.allocator;
+    const file = @embedFile("quant_formats.gguf");
+    const golden = try tfref.File.parse(@embedFile("quant_formats.tfref"));
+    var h = try gguf.parse(gpa, file, file.len);
+    defer h.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 21), h.tensors.len);
+    for (h.tensors) |t|
+    {
+        const out = try gpa.alloc(f32, @intCast(t.elements()));
+        defer gpa.free(out);
+        try quant.dequantize(t.format, file[@intCast(t.offset)..][0..@intCast(t.bytes)], out);
+        var name_buf: [96]u8 = undefined;
+        const want = (try golden.get(try std.fmt.bufPrint(&name_buf, "golden.{s}", .{t.name}))).f32s();
+        try std.testing.expectEqual(want.len, out.len);
+        for (out, want, 0..) |got, w, i|
+        {
+            if (@as(u32, @bitCast(got)) != @as(u32, @bitCast(w)))
+            {
+                std.debug.print("{s}: value {d} is {e}, gguf-py has {e}\n", .{ t.name, i, got, w });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
 test "GGUF fixture: loading experts 1 and 2 of 4 gives gguf-py's values" {
     const gpa = std.testing.allocator;
     const file = @embedFile("quant_tiny.gguf");

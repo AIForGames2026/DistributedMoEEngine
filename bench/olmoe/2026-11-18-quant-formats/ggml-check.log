@@ -1,0 +1,22 @@
+test.q4_0        q4_0     same
+test.q4_1        q4_1     same
+test.q5_0        q5_0     same
+test.q5_1        q5_1     same
+test.q8_0        q8_0     same
+test.q2_k        q2_K     same
+test.q3_k        q3_K     same
+test.q4_k        q4_K     same
+test.q5_k        q5_K     same
+test.q6_k        q6_K     same
+test.iq2_xxs     iq2_xxs  same
+test.iq2_xs      iq2_xs   same
+test.iq2_s       iq2_s    same
+test.iq3_xxs     iq3_xxs  same
+test.iq3_s       iq3_s    same
+test.iq1_s       iq1_s    same
+test.iq1_m       iq1_m    same
+test.iq4_nl      iq4_nl   same
+test.iq4_xs      iq4_xs   same
+test.mxfp4       mxfp4    same
+test.nvfp4       nvfp4    same
+OK: ggml and gguf-py agree bit for bit on every tensor

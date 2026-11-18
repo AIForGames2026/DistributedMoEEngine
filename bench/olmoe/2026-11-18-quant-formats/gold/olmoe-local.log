@@ -1,0 +1,18 @@
+load: non-expert weights and 64 of 64 experts, 7.36 GB in 1.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.36 GB in 0.19 s)
+local: prompt 0 (5 tokens, 28 ms): logits max err 2.19e-5 (last 5 positions), top-1 5/5, hidden max err 2.67e-4, experts chosen 640/640 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (21 tokens, 66 ms): logits max err 3.86e-5 (last 21 positions), top-1 21/21, hidden max err 3.28e-4, experts chosen 2688/2688 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (17 tokens, 47 ms): logits max err 4.67e-5 (last 17 positions), top-1 17/17, hidden max err 2.90e-4, experts chosen 2176/2176 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: OLMoE logits within 1e-2 of the PyTorch reference (worst 4.67e-5), every top-1 token identical
+local: generate prompt 0: 16 tokens in 0.16 s (97.4 tokens/s, prompt included)
+local:   tokens: 7785 15 187 187 510 14731 273 6181 310 253 14029 15 187 187 510 3072
+local:   same as transformers' generate(): 16/16 tokens, logits max err 4.10e-5 at step 12 ok
+local: generate prompt 1: 16 tokens in 0.18 s (88.4 tokens/s, prompt included)
+local:   tokens: 5713 251 42401 9 79 14 18 10 559 5713 251 42401 9 79 14 19
+local:   same as transformers' generate(): 16/16 tokens, logits max err 3.43e-5 at step 10 ok
+local: generate prompt 2: 16 tokens in 0.18 s (87.2 tokens/s, prompt included)
+local:   tokens: 326 1016 6485 310 5506 323 247 2173 873 273 21761 15 380 10071 840 897
+local:   same as transformers' generate(): 16/16 tokens, logits max err 3.12e-5 at step 8 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: heap: 223 allocations, 223 frees, peak 84.9 MB, 0 bytes still allocated at exit (balanced)
+EXIT 0

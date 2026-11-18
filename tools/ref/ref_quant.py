@@ -13,6 +13,11 @@ engine's loader must get from them:
                            Golden values decode the E4M3 scales with
                            PyTorch's float8_e4m3fn.
 
+  quant_formats.gguf       one tensor per ggml block format the engine reads
+                           (TASK-36), random blocks with finite values; golden
+                           values from gguf-py's dequantizer, which matches
+                           ggml's reference bit for bit.
+
   --model FILE.gguf --out OUT.tfref [--experts 0,17,63] [--layers 0,15]
       writes golden values for those experts of a real GGUF model, from
       gguf-py's dequantizer, for `tfload load --golden`.
@@ -42,7 +47,7 @@ GOLDEN = os.path.join(HERE, "..", "..", "tests", "golden")
 SEED = 20261105
 EXPERTS, D_MODEL, D_FF = 4, 64, 128
 PROJ = {"gate": "ffn_gate_exps", "up": "ffn_up_exps", "down": "ffn_down_exps"}
-FILES = ("quant_tiny.gguf", "quant_tiny.tfref", "nvfp4_tiny.safetensors", "nvfp4_tiny.config.json", "nvfp4_tiny.tfref")
+FILES = ("quant_tiny.gguf", "quant_tiny.tfref", "quant_formats.gguf", "quant_formats.tfref", "nvfp4_tiny.safetensors", "nvfp4_tiny.config.json", "nvfp4_tiny.tfref")
 
 # GGUF: name -> (numpy shape, outermost first, format). Stacked expert tensors
 # are [experts, rows, row_len], as in llama.cpp's OLMoE conversion.
@@ -103,6 +108,44 @@ def write_gguf(out_dir):
     w.write_tensors_to_file()
     w.close()
     write_tfref(os.path.join(out_dir, "quant_tiny.tfref"), golden)
+
+
+# Every block format the engine decodes, each as a [4, 1024] tensor.
+FORMATS = (Q.Q4_0, Q.Q4_1, Q.Q5_0, Q.Q5_1, Q.Q8_0, Q.Q2_K, Q.Q3_K, Q.Q4_K, Q.Q5_K, Q.Q6_K,
+           Q.IQ2_XXS, Q.IQ2_XS, Q.IQ2_S, Q.IQ3_XXS, Q.IQ3_S, Q.IQ1_S, Q.IQ1_M, Q.IQ4_NL, Q.IQ4_XS,
+           Q.MXFP4, Q.NVFP4)
+FORMAT_SHAPE = (4, 1024)
+
+
+def random_blocks(rng, qtype):
+    """Random bytes, redrawn block by block until every decoded value is finite."""
+    values, size = gguf.constants.GGML_QUANT_SIZES[qtype]
+    blocks = FORMAT_SHAPE[0] * FORMAT_SHAPE[1] // values
+    raw = rng.integers(0, 256, size=(blocks, size), dtype=np.uint8)
+    while True:
+        with np.errstate(invalid="ignore", over="ignore"):
+            y = gguf.quants.dequantize(raw, qtype).reshape(blocks, values)
+        bad = ~np.isfinite(y).all(axis=1) | (np.abs(y) > 1e30).any(axis=1)
+        if not bad.any():
+            return raw.reshape(FORMAT_SHAPE[0], -1), y.reshape(FORMAT_SHAPE)
+        raw[bad] = rng.integers(0, 256, size=(int(bad.sum()), size), dtype=np.uint8)
+
+
+def write_formats(out_dir):
+    rng = np.random.default_rng(SEED + 2)
+    w = gguf.GGUFWriter(path=None, arch="formats")
+    golden = {}
+    for qtype in FORMATS:
+        raw, y = random_blocks(rng, qtype)
+        name = f"test.{qtype.name.lower()}"
+        w.add_tensor(name, raw, raw_shape=raw.shape, raw_dtype=qtype)
+        golden[f"golden.{name}"] = y.astype(np.float32).reshape(-1)
+    path = os.path.join(out_dir, "quant_formats.gguf")
+    w.write_header_to_file(path=path)
+    w.write_kv_data_to_file()
+    w.write_tensors_to_file()
+    w.close()
+    write_tfref(os.path.join(out_dir, "quant_formats.tfref"), golden)
 
 
 # ModelOpt NVFP4. E2M1 magnitudes for codes 0..7; bit 3 is the sign.
@@ -200,6 +243,7 @@ def main():
         return
     if not args.check:
         write_gguf(GOLDEN)
+        write_formats(GOLDEN)
         write_safetensors(GOLDEN)
         for n in FILES:
             p = os.path.join(GOLDEN, n)
@@ -207,6 +251,7 @@ def main():
         return
     with tempfile.TemporaryDirectory() as tmp:
         write_gguf(tmp)
+        write_formats(tmp)
         write_safetensors(tmp)
         bad = [n for n in FILES if digest(os.path.join(tmp, n)) != digest(os.path.join(GOLDEN, n))]
     if bad:

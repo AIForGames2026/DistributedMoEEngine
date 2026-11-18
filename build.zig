@@ -20,6 +20,8 @@ pub fn build(b: *std.Build) void {
     // Quantized-format fixture and its golden values from tools/ref/ref_quant.py.
     engine.addAnonymousImport("quant_tiny.gguf", .{ .root_source_file = b.path("tests/golden/quant_tiny.gguf") });
     engine.addAnonymousImport("quant_tiny.tfref", .{ .root_source_file = b.path("tests/golden/quant_tiny.tfref") });
+    engine.addAnonymousImport("quant_formats.gguf", .{ .root_source_file = b.path("tests/golden/quant_formats.gguf") });
+    engine.addAnonymousImport("quant_formats.tfref", .{ .root_source_file = b.path("tests/golden/quant_formats.tfref") });
     engine.addAnonymousImport("nvfp4_tiny.safetensors", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.safetensors") });
     engine.addAnonymousImport("nvfp4_tiny.config.json", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.config.json") });
     engine.addAnonymousImport("nvfp4_tiny.tfref", .{ .root_source_file = b.path("tests/golden/nvfp4_tiny.tfref") });
@@ -210,6 +212,8 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         const fatbin = nvcc.addOutputFileArg("kernels.fatbin");
         fatbin_file = fatbin;
         nvcc.addFileArg(b.path("csrc/cuda/kernels.cu"));
+        nvcc.addFileInput(b.path("csrc/cuda/blocks.cuh"));
+        nvcc.addFileInput(b.path("csrc/cuda/iq_tables.cuh"));
         olmoe_mod.addAnonymousImport("kernels.fatbin", .{ .root_source_file = fatbin });
         olmoe_mod.addCSourceFile(.{ .file = b.path("csrc/tf_gpu.c"), .flags = &c_flags });
         olmoe_mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "include" }) });

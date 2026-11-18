@@ -4,6 +4,7 @@
 //! `zig build olmoe -Dgpu=true`. TF_GPU_ATTENTION=0 keeps attention on the CPU.
 const std = @import("std");
 const olmoe = @import("olmoe.zig");
+const quant = @import("quant.zig");
 const nowNs = @import("model_file.zig").nowNs;
 
 const Handle = opaque {};
@@ -24,7 +25,7 @@ extern fn tf_gpu_unregister(g: *Handle, host: *anyopaque) void;
 extern fn tf_gpu_attention(g: *Handle, q: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, scale: f32, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, splits: c_int, out: [*]f32, fmt: c_int, hd: c_int) c_int;
 extern fn tf_gpu_qsa(g: *Handle, q: [*]const f32, iq: [*]const f32, n: c_int, pos0: c_int, heads: c_int, kv_heads: c_int, kvd: c_int, ih: c_int, dim: c_int, bsize: c_int, top: c_int, scale: f32, blocks: u64, tiles_k: [*]const u64, tiles_v: [*]const u64, tiles: c_int, out: [*]f32, kept: ?[*]i32) c_int;
 extern fn tf_gpu_delta_rule(g: *Handle, mixed: [*]const f32, beta: [*]const f32, decay: [*]const f32, n: c_int, cd: c_int, kh: c_int, dk: c_int, vh: c_int, dv: c_int, state: u64, core: [*]f32) c_int;
-extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32, fmt: c_int, limit: f32) c_int;
+extern fn tf_gpu_experts(g: *Handle, groups: c_int, gate: [*]const u64, up: [*]const u64, down: [*]const u64, first: [*]const c_int, src: [*]const c_int, inv: [*]const c_int, w: [*]const f32, x: [*]const f32, n: c_int, k: c_int, d: c_int, f: c_int, y: [*]f32, fmt: c_int, fmt_down: c_int, limit: f32) c_int;
 extern fn tf_gpu_close(g: *Handle) void;
 extern fn tf_gpu_device_bytes() usize;
 
@@ -228,6 +229,7 @@ pub fn mapLive(region: []u8) !bool
 }
 
 pub fn stop() void {
+    reportFallbacks();
     olmoe.gpu_matmul = null;
     olmoe.gpu_matmuls = null;
     olmoe.gpu_experts = null;
@@ -243,12 +245,15 @@ pub fn stop() void {
 
 const format_q8_0: c_int = 0;
 const format_f32: c_int = 1;
+const format_q4_k: c_int = 2;
+/// Any other block format (TASK-36): this plus its ggml type id.
+const format_ggml: c_int = 100;
 
 /// The kernel format code for `m`, if a kernel reads it.
 fn formatOf(m: olmoe.Mat) ?c_int
 {
     // The kernels take widths in whole blocks of 32; narrower matrices stay on the CPU.
-    if (m.cols % 32 != 0)
+    if (m.cols % 32 != 0 or m.cols % m.format.blockValues() != 0)
     {
         return null;
     }
@@ -256,14 +261,24 @@ fn formatOf(m: olmoe.Mat) ?c_int
     {
         .q8_0 => format_q8_0,
         .f32 => if (@intFromPtr(m.bytes.ptr) % 16 == 0) format_f32 else null,
-        else => null,
+        else => format_ggml + @as(c_int, @intCast(m.format.ggmlType())),
     };
 }
 
-/// Where kernels read `m`, if it is a Q8_0, f32 or (for experts) Q4_K weight in a mapped region.
+/// For experts: Q4_K keeps its own code, which picks the tuned kernels when all three are Q4_K.
+fn expertFormatOf(m: olmoe.Mat) ?c_int
+{
+    if (m.format == .f32)
+    {
+        return null;
+    }
+    return if (m.format == .q4_k and m.cols % 256 == 0) format_q4_k else formatOf(m);
+}
+
+/// Where kernels read `m`, if a kernel reads its format and it lies in a mapped region.
 fn devAddr(m: olmoe.Mat) ?u64
 {
-    if (m.format != .q4_k and formatOf(m) == null)
+    if (formatOf(m) == null)
     {
         return null;
     }
@@ -290,8 +305,7 @@ fn devAddr(m: olmoe.Mat) ?u64
 /// and SiLU queued, outputs combined on the GPU. TF_GPU_CHECK uses the CPU.
 fn experts(job: olmoe.ExpertJob) bool
 {
-    // The Q8_0 kernels have no SwiGLU clamp (TASK-32), so a clamped Q8_0 model stays on the CPU.
-    if (failed or check or job.experts.len > max_group or (job.experts[0].gate.format == .q8_0 and olmoe.swiglu_limit > 0))
+    if (failed or check or job.experts.len > max_group)
     {
         return false;
     }
@@ -299,21 +313,22 @@ fn experts(job: olmoe.ExpertJob) bool
     var up: [max_group]u64 = undefined;
     var down: [max_group]u64 = undefined;
     var first: [max_group + 1]c_int = undefined;
+    const e0 = job.experts[0];
+    const fg = expertFormatOf(e0.gate) orelse return onCpu(e0.gate, .no_kernel);
+    const fd = expertFormatOf(e0.down) orelse return onCpu(e0.down, .no_kernel);
     for (job.experts, 0..) |e, i|
     {
-        const f0 = job.experts[0].gate.format;
-        if ((f0 != .q8_0 and f0 != .q4_k) or e.gate.format != f0 or e.up.format != f0 or e.down.format != f0)
+        if (expertFormatOf(e.gate) != fg or expertFormatOf(e.up) != fg or expertFormatOf(e.down) != fd)
         {
-            return false;
+            return onCpu(e.up, .mixed);
         }
-        gate[i] = devAddr(e.gate) orelse return false;
-        up[i] = devAddr(e.up) orelse return false;
-        down[i] = devAddr(e.down) orelse return false;
+        gate[i] = devAddr(e.gate) orelse return onCpu(e.gate, .unmapped);
+        up[i] = devAddr(e.up) orelse return onCpu(e.up, .unmapped);
+        down[i] = devAddr(e.down) orelse return onCpu(e.down, .unmapped);
         first[i] = @intCast(job.first[i]);
     }
     first[job.experts.len] = @intCast(job.first[job.experts.len]);
-    const e0 = job.experts[0];
-    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, @ptrCast(job.src.ptr), @ptrCast(job.inv.ptr), job.w.ptr, job.x.ptr, @intCast(job.n), @intCast(job.k), @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr, if (e0.gate.format == .q4_k) 2 else 0, olmoe.swiglu_limit);
+    const rc = tf_gpu_experts(handle.?, @intCast(job.experts.len), &gate, &up, &down, &first, @ptrCast(job.src.ptr), @ptrCast(job.inv.ptr), job.w.ptr, job.x.ptr, @intCast(job.n), @intCast(job.k), @intCast(e0.gate.cols), @intCast(e0.gate.rows), job.y.ptr, fg, fd, olmoe.swiglu_limit);
     if (rc != 0)
     {
         std.log.err("gpu: expert batch failed ({d}); using the CPU from here on", .{-rc});
@@ -325,6 +340,44 @@ fn experts(job: olmoe.ExpertJob) bool
 
 const max_group = 1024;
 
+const Fallback = enum { no_kernel, unmapped, mixed };
+const n_formats = std.enums.values(quant.Format).len;
+/// Calls that stayed on the CPU, by reason and weight format, reported when the run ends.
+var fallbacks: [3][n_formats]u64 = @splat(@splat(0));
+
+/// Notes a weight that stays on the CPU, saying so the first time for each reason and format.
+fn onCpu(m: olmoe.Mat, why: Fallback) bool
+{
+    const count = &fallbacks[@intFromEnum(why)][@intFromEnum(m.format)];
+    if (count.* == 0)
+    {
+        const reason = switch (why)
+        {
+            .no_kernel => "no GPU kernel reads its format or width",
+            .unmapped => "it is outside the memory mapped for the GPU",
+            .mixed => "its experts' formats differ within one layer",
+        };
+        std.log.warn("gpu: a {s} weight ({d}x{d}) runs on the CPU: {s}", .{ @tagName(m.format), m.rows, m.cols, reason });
+    }
+    count.* += 1;
+    return false;
+}
+
+/// Totals of calls left on the CPU (TASK-36), so no weight falls back unnoticed.
+pub fn reportFallbacks() void
+{
+    for (fallbacks, 0..) |row, why|
+    {
+        for (row, 0..) |count, f|
+        {
+            if (count > 0)
+            {
+                std.debug.print("gpu: {d} calls on {s} weights ran on the CPU ({s})\n", .{ count, @tagName(@as(quant.Format, @enumFromInt(f))), @tagName(@as(Fallback, @enumFromInt(why))) });
+            }
+        }
+    }
+}
+
 fn matmul(m: olmoe.Mat, x: []const f32, n: usize, y: []f32) bool
 {
     // A small f32 matmul for a few tokens (the router in decode) is quicker on the CPU.
@@ -332,8 +385,8 @@ fn matmul(m: olmoe.Mat, x: []const f32, n: usize, y: []f32) bool
     {
         return false;
     }
-    const format = formatOf(m) orelse return false;
-    const dev = devAddr(m) orelse return false;
+    const format = formatOf(m) orelse return onCpu(m, .no_kernel);
+    const dev = devAddr(m) orelse return onCpu(m, .unmapped);
     const rc = tf_gpu_matmul(handle.?, dev, format, x.ptr, @intCast(n), @intCast(m.rows), @intCast(m.cols), y.ptr);
     if (rc != 0)
     {

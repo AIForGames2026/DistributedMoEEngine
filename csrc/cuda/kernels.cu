@@ -2427,3 +2427,5 @@ extern "C" __global__ void __launch_bounds__(256) tf_qsa_attention(const float *
         }
     }
 }
+
+#include "blocks.cuh"

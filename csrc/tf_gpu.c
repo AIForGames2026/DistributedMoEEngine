@@ -28,6 +28,8 @@
 #define SMALL_ROWS MV_TOK
 #define TM_BM 64 /* tf_tm_q8 */
 #define TM_BN 64
+#define QF_TYPES 41 /* ggml type ids below this; blocks.cuh */
+#define QF_BF16 30
 /* Calls that move at most this much go through pinned memory and wait once. */
 #define XFER_SMALL (1 << 20)
 #define XFER_OUTS 8
@@ -53,6 +55,8 @@ struct tf_gpu {
     size_t qsa_in_bytes, qsa_out_bytes, qsa_sc_bytes;
     CUfunction tm_q8, rowscale, silu_rows;
     CUfunction q4k_grouped, q4k_grouped_wide, silu_mul_clamp;
+    /* TASK-36: matrix-vector and tensor-core kernels per ggml type id, where one exists. */
+    CUfunction qmv[QF_TYPES], qtm[QF_TYPES];
     /* TF_MM_KERNEL: 1 the first Q8_0 kernel, 2 tiled f32 kernels, 0 tensor cores where they apply. */
     int mm_kernel;
     int tc_ok;
@@ -99,6 +103,55 @@ static int fail(CUresult r, const char *what, char *err, size_t len)
     if (err && len)
         snprintf(err, len, "%s: %s", what, s ? s : "unknown error");
     return -(int)r;
+}
+
+/* Values per block of each ggml type with kernels here (blocks.cuh), by type id; 0 for none. */
+static const struct
+{
+    int type, qk;
+    const char *name;
+} qf_formats[] = {
+    {1, 1, "f16"},        {30, 1, "bf16"},      {2, 32, "q4_0"},      {3, 32, "q4_1"},      {6, 32, "q5_0"},
+    {7, 32, "q5_1"},      {8, 32, "q8_0"},      {10, 256, "q2_k"},    {11, 256, "q3_k"},    {12, 256, "q4_k"},
+    {13, 256, "q5_k"},    {14, 256, "q6_k"},    {16, 256, "iq2_xxs"}, {17, 256, "iq2_xs"},  {22, 256, "iq2_s"},
+    {18, 256, "iq3_xxs"}, {21, 256, "iq3_s"},   {19, 256, "iq1_s"},   {29, 256, "iq1_m"},   {20, 32, "iq4_nl"},
+    {23, 256, "iq4_xs"},  {39, 32, "mxfp4"},    {40, 64, "nvfp4"},
+};
+
+static int qf_qk(int type)
+{
+    for (size_t i = 0; i < sizeof qf_formats / sizeof qf_formats[0]; i++)
+    {
+        if (qf_formats[i].type == type)
+        {
+            return qf_formats[i].qk;
+        }
+    }
+    return 0;
+}
+
+static CUresult load_formats(tf_gpu *g)
+{
+    for (size_t i = 0; i < sizeof qf_formats / sizeof qf_formats[0]; i++)
+    {
+        char name[64];
+        const int t = qf_formats[i].type;
+        CUresult r;
+        snprintf(name, sizeof name, "tf_qmv_%s", qf_formats[i].name);
+        if ((r = cuModuleGetFunction(&g->qmv[t], g->mod, name)) != CUDA_SUCCESS)
+        {
+            return r;
+        }
+        if (t != QF_BF16)
+        {
+            snprintf(name, sizeof name, "tf_qtm_%s", qf_formats[i].name);
+            if ((r = cuModuleGetFunction(&g->qtm[t], g->mod, name)) != CUDA_SUCCESS)
+            {
+                return r;
+            }
+        }
+    }
+    return CUDA_SUCCESS;
 }
 
 int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
@@ -178,6 +231,11 @@ int tf_gpu_open(tf_gpu **out, const void *fatbin, char *err, size_t err_len)
     {
         tf_gpu_close(g);
         return fail(r, "loading kernels", err, err_len);
+    }
+    if ((r = load_formats(g)) != CUDA_SUCCESS)
+    {
+        tf_gpu_close(g);
+        return fail(r, "loading block format kernels", err, err_len);
     }
     /* The wide and 256-dim kernels need more shared memory than the default 48 KB. */
     int optin = 0;
@@ -352,6 +410,10 @@ static CUresult launch_q8(tf_gpu *g, CUdeviceptr w, CUdeviceptr x, CUdeviceptr y
 /* Whether launch_mm uses the tensor-core kernel, which needs each input row's scale. */
 static int use_tm(const tf_gpu *g, int format, int most)
 {
+    if (format >= TF_GPU_GGML)
+    {
+        return most > MV_TOK && g->tc_ok && g->qtm[format - TF_GPU_GGML];
+    }
     return format == TF_GPU_Q8_0 && most > MV_TOK && g->mm_kernel == 0 && g->tc_ok;
 }
 
@@ -369,6 +431,17 @@ static CUresult launch_mm(tf_gpu *g, int format, CUdeviceptr w0, CUdeviceptr wt,
         return launch_q8(g, w0, x, y, rows, cols, most);
     }
     void *args[] = {&w0, &wt, &first, &x, &y, &rows, &cols, &most};
+    if (format >= TF_GPU_GGML)
+    {
+        if (use_tm(g, format, most))
+        {
+            void *targs[] = {&w0, &wt, &first, &x, &y, &rows, &cols, &most, &up};
+            return cuLaunchKernel(g->qtm[format - TF_GPU_GGML], (unsigned)((rows + TM_BM - 1) / TM_BM),
+                                  (unsigned)((most + TM_BN - 1) / TM_BN), (unsigned)groups, 128, 1, 1, 0, 0, targs, NULL);
+        }
+        return cuLaunchKernel(g->qmv[format - TF_GPU_GGML], (unsigned)((rows + 7) / 8), 1, (unsigned)groups, 256, 1, 1, 0,
+                              0, args, NULL);
+    }
     if (format == TF_GPU_Q8_0 && most <= MV_TOK)
     {
         return cuLaunchKernel(g->mv_q8, (unsigned)((rows + 7) / 8), 1, (unsigned)groups, 256, 1, 1, 0, 0, args, NULL);
@@ -385,6 +458,11 @@ static CUresult launch_mm(tf_gpu *g, int format, CUdeviceptr w0, CUdeviceptr wt,
 
 static int format_ok(int format, int cols)
 {
+    if (format >= TF_GPU_GGML && format < TF_GPU_GGML + QF_TYPES)
+    {
+        const int qk = qf_qk(format - TF_GPU_GGML);
+        return qk > 0 && cols > 0 && cols % 32 == 0 && cols % qk == 0;
+    }
     return (format == TF_GPU_Q8_0 || format == TF_GPU_F32) && cols > 0 && cols % 32 == 0;
 }
 
@@ -464,15 +542,19 @@ int tf_gpu_matmuls(tf_gpu *g, int count, const uint64_t *w, int format, const in
 
 int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
                    const int *first, const int *src, const int *inv, const float *w, const float *x, int n, int k,
-                   int d, int f, float *y, int fmt, float limit)
+                   int d, int f, float *y, int fmt, int fmt_down, float limit)
 {
     if (groups <= 0 || n <= 0 || k <= 0 || d <= 0 || f <= 0 || d % 32 || f % 32)
     {
         return -1;
     }
-    // Q8_0 experts have no SwiGLU clamp here; Q4_K ones (TASK-32) need whole 256-value blocks.
-    if ((fmt == TF_GPU_Q8_0 && limit > 0) || (fmt == TF_GPU_Q4_K && (d % 256 || f % 256)) ||
-        (fmt != TF_GPU_Q8_0 && fmt != TF_GPU_Q4_K))
+    // The tuned paths: Q8_0 without a SwiGLU clamp, and Q4_K (TASK-32). Anything else, mixed formats
+    // included, takes the per-format kernels (TASK-36).
+    const int q8 = fmt == TF_GPU_Q8_0 && fmt_down == TF_GPU_Q8_0 && limit <= 0;
+    const int q4k = fmt == TF_GPU_Q4_K && fmt_down == TF_GPU_Q4_K;
+    const int fg = fmt == TF_GPU_Q4_K ? TF_GPU_GGML + 12 : fmt, fd = fmt_down == TF_GPU_Q4_K ? TF_GPU_GGML + 12 : fmt_down;
+    if ((q4k && (d % 256 || f % 256)) || (!q8 && !q4k && (fg == TF_GPU_F32 || fd == TF_GPU_F32 || !format_ok(fg, d) ||
+                                                          !format_ok(fd, f))))
     {
         return -1;
     }
@@ -568,7 +650,7 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
     CUdeviceptr dt2 = dt + small * sizeof(uint64_t), dfirst2 = dfirst + small * sizeof(int);
     CUdeviceptr eg2 = g->eg + (size_t)row0 * f * sizeof(float), eu2 = g->eu + (size_t)row0 * f * sizeof(float);
     CUdeviceptr up2 = g->up2 + (size_t)row0 * sizeof(float);
-    if (fmt == TF_GPU_Q4_K)
+    if (q4k)
     {
         int count = rows * f;
         void *sa[] = {&g->eg, &g->eu, &count, &limit};
@@ -616,7 +698,7 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
             }
         }
     }
-    else if (g->mm_kernel == 1)
+    else if (q8 && g->mm_kernel == 1)
     {
         for (int e = 0; e < groups; e++)
         {
@@ -641,7 +723,7 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
             }
         }
     }
-    else
+    else if (q8)
     {
         // Small experts: the matrix-vector kernels, gate, up and SwiGLU fused.
         void *args[] = {&gt, &ut, &dfirst, &g->exg, &g->eg, &f, &d};
@@ -660,6 +742,30 @@ int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *
              (r = cuLaunchKernel(g->silu_rows, (unsigned)(rows - row0), 1, 1, 256, 1, 1, 0, 0, sargs, NULL)) !=
                  CUDA_SUCCESS ||
              (r = launch_mm(g, TF_GPU_Q8_0, 0, dt2, dfirst2, large, most, g->up2, g->eg, g->ey, d, f)) != CUDA_SUCCESS))
+        {
+            return -(int)r;
+        }
+    }
+    else
+    {
+        // Gate and up, the SwiGLU over every row, the large experts' row scales, then down.
+        int count = rows * f, large_rows = rows - row0;
+        void *sa[] = {&g->eg, &g->eu, &count, &limit};
+        void *ra[] = {&eg2, &up2, &large_rows, &f};
+        const CUfunction act = limit > 0 ? g->silu_mul_clamp : g->silu_mul;
+        if ((small > 0 &&
+             ((r = launch_mm(g, fg, 0, gt, dfirst, small, most_small, 0, g->exg, g->eg, f, d)) != CUDA_SUCCESS ||
+              (r = launch_mm(g, fg, 0, ut, dfirst, small, most_small, 0, g->exg, g->eu, f, d)) != CUDA_SUCCESS)) ||
+            (large > 0 &&
+             ((r = launch_mm(g, fg, 0, gt2, dfirst2, large, most, g->up, g->exg, g->eg, f, d)) != CUDA_SUCCESS ||
+              (r = launch_mm(g, fg, 0, ut2, dfirst2, large, most, g->up, g->exg, g->eu, f, d)) != CUDA_SUCCESS)) ||
+            (r = cuLaunchKernel(act, (unsigned)((count + 255) / 256), 1, 1, 256, 1, 1, 0, 0, sa, NULL)) != CUDA_SUCCESS ||
+            (large > 0 && (r = cuLaunchKernel(g->rowscale, (unsigned)((large_rows + 7) / 8), 1, 1, 256, 1, 1, 0, 0, ra,
+                                              NULL)) != CUDA_SUCCESS) ||
+            (small > 0 &&
+             (r = launch_mm(g, fd, 0, dt, dfirst, small, most_small, 0, g->eg, g->ey, d, f)) != CUDA_SUCCESS) ||
+            (large > 0 &&
+             (r = launch_mm(g, fd, 0, dt2, dfirst2, large, most, g->up2, g->eg, g->ey, d, f)) != CUDA_SUCCESS))
         {
             return -(int)r;
         }

@@ -38,6 +38,8 @@ int tf_gpu_map(tf_gpu *g, void *host, size_t len, uint64_t *dev);
 #define TF_GPU_Q8_0 0
 #define TF_GPU_F32 1
 #define TF_GPU_Q4_K 2
+/* Any other ggml block format (TASK-36): this plus its ggml type id. */
+#define TF_GPU_GGML 100
 
 /* y (n x rows) = W x for x (n x cols), W in `format` at device address `w`.
  * Copies x in and y out; returns when y is ready. */
@@ -90,10 +92,11 @@ int tf_gpu_qsa(tf_gpu *g, const float *q, const float *iq, int n, int pos0, int 
                float *out, int *kept);
 
 /* One layer's experts for n tokens, k calls each (see olmoe.ExpertJob). Experts with at most 8
- * rows must come first; each expert's kernels follow its own row count. */
+ * rows must come first; each expert's kernels follow its own row count. Gate and up share
+ * `fmt`; down is in `fmt_down`. */
 int tf_gpu_experts(tf_gpu *g, int groups, const uint64_t *gate, const uint64_t *up, const uint64_t *down,
                    const int *first, const int *src, const int *inv, const float *w, const float *x, int n, int k,
-                   int d, int f, float *y, int fmt, float limit);
+                   int d, int f, float *y, int fmt, int fmt_down, float limit);
 
 /* Attention kernel: 1 first, 2 wide, 3 and 4 tensor cores (64 or 128 rows), 5 decode,
  * 0 chosen by shape (default; TF_ATT_KERNEL sets it). Returns the previous choice. */

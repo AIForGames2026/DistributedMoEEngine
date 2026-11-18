@@ -212,12 +212,22 @@ pub fn main(init: std.process.Init) !void {
         {
             return node_agent.main(init.gpa, all.items[2..]);
         }
+        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "gpu-formats"))
+        {
+            if (!build_options.gpu)
+            {
+                std.debug.print("this build has no GPU support; rebuild with -Dgpu=true\n", .{});
+                std.process.exit(2);
+            }
+            return @import("gpu_formats.zig").main(init.gpa, all.items[2..]);
+        }
     }
     const opts = parseArgs(init) catch {
         std.debug.print(
             \\usage: olmoe local|shm|rdma MODEL --golden G.tfref [--ranks N] [options]
             \\       olmoe dashboard --models DIR [options]   (TASK-25: the operator dashboard)
             \\       olmoe node --dashboard IP[:PORT] --models DIR [options]   (its node agent)
+            \\       olmoe gpu-formats   (TASK-36: every weight format's GPU kernels against the CPU)
             \\       olmoe expert|rdma-expert MODEL --port P [--rank R --ranks N] [options]
             \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
             \\       olmoe router|rdma-router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ... --golden G.tfref [options]

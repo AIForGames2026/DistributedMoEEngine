@@ -63,6 +63,22 @@ pub fn formatOf(ggml_type: u32) ?quant.Format {
         2 => .q4_0,
         8 => .q8_0,
         12 => .q4_k,
+        3 => .q4_1,
+        6 => .q5_0,
+        7 => .q5_1,
+        10 => .q2_k,
+        11 => .q3_k,
+        13 => .q5_k,
+        14 => .q6_k,
+        16 => .iq2_xxs,
+        17 => .iq2_xs,
+        18 => .iq3_xxs,
+        19 => .iq1_s,
+        20 => .iq4_nl,
+        21 => .iq3_s,
+        22 => .iq2_s,
+        23 => .iq4_xs,
+        29 => .iq1_m,
         30 => .bf16,
         39 => .mxfp4,
         40 => .nvfp4,
@@ -290,4 +306,12 @@ const Reader = struct {
 test "rejects files that are not GGUF" {
     try std.testing.expectError(error.BadMagic, parse(std.testing.allocator, "GGML\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 24));
     try std.testing.expectError(error.Truncated, parse(std.testing.allocator, "GGUF\x03\x00", 6));
+}
+
+test "every format's ggml type id reads back as that format"
+{
+    for (std.enums.values(quant.Format)) |f|
+    {
+        try std.testing.expectEqual(f, formatOf(f.ggmlType()).?);
+    }
 }

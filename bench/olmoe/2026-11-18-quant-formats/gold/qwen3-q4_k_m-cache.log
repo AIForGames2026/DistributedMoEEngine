@@ -1,0 +1,20 @@
+load: non-expert weights and 128 of 128 experts (through the expert cache), 1.07 GB in 0.23 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.07 GB in 0.03 s)
+local: expert cache: 3000 slots (9.25 GB), 2 loader threads, 128 experts of layers below 1 loaded and kept in 0.54 s; cached experts run on the GPU
+local: prompt 0 (5 tokens, 1223 ms): logits max err 1.85e-4 (last 5 positions), top-1 5/5, hidden max err 1.95e-3, experts chosen 1920/1920 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (17 tokens, 1270 ms): logits max err 1.20e-4 (last 17 positions), top-1 17/17, hidden max err 2.93e-3, experts chosen 6528/6528 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 1220 ms): logits max err 6.20e-5 (last 15 positions), top-1 15/15, hidden max err 1.46e-3, experts chosen 5760/5760 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: Qwen3-MoE logits within 1e-2 of the PyTorch reference (worst 1.85e-4), every top-1 token identical
+local: generate prompt 0: 32 tokens in 2.11 s (15.2 tokens/s, prompt included)
+local:   tokens: 12095 13 15920 315 279 2701 374 279 6722 315 9856 30 362 13 19846 425 13 46204 356 13 50462 422 13 55184 198 16141 510 32 271 23085 315 279
+local:   same as transformers' generate(): 32/32 tokens, logits max err 1.10e-4 at step 25 ok
+local: generate prompt 1: 32 tokens in 2.53 s (12.7 tokens/s, prompt included)
+local:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 369 600 304 2088 7 16 15 982 286 1173 955 579 39345 1956 4390 333 1304
+local:   same as transformers' generate(): 32/32 tokens, logits max err 7.63e-5 at step 10 ok
+local: generate prompt 2: 32 tokens in 2.52 s (12.7 tokens/s, prompt included)
+local:   tokens: 429 279 2790 1372 315 11211 15233 553 1817 6203 374 11046 13 4354 11 279 1372 315 11211 15233 553 1817 6203 374 537 23831 11 892 11508 311 279 1212
+local:   same as transformers' generate(): 32/32 tokens, logits max err 7.06e-5 at step 7 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: expert cache: 46626 expert calls: 79.4% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 20.6% missed; 22500 calls set aside while others ran; 7717.3 ms with nothing to run but loads; 9714 loads (0 for hints, 27.78 GB, 1.57 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 407 allocations, 407 frees, peak 556.6 MB, 0 bytes still allocated at exit (balanced)
+EXIT 0

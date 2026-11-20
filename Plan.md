@@ -41,7 +41,7 @@ Machine time is informal and flexible: there is no booking schedule. Because `gx
 |---|---|---|---|
 | **PoC** | Nov 1, 2026 | Zig engine loop, mock token dispatch, io_uring prototype, platform probe, wire format, & WebGL mockup | `v0.1.0-poc` (released Oct 27) |
 | **Alpha** | Nov 8, 2026 | RDMA transport (single-node loopback first), quantized expert loader, & first two-process forward pass | `v0.2.0-alpha` (released Nov 10) |
-| **Beta** | Nov 22, 2026 | Predictive lookahead router, miss handling, swarm tracker, & (stretch) KV tiering and compressed streaming | `v0.3.0-beta` |
+| **Beta** | Nov 22, 2026 | Predictive lookahead router, miss handling, swarm tracker, & (stretch) KV tiering and compressed streaming | `v0.3.0-beta` (released Nov 20) |
 | **Release Candidate** | Nov 29, 2026 | 1-hour soak on `gx10-03`, cross-machine run with the desktop, recorded-trace visualizer, & capacity guardrails | `v0.9.0-rc1` |
 | **Final** | Dec 6, 2026 | Public release, docs freeze, and benchmark report | `v1.0.0` |
 

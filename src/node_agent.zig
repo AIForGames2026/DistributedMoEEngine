@@ -1,4 +1,4 @@
-//! The node agent behind `olmoe node` (TASK-25). Linux.
+//! The node agent behind `olmoe node` (TASK-25). Linux and Windows (TASK-43).
 //!
 //!   olmoe node --dashboard IP[:PORT] --secret-file F --models DIR
 //!              [--engine PATH] [--name NAME] [--log-dir DIR] [--advertise IP]
@@ -133,13 +133,13 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
     var engine_buf: [4096]u8 = undefined;
     const engine_z = try gpa.dupeSentinel(u8, opts.engine, 0);
     defer gpa.free(engine_z);
-    const engine = std.mem.sliceTo(c.realpath(engine_z, &engine_buf) orelse {
+    const engine = @import("plat.zig").selfExe(engine_z, &engine_buf) orelse {
         std.debug.print("node: cannot find the engine at {s}\n", .{opts.engine});
         std.process.exit(2);
-    }, 0);
+    };
     const log_z = try gpa.dupeSentinel(u8, opts.log_dir, 0);
     defer gpa.free(log_z);
-    _ = c.mkdir(log_z, 0o755);
+    @import("plat.zig").makeDir(log_z);
     std.debug.print("node: {s}, engine {s}, models in {s}, dashboard {s}:{d}\n", .{ name, engine, opts.models, opts.host, opts.port });
 
     var rank: ?Rank = null;

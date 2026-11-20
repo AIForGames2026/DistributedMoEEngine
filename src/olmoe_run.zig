@@ -1,5 +1,5 @@
 //! OLMoE-1B-7B (TASK-10), Qwen3-MoE (TASK-12), Qwen3.5-MoE (TASK-29) or Qwen3.8-Flash-Next (TASK-31) forward pass split across
-//! any number of processes (TASK-33; two by default). Linux, and Windows without RDMA, the tracker or the dashboard (TASK-40).
+//! any number of processes (TASK-33; two by default). Linux, and Windows without RDMA or the tracker (TASK-40, TASK-43).
 //!
 //!   olmoe local MODEL --golden G.tfref                 one process, every expert
 //!   olmoe shm   MODEL --golden G.tfref [options]       --ranks N processes (default 2), shared memory
@@ -211,16 +211,11 @@ pub fn main(init: std.process.Init) !void {
         {
             try all.append(init.arena.allocator(), arg);
         }
-        if (is_windows and all.items.len >= 2 and (std.mem.eql(u8, all.items[1], "dashboard") or std.mem.eql(u8, all.items[1], "node")))
-        {
-            std.debug.print("olmoe {s}: Linux only\n", .{all.items[1]});
-            std.process.exit(2);
-        }
-        if (!is_windows and all.items.len >= 2 and std.mem.eql(u8, all.items[1], "dashboard"))
+        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "dashboard"))
         {
             return dashboard.main(init.gpa, all.items[2..]);
         }
-        if (!is_windows and all.items.len >= 2 and std.mem.eql(u8, all.items[1], "node"))
+        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "node"))
         {
             return node_agent.main(init.gpa, all.items[2..]);
         }

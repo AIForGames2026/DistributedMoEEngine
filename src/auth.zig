@@ -1,4 +1,4 @@
-//! Authentication for the operator dashboard (TASK-25). Linux.
+//! Authentication for the operator dashboard (TASK-25). Linux and Windows (TASK-43).
 //!
 //! Operators: one admin token, kept in a file only its owner can read. A login
 //! with it opens a session, held in an HttpOnly, SameSite=Strict cookie; scripts
@@ -11,8 +11,11 @@
 //! not encrypted; the dashboard is meant for a private network.
 const std = @import("std");
 const c = std.c;
-const linux = std.os.linux;
 const proc = @import("proc.zig");
+const plat = @import("plat.zig");
+const sock = @import("sock.zig");
+const win32 = @import("win32.zig");
+const is_windows = @import("builtin").os.tag == .windows;
 
 const Hmac = std.crypto.auth.hmac.sha2.HmacSha256;
 pub const mac_len = Hmac.mac_length;
@@ -24,23 +27,12 @@ pub const max_sessions = 64;
 
 pub fn randomBytes(buf: []u8) void
 {
-    var off: usize = 0;
-    while (off < buf.len)
-    {
-        const n = linux.getrandom(buf[off..].ptr, buf.len - off, 0);
-        if (@as(isize, @bitCast(n)) <= 0)
-        {
-            continue;
-        }
-        off += n;
-    }
+    plat.randomBytes(buf);
 }
 
 pub fn monoNs() u64
 {
-    var ts: c.timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+    return plat.monoNs();
 }
 
 /// Compares two secrets in time that depends on neither their contents nor their lengths.
@@ -57,10 +49,15 @@ pub fn secretEql(a: []const u8, b: []const u8) bool
 
 /// Reads a secret from `path`, creating it with a fresh random value (mode 0600)
 /// when it does not exist. Refuses a file others can read, or a short secret.
+/// On Windows the file must be inside the user's profile folder instead.
 pub fn loadSecret(gpa: std.mem.Allocator, path: []const u8, label: []const u8) ![]u8
 {
     const z = try gpa.dupeSentinel(u8, path, 0);
     defer gpa.free(z);
+    if (is_windows)
+    {
+        return loadSecretWindows(gpa, z, label);
+    }
     const made = c.open(z, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .CLOEXEC = true }, @as(c.mode_t, 0o600));
     if (made >= 0)
     {
@@ -103,6 +100,44 @@ pub fn loadSecret(gpa: std.mem.Allocator, path: []const u8, label: []const u8) !
     return gpa.dupe(u8, text);
 }
 
+fn loadSecretWindows(gpa: std.mem.Allocator, path: [:0]const u8, label: []const u8) ![]u8
+{
+    // The folder is checked first, so no secret is ever written outside the profile.
+    const dir = try gpa.dupeSentinel(u8, std.fs.path.dirname(path) orelse ".", 0);
+    defer gpa.free(dir);
+    if (!plat.inUserProfile(dir))
+    {
+        say("{s}: {s} must be inside your user profile folder ({s}), which only you, SYSTEM and Administrators can read\n", .{ label, path, plat.env("USERPROFILE") orelse "%USERPROFILE%" });
+        return error.SecretExposed;
+    }
+    if (win32.openFile(path, win32.GENERIC_WRITE, win32.CREATE_NEW)) |made|
+    {
+        var raw: [32]u8 = undefined;
+        randomBytes(&raw);
+        const text = std.fmt.bytesToHex(raw, .lower) ++ [_]u8{'\n'};
+        var n: win32.DWORD = 0;
+        const ok = win32.WriteFile(made, &text, text.len, &n, null) != 0 and n == text.len;
+        _ = win32.CloseHandle(made);
+        if (!ok)
+        {
+            return error.WriteFailed;
+        }
+        say("{s}: created a new {s} in {s}\n", .{ label, label, path });
+    }
+    const text = proc.readSmall(gpa, path) orelse {
+        std.debug.print("{s}: cannot read {s}\n", .{ label, path });
+        return error.SecretUnreadable;
+    };
+    defer gpa.free(text);
+    const secret = std.mem.trim(u8, text[0..@min(text.len, 512)], " \t\r\n");
+    if (secret.len < 32)
+    {
+        std.debug.print("{s}: the secret in {s} is shorter than 32 characters\n", .{ label, path });
+        return error.SecretTooShort;
+    }
+    return gpa.dupe(u8, secret);
+}
+
 /// Prints outside tests, where the messages would only be noise.
 fn say(comptime fmt: []const u8, args: anytype) void
 {
@@ -114,7 +149,7 @@ fn say(comptime fmt: []const u8, args: anytype) void
 
 /// Operator sessions, each a random id with an expiry. Thread-safe.
 pub const Sessions = struct {
-    mutex: c.pthread_mutex_t = .{},
+    mutex: plat.Mutex = .{},
     ids: [max_sessions][32]u8 = undefined,
     expires: [max_sessions]u64 = @splat(0),
     ttl_ns: u64 = session_ttl_ns,
@@ -122,8 +157,8 @@ pub const Sessions = struct {
     /// Opens a session and writes its id as hex; the oldest goes when all are in use.
     pub fn create(self: *Sessions, now: u64, out: *[id_len]u8) void
     {
-        _ = c.pthread_mutex_lock(&self.mutex);
-        defer _ = c.pthread_mutex_unlock(&self.mutex);
+        self.mutex.acquire();
+        defer self.mutex.release();
         var slot: usize = 0;
         for (self.expires, 0..) |e, i|
         {
@@ -156,8 +191,8 @@ pub const Sessions = struct {
             return false;
         }
         _ = std.fmt.hexToBytes(&raw, hex) catch return false;
-        _ = c.pthread_mutex_lock(&self.mutex);
-        defer _ = c.pthread_mutex_unlock(&self.mutex);
+        self.mutex.acquire();
+        defer self.mutex.release();
         var found = false;
         for (&self.ids, &self.expires) |*id, *e|
         {
@@ -265,7 +300,7 @@ pub const FrameHead = extern struct {
 /// One end of a node link over a blocking socket. Frames before the handshake
 /// completes carry no signature; after it, every frame is signed.
 pub const Link = struct {
-    fd: c.fd_t,
+    fd: sock.Fd,
     is_node: bool,
     key: ?[mac_len]u8 = null,
     send_seq: u64 = 0,
@@ -275,7 +310,7 @@ pub const Link = struct {
     /// Bytes of the frame the last `recv` returned, dropped on the next call.
     returned: usize = 0,
 
-    pub fn init(gpa: std.mem.Allocator, fd: c.fd_t, is_node: bool) !Link
+    pub fn init(gpa: std.mem.Allocator, fd: sock.Fd, is_node: bool) !Link
     {
         return .{ .fd = fd, .is_node = is_node, .buf = try gpa.alloc(u8, @sizeOf(FrameHead) + max_body + mac_len) };
     }
@@ -346,17 +381,12 @@ pub const Link = struct {
                     return .{ .kind = head.kind, .body = body };
                 }
             }
-            var pfd: c.pollfd = .{ .fd = self.fd, .events = c.POLL.IN, .revents = 0 };
-            const r = c.poll(@ptrCast(&pfd), 1, timeout_ms);
-            if (r == 0)
+            const ready = sock.waitReadable(self.fd, timeout_ms) orelse continue;
+            if (!ready)
             {
                 return null;
             }
-            if (r < 0)
-            {
-                continue;
-            }
-            const n = c.recv(self.fd, self.buf[self.len..].ptr, self.buf.len - self.len, 0);
+            const n = sock.recv(self.fd, self.buf[self.len..]);
             if (n <= 0)
             {
                 return error.LinkClosed;
@@ -445,18 +475,9 @@ pub fn handshakeDashboard(link: *Link, secret: []const u8, name_out: *[64]u8) ![
     return name_out[0..name_len];
 }
 
-fn sendAll(fd: c.fd_t, bytes: []const u8) !void
+fn sendAll(fd: sock.Fd, bytes: []const u8) !void
 {
-    var off: usize = 0;
-    while (off < bytes.len)
-    {
-        const n = c.send(fd, bytes[off..].ptr, bytes.len - off, c.MSG.NOSIGNAL);
-        if (n <= 0)
-        {
-            return error.LinkClosed;
-        }
-        off += @intCast(n);
-    }
+    sock.sendAll(fd, bytes) catch return error.LinkClosed;
 }
 
 test "secrets compare equal only when identical" {
@@ -503,10 +524,9 @@ test "both sides derive the same proofs, and a wrong secret gives others" {
 
 test "signed frames pass and forged ones are refused" {
     const gpa = std.testing.allocator;
-    var fds: [2]c.fd_t = undefined;
-    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer _ = c.close(fds[0]);
-    defer _ = c.close(fds[1]);
+    const fds = try sock.socketPair();
+    defer sock.close(fds[0]);
+    defer sock.close(fds[1]);
     var node = try Link.init(gpa, fds[0], true);
     defer node.deinit(gpa);
     var dash = try Link.init(gpa, fds[1], false);
@@ -534,10 +554,9 @@ test "signed frames pass and forged ones are refused" {
 
 test "a replayed frame is refused" {
     const gpa = std.testing.allocator;
-    var fds: [2]c.fd_t = undefined;
-    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer _ = c.close(fds[0]);
-    defer _ = c.close(fds[1]);
+    const fds = try sock.socketPair();
+    defer sock.close(fds[0]);
+    defer sock.close(fds[1]);
     var node = try Link.init(gpa, fds[0], true);
     defer node.deinit(gpa);
     var dash = try Link.init(gpa, fds[1], false);
@@ -553,10 +572,9 @@ test "a replayed frame is refused" {
 
 test "a frame sent back to its sender is refused" {
     const gpa = std.testing.allocator;
-    var fds: [2]c.fd_t = undefined;
-    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer _ = c.close(fds[0]);
-    defer _ = c.close(fds[1]);
+    const fds = try sock.socketPair();
+    defer sock.close(fds[0]);
+    defer sock.close(fds[1]);
     var a = try Link.init(gpa, fds[0], true);
     defer a.deinit(gpa);
     var b = try Link.init(gpa, fds[1], true);
@@ -569,7 +587,7 @@ fn handshakeThread(link: *Link, secret: []const u8, err: *?anyerror) void
 {
     handshakeNode(link, secret, "node-a") catch |e| {
         err.* = e;
-        _ = c.shutdown(link.fd, 2);
+        sock.shutdownBoth(link.fd);
     };
 }
 
@@ -577,9 +595,8 @@ test "the handshake succeeds with one secret and fails with two" {
     const gpa = std.testing.allocator;
     for ([_][]const u8{ "the-shared-secret", "another-secret!!" }) |node_secret|
     {
-        var fds: [2]c.fd_t = undefined;
-        try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-        defer _ = c.close(fds[0]);
+        const fds = try sock.socketPair();
+        defer sock.close(fds[0]);
         var node = try Link.init(gpa, fds[0], true);
         defer node.deinit(gpa);
         var dash = try Link.init(gpa, fds[1], false);
@@ -589,7 +606,7 @@ test "the handshake succeeds with one secret and fails with two" {
         var name: [64]u8 = undefined;
         const r = handshakeDashboard(&dash, "the-shared-secret", &name);
         // The agent stops waiting once the dashboard hangs up.
-        _ = c.close(fds[1]);
+        sock.close(fds[1]);
         t.join();
         if (std.mem.eql(u8, node_secret, "the-shared-secret"))
         {
@@ -606,6 +623,29 @@ test "the handshake succeeds with one secret and fails with two" {
 
 test "a new secret file is created private and read back" {
     const gpa = std.testing.allocator;
+    if (is_windows)
+    {
+        // Inside the profile (TEMP is) it is accepted; in the working folder, outside it, refused.
+        const temp = plat.env("TEMP") orelse return error.SkipZigTest;
+        const inside = try std.fmt.allocPrintSentinel(gpa, "{s}\\tf_auth_test.secret", .{temp}, 0);
+        defer gpa.free(inside);
+        plat.deleteFile(inside);
+        defer plat.deleteFile(inside);
+        const a = try loadSecret(gpa, inside, "test secret");
+        defer gpa.free(a);
+        const b = try loadSecret(gpa, inside, "test secret");
+        defer gpa.free(b);
+        try std.testing.expectEqual(@as(usize, 64), a.len);
+        try std.testing.expectEqualStrings(a, b);
+        const outside = "tf_auth_test_outside.secret";
+        if (plat.inUserProfile("."))
+        {
+            return;
+        }
+        try std.testing.expectError(error.SecretExposed, loadSecret(gpa, outside, "test secret"));
+        try std.testing.expect(plat.regularFileBytes(outside) == null); // refused before writing anything
+        return;
+    }
     const path = "/tmp/tf_auth_test.secret";
     _ = c.unlink(path);
     defer _ = c.unlink(path);

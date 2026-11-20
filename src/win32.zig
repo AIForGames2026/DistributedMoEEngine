@@ -63,19 +63,90 @@ pub const OVERLAPPED = extern struct {
     event: ?HANDLE = null,
 };
 
-/// Opens `path` (UTF-8) with CreateFileW; null if it cannot.
-pub fn openFile(path: []const u8, access: DWORD, disposition: DWORD) ?HANDLE
+/// `path` (UTF-8) as a terminated UTF-16 string in `buf`; null if it does not fit.
+pub fn widePath(path: []const u8, buf: *[1024:0]u16) ?[:0]const u16
 {
-    var wide: [1024:0]u16 = undefined;
-    const n = std.unicode.utf8ToUtf16Le(&wide, path) catch return null;
-    if (n >= wide.len)
+    const n = std.unicode.utf8ToUtf16Le(buf, path) catch return null;
+    if (n >= buf.len)
     {
         return null;
     }
-    wide[n] = 0;
-    const h = CreateFileW(wide[0..n :0], access, FILE_SHARE_READ, null, disposition, FILE_ATTRIBUTE_NORMAL, null);
+    buf[n] = 0;
+    return buf[0..n :0];
+}
+
+/// Opens `path` (UTF-8) with CreateFileW; null if it cannot. Others may keep
+/// reading and writing it, as with a log an engine is still writing.
+pub fn openFile(path: []const u8, access: DWORD, disposition: DWORD) ?HANDLE
+{
+    var wide: [1024:0]u16 = undefined;
+    const w = widePath(path, &wide) orelse return null;
+    const h = CreateFileW(w, access, FILE_SHARE_READ | 0x2, null, disposition, FILE_ATTRIBUTE_NORMAL, null); // 0x2: FILE_SHARE_WRITE
     return if (h == INVALID_HANDLE_VALUE) null else h;
 }
+
+pub extern "kernel32" fn GetFullPathNameW(name: [*:0]const u16, len: DWORD, buf: [*]u16, file_part: ?*?[*:0]u16) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetModuleFileNameW(module: ?*anyopaque, buf: [*]u16, len: DWORD) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetLongPathNameW(short: [*:0]const u16, long: [*]u16, len: DWORD) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetFileAttributesExW(name: [*:0]const u16, level: c_int, info: *FILE_ATTRIBUTE_DATA) callconv(.winapi) BOOL;
+pub extern "kernel32" fn CreateDirectoryW(name: [*:0]const u16, attrs: ?*anyopaque) callconv(.winapi) BOOL;
+pub extern "kernel32" fn MoveFileExW(from: [*:0]const u16, to: [*:0]const u16, flags: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn DeleteFileW(name: [*:0]const u16) callconv(.winapi) BOOL;
+pub extern "kernel32" fn FindFirstFileW(pattern: [*:0]const u16, data: *WIN32_FIND_DATAW) callconv(.winapi) HANDLE;
+pub extern "kernel32" fn FindNextFileW(find: HANDLE, data: *WIN32_FIND_DATAW) callconv(.winapi) BOOL;
+pub extern "kernel32" fn FindClose(find: HANDLE) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GlobalMemoryStatusEx(status: *MEMORYSTATUSEX) callconv(.winapi) BOOL;
+pub extern "kernel32" fn AcquireSRWLockExclusive(lock: *?*anyopaque) callconv(.winapi) void;
+pub extern "kernel32" fn ReleaseSRWLockExclusive(lock: *?*anyopaque) callconv(.winapi) void;
+pub extern "advapi32" fn SystemFunction036(buf: [*]u8, len: u32) callconv(.winapi) u8; // RtlGenRandom
+pub extern "user32" fn EnumDisplayDevicesA(device: ?[*:0]const u8, index: DWORD, out: *DISPLAY_DEVICEA, flags: DWORD) callconv(.winapi) BOOL;
+
+pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x10;
+pub const MOVEFILE_REPLACE_EXISTING: DWORD = 0x1;
+pub const CREATE_NEW: DWORD = 1;
+
+pub const FILE_ATTRIBUTE_DATA = extern struct {
+    attributes: DWORD,
+    created: u64 align(4),
+    accessed: u64 align(4),
+    written: u64 align(4),
+    size_high: DWORD,
+    size_low: DWORD,
+};
+
+pub const WIN32_FIND_DATAW = extern struct {
+    attributes: DWORD,
+    created: u64 align(4),
+    accessed: u64 align(4),
+    written: u64 align(4),
+    size_high: DWORD,
+    size_low: DWORD,
+    reserved0: DWORD,
+    reserved1: DWORD,
+    name: [260]u16,
+    short_name: [14]u16,
+};
+
+pub const MEMORYSTATUSEX = extern struct {
+    length: DWORD = @sizeOf(MEMORYSTATUSEX),
+    load: DWORD = 0,
+    total_phys: u64 = 0,
+    avail_phys: u64 = 0,
+    total_page: u64 = 0,
+    avail_page: u64 = 0,
+    total_virtual: u64 = 0,
+    avail_virtual: u64 = 0,
+    avail_extended: u64 = 0,
+};
+
+pub const DISPLAY_DEVICEA = extern struct {
+    cb: DWORD = @sizeOf(DISPLAY_DEVICEA),
+    name: [32]u8 = undefined,
+    string: [128]u8 = undefined,
+    flags: DWORD = 0,
+    id: [128]u8 = undefined,
+    key: [128]u8 = undefined,
+};
 
 /// Reads up to `len` bytes at `offset`, like pread; returns the count or null on an error.
 pub fn readAt(h: HANDLE, offset: u64, buf: []u8) ?usize

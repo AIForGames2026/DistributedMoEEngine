@@ -1,4 +1,4 @@
-//! The operator dashboard behind `olmoe dashboard` (TASK-25). Linux.
+//! The operator dashboard behind `olmoe dashboard` (TASK-25). Linux and Windows (TASK-43).
 //!
 //!   olmoe dashboard --models DIR [--listen [IP:]PORT] [--node-port P]
 //!                   [--token-file F] [--node-secret-file F] [--api-key-file F]
@@ -30,6 +30,8 @@
 const std = @import("std");
 const c = std.c;
 const http = @import("http.zig");
+const sock = @import("sock.zig");
+const plat = @import("plat.zig");
 const openai = @import("openai.zig");
 const auth = @import("auth.zig");
 const proc = @import("proc.zig");
@@ -83,12 +85,12 @@ const Node = struct {
 /// One agent's link; sends are serialized by `mutex`.
 const Conn = struct {
     link: auth.Link,
-    mutex: c.pthread_mutex_t = .{},
+    mutex: plat.Mutex = .{},
 
     fn send(self: *Conn, kind: auth.Kind, body: []const u8) !void
     {
-        _ = c.pthread_mutex_lock(&self.mutex);
-        defer _ = c.pthread_mutex_unlock(&self.mutex);
+        self.mutex.acquire();
+        defer self.mutex.release();
         try self.link.send(kind, body);
     }
 };
@@ -109,7 +111,7 @@ const Plan = struct {
 };
 
 const State = struct {
-    mutex: c.pthread_mutex_t = .{},
+    mutex: plat.Mutex = .{},
     nodes: [max_nodes]Node = @splat(.{}),
     run: RunState = .idle,
     message: std.ArrayList(u8) = .empty,
@@ -118,16 +120,16 @@ const State = struct {
     /// What the supervisor should do next.
     pending: ?*Plan = null,
     stop_requested: bool = false,
-    router_pid: ?c.pid_t = null,
+    router_pid: ?i32 = null,
 
     fn lock(self: *State) void
     {
-        _ = c.pthread_mutex_lock(&self.mutex);
+        self.mutex.acquire();
     }
 
     fn unlock(self: *State) void
     {
-        _ = c.pthread_mutex_unlock(&self.mutex);
+        self.mutex.release();
     }
 
     fn find(self: *State, name: []const u8) ?*Node
@@ -178,7 +180,7 @@ var admin_token: []const u8 = "";
 var node_secret: []const u8 = "";
 var api_key: ?[]const u8 = null;
 var engine_path: []const u8 = "";
-var login_mutex: c.pthread_mutex_t = .{};
+var login_mutex: plat.Mutex = .{};
 var open_conns: std.atomic.Value(usize) = .init(0);
 
 const usage =
@@ -275,13 +277,13 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
     var engine_buf: [4096]u8 = undefined;
     const engine_z = try gpa.dupeSentinel(u8, opts.engine, 0);
     defer gpa.free(engine_z);
-    engine_path = try gpa.dupe(u8, std.mem.sliceTo(c.realpath(engine_z, &engine_buf) orelse {
+    engine_path = try gpa.dupe(u8, plat.selfExe(engine_z, &engine_buf) orelse {
         std.debug.print("dashboard: cannot find the engine at {s}\n", .{opts.engine});
         std.process.exit(2);
-    }, 0));
+    });
     const log_z = try gpa.dupeSentinel(u8, opts.log_dir, 0);
     defer gpa.free(log_z);
-    _ = c.mkdir(log_z, 0o755);
+    plat.makeDir(log_z);
     loadApproved(gpa);
 
     const web_fd = try listenOn(opts.addr, opts.port);
@@ -302,33 +304,21 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
     supervise();
 }
 
-fn listenOn(addr: u32, port: u16) !c.fd_t
+fn listenOn(addr: u32, port: u16) !sock.Fd
 {
-    const fd = c.socket(c.AF.INET, c.SOCK.STREAM | c.SOCK.CLOEXEC, 0);
-    if (fd < 0)
+    return sock.listenTcp(addr, port, 64) catch |err|
     {
-        return error.SystemResources;
-    }
-    const one: c_int = 1;
-    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &one, @sizeOf(c_int));
-    var sa: c.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
-    if (c.bind(fd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) != 0)
-    {
-        std.debug.print("dashboard: port {d} is in use\n", .{port});
-        return error.AddressInUse;
-    }
-    if (c.listen(fd, 64) != 0)
-    {
-        return error.SystemResources;
-    }
-    return fd;
+        if (err == error.AddressInUse)
+        {
+            std.debug.print("dashboard: port {d} is in use\n", .{port});
+        }
+        return err;
+    };
 }
 
 fn stamp(buf: *[16]u8) []const u8
 {
-    var ts: c.timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK.REALTIME, &ts);
-    const ms = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
+    const ms = plat.unixMs();
     const day = ms % (24 * 3600 * 1000);
     return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{ day / 3600000, day / 60000 % 60, day / 1000 % 60, day % 1000 }) catch unreachable;
 }
@@ -370,39 +360,24 @@ fn saveApproved() void
     defer gpa_global.free(tmp);
     const dst = gpa_global.dupeSentinel(u8, opts_global.nodes_file, 0) catch return;
     defer gpa_global.free(dst);
-    const fd = c.open(tmp, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .CLOEXEC = true }, @as(c.mode_t, 0o600));
-    if (fd < 0)
-    {
-        return;
-    }
-    const ok = c.write(fd, out.items.ptr, out.items.len) == out.items.len;
-    _ = c.close(fd);
-    if (ok)
-    {
-        _ = c.rename(tmp, dst);
-    }
+    _ = plat.replaceFile(tmp, dst, out.items);
 }
 
-fn nodeAccept(lfd: c.fd_t) void
+fn nodeAccept(lfd: sock.Fd) void
 {
     while (true)
     {
-        var sa: c.sockaddr.in = undefined;
-        var len: c.socklen_t = @sizeOf(c.sockaddr.in);
-        const fd = c.accept(lfd, @ptrCast(&sa), &len);
-        if (fd < 0)
-        {
-            continue;
-        }
+        const got = sock.acceptFrom(lfd) orelse continue;
+        const fd = got.fd;
         if (open_conns.fetchAdd(1, .acq_rel) >= max_conns)
         {
             _ = open_conns.fetchSub(1, .acq_rel);
-            _ = c.close(fd);
+            sock.close(fd);
             continue;
         }
-        const t = std.Thread.spawn(.{}, nodeConn, .{ fd, sa.addr }) catch {
+        const t = std.Thread.spawn(.{}, nodeConn, .{ fd, got.addr }) catch {
             _ = open_conns.fetchSub(1, .acq_rel);
-            _ = c.close(fd);
+            sock.close(fd);
             continue;
         };
         t.detach();
@@ -410,10 +385,10 @@ fn nodeAccept(lfd: c.fd_t) void
 }
 
 /// One agent's link: the handshake, then its reports until it goes quiet or away.
-fn nodeConn(fd: c.fd_t, addr: u32) void
+fn nodeConn(fd: sock.Fd, addr: u32) void
 {
     defer _ = open_conns.fetchSub(1, .acq_rel);
-    defer _ = c.close(fd);
+    defer sock.close(fd);
     const gpa = gpa_global;
     const conn = gpa.create(Conn) catch return;
     defer gpa.destroy(conn);
@@ -512,46 +487,39 @@ fn parseReport(a: std.mem.Allocator, body: []const u8) ?Report
     return std.json.parseFromSliceLeaky(Report, a, body, .{ .ignore_unknown_fields = true }) catch null;
 }
 
-fn webAccept(lfd: c.fd_t) void
+fn webAccept(lfd: sock.Fd) void
 {
     while (true)
     {
-        const fd = c.accept(lfd, null, null);
-        if (fd < 0)
-        {
-            continue;
-        }
+        const fd = sock.accept(lfd) orelse continue;
         if (open_conns.fetchAdd(1, .acq_rel) >= max_conns)
         {
             _ = open_conns.fetchSub(1, .acq_rel);
             sendSimple(fd, 503, "application/json", "{\"error\":\"The dashboard is busy.\"}", "") catch {};
-            _ = c.close(fd);
+            sock.close(fd);
             continue;
         }
         const t = std.Thread.spawn(.{}, webConn, .{fd}) catch {
             _ = open_conns.fetchSub(1, .acq_rel);
-            _ = c.close(fd);
+            sock.close(fd);
             continue;
         };
         t.detach();
     }
 }
 
-fn webConn(fd: c.fd_t) void
+fn webConn(fd: sock.Fd) void
 {
     defer _ = open_conns.fetchSub(1, .acq_rel);
-    defer _ = c.close(fd);
-    const rcv: c.timeval = .{ .sec = 10, .usec = 0 };
-    const snd: c.timeval = .{ .sec = 30, .usec = 0 };
-    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.RCVTIMEO, std.mem.asBytes(&rcv), @sizeOf(c.timeval));
-    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.SNDTIMEO, std.mem.asBytes(&snd), @sizeOf(c.timeval));
+    defer sock.close(fd);
+    sock.setTimeouts(fd, 10, 30);
     var arena: std.heap.ArenaAllocator = .init(gpa_global);
     defer arena.deinit();
     handle(arena.allocator(), fd) catch {};
 }
 
 /// Reads one request and answers it.
-fn handle(a: std.mem.Allocator, fd: c.fd_t) !void
+fn handle(a: std.mem.Allocator, fd: sock.Fd) !void
 {
     var buf: std.ArrayList(u8) = .empty;
     var head: http.Head = undefined;
@@ -583,7 +551,7 @@ fn handle(a: std.mem.Allocator, fd: c.fd_t) !void
             error.BadRequest => return apiError(fd, 400, "Malformed HTTP request."),
         }
         try buf.ensureUnusedCapacity(a, 64 << 10);
-        const n = c.recv(fd, buf.unusedCapacitySlice().ptr, buf.unusedCapacitySlice().len, 0);
+        const n = sock.recv(fd, buf.unusedCapacitySlice());
         if (n <= 0)
         {
             return;
@@ -729,19 +697,19 @@ fn signedIn(head: http.Head) bool
     return false;
 }
 
-fn login(a: std.mem.Allocator, fd: c.fd_t, body: []const u8) !void
+fn login(a: std.mem.Allocator, fd: sock.Fd, body: []const u8) !void
 {
     const req = std.json.parseFromSliceLeaky(struct { token: []const u8 }, a, body, .{ .ignore_unknown_fields = true }) catch {
         return apiError(fd, 400, "Send {\"token\": \"...\"}.");
     };
     // One attempt at a time, and a wrong one costs a second, so guessing is slow.
-    _ = c.pthread_mutex_lock(&login_mutex);
+    login_mutex.acquire();
     const ok = auth.secretEql(std.mem.trim(u8, req.token, " \t\r\n"), admin_token);
     if (!ok)
     {
         proc.sleepMs(1000);
     }
-    _ = c.pthread_mutex_unlock(&login_mutex);
+    login_mutex.release();
     if (!ok)
     {
         std.debug.print("dashboard: a sign-in with a wrong token was refused\n", .{});
@@ -754,7 +722,7 @@ fn login(a: std.mem.Allocator, fd: c.fd_t, body: []const u8) !void
     return sendSimple(fd, 200, "application/json", "{\"ok\":true}", cookie);
 }
 
-fn approve(a: std.mem.Allocator, fd: c.fd_t, body: []const u8, yes: bool) !void
+fn approve(a: std.mem.Allocator, fd: sock.Fd, body: []const u8, yes: bool) !void
 {
     const req = std.json.parseFromSliceLeaky(struct { name: []const u8 }, a, body, .{ .ignore_unknown_fields = true }) catch {
         return apiError(fd, 400, "Send {\"name\": \"...\"}.");
@@ -799,7 +767,7 @@ const LoadRequest = struct {
     cache: u32 = 0,
 };
 
-fn load(a: std.mem.Allocator, fd: c.fd_t, body: []const u8) !void
+fn load(a: std.mem.Allocator, fd: sock.Fd, body: []const u8) !void
 {
     const req = std.json.parseFromSliceLeaky(LoadRequest, a, body, .{ .ignore_unknown_fields = true }) catch {
         return apiError(fd, 400, "The load request is malformed.");
@@ -1438,13 +1406,13 @@ fn routerHealthy() bool
     {
         return false;
     }
-    const n = c.recv(fd, &buf, buf.len, 0);
+    const n = sock.recv(fd, &buf);
     return n >= 12 and std.mem.startsWith(u8, buf[0..@intCast(n)], "HTTP/1.1 200");
 }
 
 /// Passes the request to the router and its answer back, both ways until
 /// either side closes (so a WebSocket works too). `path` replaces the request's path.
-fn proxy(a: std.mem.Allocator, fd: c.fd_t, raw: []const u8, path: ?[]const u8) !void
+fn proxy(a: std.mem.Allocator, fd: sock.Fd, raw: []const u8, path: ?[]const u8) !void
 {
     const up = tcp.connect("127.0.0.1", opts_global.router_port, 1) catch {
         return apiError(fd, 502, "The router did not answer.");
@@ -1464,16 +1432,15 @@ fn proxy(a: std.mem.Allocator, fd: c.fd_t, raw: []const u8, path: ?[]const u8) !
         try sendAll(up, raw);
     }
     // Reads may now wait as long as the stream lasts.
-    const none: c.timeval = .{ .sec = 0, .usec = 0 };
-    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.RCVTIMEO, std.mem.asBytes(&none), @sizeOf(c.timeval));
+    sock.setTimeouts(fd, 0, 30);
     var buf: [64 << 10]u8 = undefined;
-    var pfds: [2]c.pollfd = .{
-        .{ .fd = fd, .events = c.POLL.IN, .revents = 0 },
-        .{ .fd = up, .events = c.POLL.IN, .revents = 0 },
+    var pfds: [2]sock.PollFd = .{
+        .{ .fd = fd, .events = sock.POLL_IN, .revents = 0 },
+        .{ .fd = up, .events = sock.POLL_IN, .revents = 0 },
     };
     while (true)
     {
-        if (c.poll(&pfds, 2, -1) < 0)
+        if (sock.poll(&pfds, -1) == 0)
         {
             continue;
         }
@@ -1485,7 +1452,7 @@ fn proxy(a: std.mem.Allocator, fd: c.fd_t, raw: []const u8, path: ?[]const u8) !
             }
             const from = if (i == 0) fd else up;
             const to = if (i == 0) up else fd;
-            const n = c.recv(from, &buf, buf.len, 0);
+            const n = sock.recv(from, &buf);
             if (n <= 0)
             {
                 return;
@@ -1495,22 +1462,13 @@ fn proxy(a: std.mem.Allocator, fd: c.fd_t, raw: []const u8, path: ?[]const u8) !
     }
 }
 
-fn sendAll(fd: c.fd_t, bytes: []const u8) !void
+fn sendAll(fd: sock.Fd, bytes: []const u8) !void
 {
-    var off: usize = 0;
-    while (off < bytes.len)
-    {
-        const n = c.send(fd, bytes[off..].ptr, bytes.len - off, c.MSG.NOSIGNAL);
-        if (n <= 0)
-        {
-            return error.ClientGone;
-        }
-        off += @intCast(n);
-    }
+    return sock.sendAll(fd, bytes);
 }
 
 /// A whole response; `extra` is more header lines, each ending in CRLF.
-fn sendSimple(fd: c.fd_t, status: u16, content_type: []const u8, body: []const u8, extra: []const u8) !void
+fn sendSimple(fd: sock.Fd, status: u16, content_type: []const u8, body: []const u8, extra: []const u8) !void
 {
     var head: [1024]u8 = undefined;
     const h = try std.fmt.bufPrint(&head, "HTTP/1.1 {d} {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n{s}Connection: close\r\n\r\n", .{ status, http.reason(status), content_type, body.len, extra });
@@ -1518,7 +1476,7 @@ fn sendSimple(fd: c.fd_t, status: u16, content_type: []const u8, body: []const u
     try sendAll(fd, body);
 }
 
-fn apiError(fd: c.fd_t, status: u16, message: []const u8) !void
+fn apiError(fd: sock.Fd, status: u16, message: []const u8) !void
 {
     const gpa = gpa_global;
     var body: std.ArrayList(u8) = .empty;
@@ -1529,7 +1487,7 @@ fn apiError(fd: c.fd_t, status: u16, message: []const u8) !void
     try sendSimple(fd, status, "application/json", body.items, "");
 }
 
-fn sendOpenAiError(fd: c.fd_t, status: u16, message: []const u8, kind: []const u8) !void
+fn sendOpenAiError(fd: sock.Fd, status: u16, message: []const u8, kind: []const u8) !void
 {
     const gpa = gpa_global;
     var body: std.ArrayList(u8) = .empty;

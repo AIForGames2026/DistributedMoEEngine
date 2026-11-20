@@ -132,6 +132,17 @@ pub fn setNonBlocking(fd: Fd) void
     }
 }
 
+/// Stops both directions, waking a thread blocked on the socket.
+pub fn shutdownBoth(fd: Fd) void
+{
+    if (is_windows)
+    {
+        _ = win32.shutdown(fd, 2);
+        return;
+    }
+    _ = c.shutdown(fd, 2);
+}
+
 /// Sends every byte, blocking; error.ClientGone if the peer went away.
 pub fn sendAll(fd: Fd, bytes: []const u8) !void
 {
@@ -213,6 +224,73 @@ pub fn poll(fds: []PollFd, timeout_ms: c_int) usize
     return if (n > 0) @intCast(n) else 0;
 }
 
+/// Two connected sockets, each able to send and receive: a Unix socket pair,
+/// or on Windows a loopback TCP pair.
+pub fn socketPair() ![2]Fd
+{
+    if (!is_windows)
+    {
+        var fds: [2]c.fd_t = undefined;
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM | c.SOCK.CLOEXEC, 0, &fds) != 0)
+        {
+            return error.SystemResources;
+        }
+        return fds;
+    }
+    const loopback: u32 = @bitCast([4]u8{ 127, 0, 0, 1 });
+    const l = try listenTcp(loopback, 0, 1);
+    defer close(l);
+    var sa: ws.sockaddr.in = undefined;
+    var len: c_int = @sizeOf(ws.sockaddr.in);
+    if (win32.getsockname(l, &sa, &len) != 0)
+    {
+        return error.SystemResources;
+    }
+    const w = win32.socket(ws.AF.INET, ws.SOCK.STREAM, ws.IPPROTO.TCP);
+    if (w == win32.INVALID_SOCKET)
+    {
+        return error.SystemResources;
+    }
+    errdefer close(w);
+    if (win32.connect(w, &sa, @sizeOf(ws.sockaddr.in)) != 0)
+    {
+        return error.SystemResources;
+    }
+    const r = accept(l) orelse return error.SystemResources;
+    const one: c_int = 1;
+    _ = win32.setsockopt(w, ws.IPPROTO.TCP, ws.TCP.NODELAY, &one, @sizeOf(c_int));
+    _ = win32.setsockopt(r, ws.IPPROTO.TCP, ws.TCP.NODELAY, &one, @sizeOf(c_int));
+    return .{ r, w };
+}
+
+/// Accepts a connection and gives the peer's IPv4 address (network byte order).
+pub fn acceptFrom(lfd: Fd) ?struct { fd: Fd, addr: u32 }
+{
+    if (is_windows)
+    {
+        var sa: ws.sockaddr.in = undefined;
+        var len: c_int = @sizeOf(ws.sockaddr.in);
+        const fd = win32.accept(lfd, &sa, &len);
+        return if (fd == win32.INVALID_SOCKET) null else .{ .fd = fd, .addr = sa.addr };
+    }
+    var sa: c.sockaddr.in = undefined;
+    var len: c.socklen_t = @sizeOf(c.sockaddr.in);
+    const fd = c.accept(lfd, @ptrCast(&sa), &len);
+    return if (fd < 0) null else .{ .fd = fd, .addr = sa.addr };
+}
+
+/// Waits up to `timeout_ms` for `fd` to have bytes (or a close) to read; null on an error.
+pub fn waitReadable(fd: Fd, timeout_ms: c_int) ?bool
+{
+    var pfd = [1]PollFd{.{ .fd = fd, .events = POLL_IN, .revents = 0 }};
+    const n = if (is_windows) win32.WSAPoll(&pfd, 1, timeout_ms) else c.poll(&pfd, 1, timeout_ms);
+    if (n < 0)
+    {
+        return null;
+    }
+    return n > 0;
+}
+
 /// One-way channel between threads of this process: a pipe, or on Windows a loopback socket pair.
 pub const Pipe = struct {
     read_end: Fd,
@@ -229,29 +307,8 @@ pub const Pipe = struct {
             }
             return .{ .read_end = fds[0], .write_end = fds[1] };
         }
-        const loopback: u32 = @bitCast([4]u8{ 127, 0, 0, 1 });
-        const l = try listenTcp(loopback, 0, 1);
-        defer close(l);
-        var sa: ws.sockaddr.in = undefined;
-        var len: c_int = @sizeOf(ws.sockaddr.in);
-        if (win32.getsockname(l, &sa, &len) != 0)
-        {
-            return error.SystemResources;
-        }
-        const w = win32.socket(ws.AF.INET, ws.SOCK.STREAM, ws.IPPROTO.TCP);
-        if (w == win32.INVALID_SOCKET)
-        {
-            return error.SystemResources;
-        }
-        errdefer close(w);
-        if (win32.connect(w, &sa, @sizeOf(ws.sockaddr.in)) != 0)
-        {
-            return error.SystemResources;
-        }
-        const r = accept(l) orelse return error.SystemResources;
-        const one: c_int = 1;
-        _ = win32.setsockopt(w, ws.IPPROTO.TCP, ws.TCP.NODELAY, &one, @sizeOf(c_int));
-        return .{ .read_end = r, .write_end = w };
+        const pair = try socketPair();
+        return .{ .read_end = pair[0], .write_end = pair[1] };
     }
 
     /// Writes all of `bytes` (small values, a pointer or a socket); false if it could not.

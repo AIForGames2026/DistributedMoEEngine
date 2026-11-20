@@ -24,7 +24,7 @@ export PATH="$HOME/tools/zig:$PATH"
 zig build install -Doptimize=ReleaseFast
 ```
 
-**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine (`olmoe.exe`: `local`, `shm`, `expert` and `router` over TCP, `--serve` with the live page, and `-Gpu` for CUDA) and the two-process check. RDMA, the tracker and the dashboard run in WSL2.
+**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine (`olmoe.exe`: `local`, `shm`, `expert` and `router` over TCP, `--serve` with the live page, the dashboard and node agent, and `-Gpu` for CUDA) and the two-process check. RDMA and the tracker run in WSL2.
 
 ```powershell
 .\build.ps1
@@ -58,7 +58,7 @@ npm run preview
 
 To run the real 7 GB model, over RDMA or on a GPU, see [Building and running everything](docs/BUILDING.md).
 
-### Operator dashboard (Linux)
+### Operator dashboard (Linux and Windows)
 
 Run a model across several machines from one page. Start the dashboard on the machine that will hold rank 0. On its first run it writes an admin token to `dashboard.token` and a node secret to `node.secret`:
 
@@ -74,18 +74,17 @@ zig-out/bin/olmoe node --dashboard <dashboard IP> --models ~/models --secret-fil
 
 Approve the machine on the page, tick it under Model, and press Load. Chat on the page, or point any OpenAI-compatible client at `http://<dashboard>:8080/v1`. The dashboard speaks plain HTTP and listens only on 127.0.0.1 unless you pass `--listen`, so keep it on a private network or behind a TLS proxy. Every option is in [Building and running everything](docs/BUILDING.md).
 
-**On Windows**, the dashboard and the agent run in WSL2 (the native `olmoe.exe` has no dashboard, agent or tracker yet). Build in Ubuntu as above, and keep `dashboard.token` and `node.secret` in your WSL home directory: under `/mnt/c` every file looks readable by everyone, so they are refused. A dashboard in WSL opens in your Windows browser at `http://127.0.0.1:8080/`.
-
-To make a Windows PC an expert node, start the agent in WSL with `--advertise 127.0.0.1`, since WSL's network address is hidden behind Windows:
-
-```bash
-zig-out/bin/olmoe node --dashboard <dashboard IP> --models ~/models --secret-file ~/node.secret --advertise 127.0.0.1
-```
-
-Then, in PowerShell, open a tunnel that carries the dashboard machine's port for this rank back to the PC (47401 for the first node, 47402 for the second, and so on) and leave it running while the model is loaded:
+**On Windows**, the dashboard and the agent run natively in PowerShell (TASK-43), with the same options. Keep `dashboard.token` and `node.secret` in a folder inside your user profile (`C:\Users\<you>\...`), which only you, SYSTEM and Administrators can read; a secret anywhere else is refused. For example:
 
 ```powershell
-ssh -N -R 47401:127.0.0.1:47401 <user>@<dashboard machine>
+mkdir $HOME\tensorfold; cd $HOME\tensorfold
+D:\path\to\zig-out\bin\olmoe.exe dashboard --models E:\models
+```
+
+To make a Windows PC an expert node, copy `node.secret` into your profile there and start the agent; no WSL2, `--advertise` or tunnel is needed. Windows asks once whether `olmoe.exe` may accept connections:
+
+```powershell
+olmoe.exe node --dashboard <dashboard IP> --models E:\models --secret-file $HOME\tensorfold\node.secret
 ```
 
 Without the dashboard, a native Windows expert needs no WSL2 or tunnel: start it in PowerShell, then point the router at the PC's address (Windows asks once whether `olmoe.exe` may accept connections):
@@ -130,7 +129,7 @@ The website is now the engine itself: recorded chats and runs of the real engine
 - **Release Candidate (`v0.9.0-rc1`, Nov 29):** the benchmark report and architecture whitepaper (TASK-19), developer documentation and the API freeze (TASK-20), and sharing the project with other developers once the site is final ([#52](https://github.com/AIForGames2026/DistributedMoEEngine/issues/52)).
 - **Final (`v1.0.0`, Dec 6):** the public release and docs freeze.
 - Post-v1 work in progress (GLM-5.3-Flash's 128k prompt over two Sparks, TASK-32) adds results to `bench/`, not new site content.
-- **Amended Nov 20:** the native Windows engine (TASK-40) is pulled in before v1. It adds Windows code only; Linux builds and tests are unchanged.
+- **Amended Nov 20:** the native Windows engine (TASK-40) and the native Windows dashboard and node agent (TASK-43) are pulled in before v1. They add Windows code; Linux builds and tests are unchanged.
 
 **Not in this build**
 - Compressed expert streaming (TASK-13) was cut on Nov 11.

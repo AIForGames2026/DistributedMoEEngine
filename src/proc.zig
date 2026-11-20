@@ -1,9 +1,12 @@
 //! Child processes and machine facts for the operator dashboard and its node
-//! agents (TASK-25). Linux.
+//! agents (TASK-25). Linux, and Windows (TASK-43) through `win_child.zig` and Win32.
 const std = @import("std");
 const c = std.c;
 const linux = std.os.linux;
 const openai = @import("openai.zig");
+const plat = @import("plat.zig");
+const win32 = @import("win32.zig");
+const is_windows = @import("builtin").os.tag == .windows;
 
 pub const FileStat = struct {
     size: u64,
@@ -24,7 +27,9 @@ pub fn statAt(fd: c.fd_t, path: [*:0]const u8) ?FileStat
 }
 
 /// An engine process started by the dashboard or an agent, with its output in a log file.
-pub const Child = struct {
+pub const Child = if (is_windows) @import("win_child.zig").Child else PosixChild;
+
+const PosixChild = struct {
     pid: c.pid_t,
     log_path: []u8,
     started_ns: u64,
@@ -137,20 +142,33 @@ pub const Child = struct {
 
 pub fn monoNs() u64
 {
-    var ts: c.timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+    return plat.monoNs();
 }
 
 pub fn sleepMs(ms: u32) void
 {
-    const ts: c.timespec = .{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
-    _ = c.nanosleep(&ts, null);
+    plat.sleepMs(ms);
 }
 
 /// The last `max` bytes of a file, starting at a line boundary when cut.
 pub fn tail(gpa: std.mem.Allocator, path: []const u8, max: usize) ![]u8
 {
+    if (is_windows)
+    {
+        const h = win32.openFile(path, win32.GENERIC_READ, win32.OPEN_EXISTING) orelse return gpa.dupe(u8, "");
+        defer _ = win32.CloseHandle(h);
+        var bytes: i64 = 0;
+        if (win32.GetFileSizeEx(h, &bytes) == 0)
+        {
+            return error.ReadFailed;
+        }
+        const size: usize = @intCast(bytes);
+        const start = if (size > max) size - max else 0;
+        const buf = try gpa.alloc(u8, size - start);
+        defer gpa.free(buf);
+        const n = win32.readAt(h, start, buf) orelse return error.ReadFailed;
+        return tailFrom(gpa, buf[0..n], start);
+    }
     const z = try gpa.dupeSentinel(u8, path, 0);
     defer gpa.free(z);
     const fd = c.open(z, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, @as(c.mode_t, 0));
@@ -167,13 +185,19 @@ pub fn tail(gpa: std.mem.Allocator, path: []const u8, max: usize) ![]u8
         return gpa.dupe(u8, "");
     }
     const buf = try gpa.alloc(u8, size - start);
-    errdefer gpa.free(buf);
+    defer gpa.free(buf);
     const n = c.pread(fd, buf.ptr, buf.len, @intCast(start));
     if (n < 0)
     {
         return error.ReadFailed;
     }
-    var got = buf[0..@intCast(n)];
+    return tailFrom(gpa, buf[0..@intCast(n)], start);
+}
+
+/// A copy of `got`, read from offset `start`, without the partial first line when cut.
+fn tailFrom(gpa: std.mem.Allocator, bytes: []const u8, start: usize) ![]u8
+{
+    var got = bytes;
     if (start > 0)
     {
         if (std.mem.indexOfScalar(u8, got, '\n')) |i|
@@ -181,15 +205,30 @@ pub fn tail(gpa: std.mem.Allocator, path: []const u8, max: usize) ![]u8
             got = got[i + 1 ..];
         }
     }
-    const out = try gpa.dupe(u8, got);
-    gpa.free(buf);
-    return out;
+    return gpa.dupe(u8, got);
 }
 
 /// A whole small file (up to 1 MB), or null if it cannot be read. Reads to the
 /// end instead of trusting the size, which is 0 for /proc and /sys files.
 pub fn readSmall(gpa: std.mem.Allocator, path: []const u8) ?[]u8
 {
+    if (is_windows)
+    {
+        const h = win32.openFile(path, win32.GENERIC_READ, win32.OPEN_EXISTING) orelse return null;
+        defer _ = win32.CloseHandle(h);
+        var wout: std.ArrayList(u8) = .empty;
+        while (wout.items.len < 1 << 20)
+        {
+            wout.ensureUnusedCapacity(gpa, 16 << 10) catch break;
+            const n = win32.readAt(h, wout.items.len, wout.unusedCapacitySlice()) orelse break;
+            if (n == 0)
+            {
+                break;
+            }
+            wout.items.len += n;
+        }
+        return wout.toOwnedSlice(gpa) catch null;
+    }
     const z = gpa.dupeSentinel(u8, path, 0) catch return null;
     defer gpa.free(z);
     const fd = c.open(z, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, @as(c.mode_t, 0));
@@ -236,6 +275,10 @@ pub fn validModelName(name: []const u8) bool
 
 fn fileSize(gpa: std.mem.Allocator, path: []const u8) ?u64
 {
+    if (is_windows)
+    {
+        return plat.regularFileBytes(path);
+    }
     const z = gpa.dupeSentinel(u8, path, 0) catch return null;
     defer gpa.free(z);
     const st = statAt(-1, z) orelse return null;
@@ -266,15 +309,12 @@ pub fn modelSize(gpa: std.mem.Allocator, dir: []const u8, name: []const u8) ?u64
 pub fn listModels(a: std.mem.Allocator, dir: []const u8) ![]ModelFile
 {
     var out: std.ArrayList(ModelFile) = .empty;
-    const z = try a.dupeSentinel(u8, dir, 0);
-    const d = c.opendir(z) orelse return out.items;
-    defer _ = c.closedir(d);
-    while (c.readdir(d)) |ent|
+    const names = try fileNames(a, dir);
+    for (names) |name|
     {
-        const name = std.mem.sliceTo(&ent.name, 0);
         if (modelSize(a, dir, name)) |size|
         {
-            try out.append(a, .{ .name = try a.dupe(u8, name), .bytes = size });
+            try out.append(a, .{ .name = name, .bytes = size });
         }
     }
     std.mem.sort(ModelFile, out.items, {}, struct {
@@ -283,6 +323,51 @@ pub fn listModels(a: std.mem.Allocator, dir: []const u8) ![]ModelFile
             return std.mem.order(u8, x.name, y.name) == .lt;
         }
     }.lt);
+    return out.items;
+}
+
+/// The names in folder `dir`, without "." and "..".
+fn fileNames(a: std.mem.Allocator, dir: []const u8) ![][]const u8
+{
+    var out: std.ArrayList([]const u8) = .empty;
+    if (is_windows)
+    {
+        var wide: [1024:0]u16 = undefined;
+        const pattern = try std.fmt.allocPrint(a, "{s}\\*", .{dir});
+        const w = win32.widePath(pattern, &wide) orelse return out.items;
+        var data: win32.WIN32_FIND_DATAW = undefined;
+        const find = win32.FindFirstFileW(w, &data);
+        if (find == win32.INVALID_HANDLE_VALUE)
+        {
+            return out.items;
+        }
+        defer _ = win32.FindClose(find);
+        while (true)
+        {
+            const len = std.mem.indexOfScalar(u16, &data.name, 0) orelse data.name.len;
+            const name = try std.unicode.utf16LeToUtf8Alloc(a, data.name[0..len]);
+            if (!std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, ".."))
+            {
+                try out.append(a, name);
+            }
+            if (win32.FindNextFileW(find, &data) == 0)
+            {
+                break;
+            }
+        }
+        return out.items;
+    }
+    const z = try a.dupeSentinel(u8, dir, 0);
+    const d = c.opendir(z) orelse return out.items;
+    defer _ = c.closedir(d);
+    while (c.readdir(d)) |ent|
+    {
+        const name = std.mem.sliceTo(&ent.name, 0);
+        if (!std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, ".."))
+        {
+            try out.append(a, try a.dupe(u8, name));
+        }
+    }
     return out.items;
 }
 
@@ -296,6 +381,10 @@ pub const Rdma = struct {
 pub fn rdmaDevices(a: std.mem.Allocator) ![]Rdma
 {
     var out: std.ArrayList(Rdma) = .empty;
+    if (is_windows)
+    {
+        return out.items; // RDMA is Linux only
+    }
     const d = c.opendir("/sys/class/infiniband") orelse return out.items;
     defer _ = c.closedir(d);
     while (c.readdir(d)) |ent|
@@ -371,6 +460,16 @@ pub const Memory = struct {
 pub fn memory(gpa: std.mem.Allocator) Memory
 {
     var m: Memory = .{};
+    if (is_windows)
+    {
+        var st: win32.MEMORYSTATUSEX = .{};
+        if (win32.GlobalMemoryStatusEx(&st) != 0)
+        {
+            m.total_mb = st.total_phys >> 20;
+            m.available_mb = st.avail_phys >> 20;
+        }
+        return m;
+    }
     const text = readSmall(gpa, "/proc/meminfo") orelse return m;
     defer gpa.free(text);
     var it = std.mem.splitScalar(u8, text, '\n');
@@ -388,6 +487,25 @@ pub fn memory(gpa: std.mem.Allocator) Memory
 /// The first NVIDIA GPU's model name, from the driver's proc files.
 pub fn gpuName(a: std.mem.Allocator) ?[]const u8
 {
+    if (is_windows)
+    {
+        // The display adapters Windows knows; the first NVIDIA one.
+        var i: u32 = 0;
+        while (i < 16) : (i += 1)
+        {
+            var dd: win32.DISPLAY_DEVICEA = .{};
+            if (win32.EnumDisplayDevicesA(null, i, &dd, 0) == 0)
+            {
+                break;
+            }
+            const name = std.mem.sliceTo(&dd.string, 0);
+            if (std.mem.startsWith(u8, name, "NVIDIA "))
+            {
+                return std.mem.trim(u8, a.dupe(u8, name["NVIDIA ".len..]) catch return null, " ");
+            }
+        }
+        return null;
+    }
     const d = c.opendir("/proc/driver/nvidia/gpus") orelse return null;
     defer _ = c.closedir(d);
     while (c.readdir(d)) |ent|
@@ -413,9 +531,8 @@ pub fn gpuName(a: std.mem.Allocator) ?[]const u8
 
 pub fn hostName(buf: *[64]u8) []const u8
 {
-    _ = c.gethostname(buf, buf.len - 1);
-    buf[buf.len - 1] = 0;
-    return std.mem.sliceTo(buf, 0);
+    @memset(buf, 0);
+    return plat.hostName(buf) orelse "";
 }
 
 pub fn formatIp4(addr: u32, buf: *[16]u8) []const u8
@@ -451,6 +568,28 @@ test "accepts only plain model file names" {
 
 test "a child's exit code and log are collected" {
     const gpa = std.testing.allocator;
+    if (is_windows)
+    {
+        const temp = plat.env("TEMP") orelse return error.SkipZigTest;
+        const log1 = try std.fmt.allocPrint(gpa, "{s}\\tf_proc_test.log", .{temp});
+        defer gpa.free(log1);
+        const log2 = try std.fmt.allocPrint(gpa, "{s}\\tf_proc_test2.log", .{temp});
+        defer gpa.free(log2);
+        var ch = try Child.spawn(gpa, &.{ "cmd.exe", "/c", "echo listening on port 5 & exit 3" }, log1);
+        defer ch.deinit(gpa);
+        var n: usize = 0;
+        while (ch.alive() and n < 500) : (n += 1)
+        {
+            sleepMs(10);
+        }
+        try std.testing.expectEqual(@as(?u8, 3), ch.exit);
+        try std.testing.expect(ch.logHas(gpa, "listening on port"));
+        var long = try Child.spawn(gpa, &.{ "cmd.exe", "/c", "ping -n 30 127.0.0.1" }, log2);
+        defer long.deinit(gpa);
+        long.stop(2000);
+        try std.testing.expectEqual(@as(?u8, 128 + 15), long.exit);
+        return;
+    }
     var ch = try Child.spawn(gpa, &.{ "/bin/sh", "-c", "echo listening on port 5; exit 3" }, "/tmp/tf_proc_test.log");
     defer ch.deinit(gpa);
     var n: usize = 0;

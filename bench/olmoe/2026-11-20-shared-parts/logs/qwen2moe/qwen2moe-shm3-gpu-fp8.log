@@ -1,0 +1,32 @@
+load: 20 of 60 experts, 4.41 GB in 2.44 s, expert CRC32C OK
+load: 20 of 60 experts, 4.41 GB in 2.45 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (4.41 GB in 0.12 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 4547 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (4.41 GB in 0.11 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 4547 MB
+load: non-expert weights and 20 of 60 experts, 6.40 GB in 2.74 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (6.40 GB in 0.17 s)
+shm: prompt 0 (5 tokens, 73 ms): logits max err 2.43e0 (last 5 positions), top-1 5/5, hidden max err 5.07e0, experts chosen 473/480 same (98.542%), QSA blocks 0/0 same (100.000%) FAIL
+shm: prompt 1, position 8: top-1 15, transformers' 17, whose own top two are 3.85e-3 apart
+shm: prompt 1 (17 tokens, 166 ms): logits max err 2.29e0 (last 17 positions), top-1 16/17, hidden max err 1.45e1, experts chosen 1592/1632 same (97.549%), QSA blocks 0/0 same (100.000%) FAIL
+shm: prompt 2, position 0: top-1 25, transformers' 2916, whose own top two are 5.78e-1 apart
+shm: prompt 2 (15 tokens, 148 ms): logits max err 2.84e0 (last 15 positions), top-1 14/15, hidden max err 1.09e1, experts chosen 1420/1440 same (98.611%), QSA blocks 0/0 same (100.000%) FAIL
+shm: FAIL: a short prompt's logits differ by up to 2.84e0 (target 1e-2) or a QSA block differs, a top-1 token differs, or a long prompt shares too few choices
+shm: generate prompt 0: 32 tokens in 1.13 s (28.3 tokens/s, prompt included)
+shm:   tokens: 2130 563 624 32 13 7148 198 33 13 12095 198 34 13 24081 198 35 13 21718 198 102349 510 33 151643 33975 22977 614 11105 220 58883 362 5373 220
+shm:   same as transformers' generate(): 9/32 tokens, logits max err 1.02e0 at step 3 FAIL
+shm: generate prompt 1: 32 tokens in 1.21 s (26.5 tokens/s, prompt included)
+shm:   tokens: 75698 1445 481 220 16 8 488 75698 1445 481 220 17 3623 750 15801 1445 982 262 264 11 293 284 220 15 11 220 16 198 262 369 716 304
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 2.58e0 at step 12 FAIL
+shm: generate prompt 2: 32 tokens in 1.20 s (26.6 tokens/s, prompt included)
+shm:   tokens: 429 279 11647 646 3960 311 47344 304 2155 9079 13 576 11647 525 5990 5733 1506 553 29728 14155 11 323 279 5029 525 6094 3941 678 11211 13 4710 14582
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 1.72e0 at step 11 FAIL
+shm: FAIL: generated tokens or their logits differ from transformers' generate()
+shm: 10896 expert calls sent to 2 peers, 5136 run locally; payload fp8_e4m3
+shm: rank 1 (GX10-02): 5436 expert calls
+shm: rank 2 (GX10-02): 5460 expert calls
+expert: rank 2 ran 5460 expert FFNs for rank 0 in 2043 grouped jobs, expert: rank 1 ran 5436 expert FFNs for rank 0 in 1992 grouped jobs, 439 us each on average (max 2724 us), 0.90 s in all; resident memory 4551 MB; 0 non-finite GPU outputs replaced by the CPU's
+422 us each on average (max 2159 us), 0.84 s in all; resident memory 4552 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 58 allocations, 58 frees, peak 28.1 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 494 allocations, 494 frees, peak 165.8 MB, 0 bytes still allocated at exit (balanced)
+error: GenerateMismatch

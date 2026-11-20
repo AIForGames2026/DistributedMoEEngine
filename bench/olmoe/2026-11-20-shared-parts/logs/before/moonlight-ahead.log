@@ -1,0 +1,11 @@
+load: non-expert weights and 64 of 64 experts, 10.53 GB in 1.50 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.53 GB in 0.28 s)
+local: context 256 tokens + 24 generated, chunks of 64; KV cache all in memory, f32, 62208 bytes per token: 0.02 GB in memory (all of it would be 0.02 GB), GPU attention off
+local: prefill 64 of 256 positions, 0.3 s
+local: prefill 128 of 256 positions, 0.6 s
+local: prefill 192 of 256 positions, 1.0 s
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.7 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.1 s, experts 0.4 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.5 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.2 s, LM head 0.0 s
+local: time to first token 1.242 s (206 tokens/s prefill); decode 0.036 s per token (28.14 tokens/s) over 23 steps from position 256; resident memory 10710 MB
+local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/moonlight-gpu.bin bit for bit
+local: heap: 206 allocations, 206 frees, peak 89.4 MB, 0 bytes still allocated at exit (balanced)

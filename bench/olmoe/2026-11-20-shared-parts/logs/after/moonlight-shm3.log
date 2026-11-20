@@ -1,0 +1,24 @@
+load: 21 of 64 experts, 3.13 GB in 1.85 s, expert CRC32C OK
+load: 21 of 64 experts, 3.13 GB in 1.85 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.13 GB in 0.08 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 3262 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (3.13 GB in 0.08 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 3262 MB
+load: non-expert weights and 22 of 64 experts, 4.28 GB in 1.99 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (4.28 GB in 0.11 s)
+shm: context 256 tokens + 24 generated, chunks of 64; KV cache all in memory, f32, 62208 bytes per token: 0.02 GB in memory (all of it would be 0.02 GB), GPU attention off
+shm: prefill 64 of 256 positions, 0.4 s
+shm: prefill 128 of 256 positions, 0.7 s
+shm: prefill 192 of 256 positions, 1.0 s
+shm: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.6 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.6 s, LM head 0.0 s
+shm: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.5 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.5 s, LM head 0.0 s
+shm: time to first token 1.330 s (192 tokens/s prefill); decode 0.046 s per token (21.59 tokens/s) over 23 steps from position 256; resident memory 4472 MB
+shm: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/moonlight-shm3.bin bit for bit
+shm: 29506 expert calls sent to 2 peers, 14018 run locally; payload f32
+shm: rank 1 (GX10-02): 14211 expert calls
+shm: rank 2 (GX10-02): 15295 expert calls
+expert: rank 1 ran 14211 expert FFNs for rank 0 in 648 grouped jobs, expert: rank 2 ran 15295 expert FFNs for rank 0 in 655 grouped jobs, 664 us each on average (max 7977 us), 0.43 s in all; resident memory 795 us each on average (max 9775 us), 0.52 s in all; resident memory 3272 MB; 0 non-finite GPU outputs replaced by the CPU's
+3272 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 58 allocations, 58 frees, peak 33.5 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 58 allocations, 58 frees, peak 33.5 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 177 allocations, 177 frees, peak 98.3 MB, 0 bytes still allocated at exit (balanced)

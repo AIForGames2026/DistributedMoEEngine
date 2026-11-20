@@ -1,0 +1,3 @@
+glm53-gpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/glm53-gpu.bin 
+glm53-ahead: local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/glm53-gpu.bin bit for bit 
+DONE

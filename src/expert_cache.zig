@@ -195,8 +195,8 @@ pub const ExpertCache = struct {
         {
             return error.NoSource;
         }
-        // Slots hold each projection's weights only, not gpt-oss's expert biases.
-        if (cfg.arch == .gptoss)
+        // Slots hold each projection's weights only, not expert biases.
+        if (cfg.expert_bias)
         {
             std.log.err("the expert cache does not hold expert biases (gpt-oss); load every expert instead", .{});
             return error.Unsupported;
@@ -238,7 +238,7 @@ pub const ExpertCache = struct {
         };
         @memset(self.checked, false);
         olmoe.swiglu_limit = cfg.swiglu_limit;
-        olmoe.swiglu_oai = cfg.arch == .gptoss;
+        olmoe.swiglu_oai = cfg.swiglu_oai;
         var pinned: usize = 0;
         // Pinning starts at the first layer with experts (GLM-5.3-Flash's leading layers are dense).
         for (cfg.dense_layers..@min(cfg.dense_layers + pin_layers, cfg.layers)) |l|

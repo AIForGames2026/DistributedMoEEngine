@@ -1,0 +1,27 @@
+olmoe-cpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/olmoe-cpu.bin 
+olmoe-gpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/olmoe-gpu.bin 
+olmoe-shm3: shm: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/olmoe-shm3.bin 
+olmoe-ahead: local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/olmoe-gpu.bin bit for bit 
+qwen3-cpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/qwen3-cpu.bin 
+qwen3-gpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/qwen3-gpu.bin 
+qwen3-shm3: shm: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/qwen3-shm3.bin 
+qwen3-ahead: local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/qwen3-gpu.bin bit for bit 
+qwen36-cpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/qwen36-cpu.bin 
+qwen36-gpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/qwen36-gpu.bin 
+qwen36-shm3: shm: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/qwen36-shm3.bin 
+qwen36-ahead: local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/qwen36-gpu.bin bit for bit 
+mixtral-cpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/mixtral-cpu.bin 
+mixtral-gpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/mixtral-gpu.bin 
+mixtral-shm3: shm: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/mixtral-shm3.bin 
+mixtral-ahead: local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/mixtral-gpu.bin bit for bit 
+moonlight-cpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/moonlight-cpu.bin 
+moonlight-gpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/moonlight-gpu.bin 
+moonlight-shm3: shm: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/moonlight-shm3.bin 
+moonlight-ahead: local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/moonlight-gpu.bin bit for bit 
+gptoss-cpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/gptoss-cpu.bin 
+gptoss-gpu: local: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/gptoss-gpu.bin 
+gptoss-shm3: shm: saved 24 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/gptoss-shm3.bin 
+gptoss-ahead: local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/gptoss-gpu.bin bit for bit 
+glm53-gpu: error: SplitTensors 
+glm53-ahead: error: SplitTensors 
+DONE

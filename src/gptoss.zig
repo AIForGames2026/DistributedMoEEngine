@@ -1,5 +1,5 @@
-//! gpt-oss (TASK-39, transformers' gpt_oss, GGUF "gpt-oss"), run by `olmoe.step`'s
-//! own layer loop with these additions: biases on the attention projections and the
+//! gpt-oss (TASK-39, transformers' gpt_oss, GGUF "gpt-oss"), run by `olmoe.step`
+//! with these additions: biases on the attention projections and the
 //! router, a learned sink per head that joins each attention softmax, sliding-window
 //! attention on every other layer from the first, YaRN without whole-dimension ramp
 //! ends, and experts with biases and gpt-oss's clamped SwiGLU (`swiglu`).
@@ -49,7 +49,8 @@ pub fn configure(h: gguf.Header, cfg: *Config) !void
     }
 }
 
-/// A gpt-oss layer's biases, sinks, and window (0 in a full-attention layer).
+/// A layer's attention and router biases, sinks, and window (0 in a full-attention layer);
+/// each part the family lacks is empty.
 pub const Parts = struct {
     q_b: []f32,
     k_b: []f32,
@@ -90,20 +91,24 @@ pub fn parts(h: gguf.Header, plan: loader.Plan, region: []const u8, a: std.mem.A
     };
     const g: Get = .{ .hh = h, .p = plan, .reg = region, .al = a, .l = layer };
     return .{
-        .q_b = try g.vec("attn_q.bias", cfg.qDim()),
-        .k_b = try g.vec("attn_k.bias", cfg.kvDim()),
-        .v_b = try g.vec("attn_v.bias", cfg.kvDim()),
-        .o_b = try g.vec("attn_output.bias", cfg.d_model),
-        .sinks = try g.vec("attn_sinks.weight", cfg.heads),
-        .router_b = try g.vec("ffn_gate_inp.bias", cfg.experts),
+        .q_b = if (cfg.attn_bias) try g.vec("attn_q.bias", cfg.qDim()) else &.{},
+        .k_b = if (cfg.attn_bias) try g.vec("attn_k.bias", cfg.kvDim()) else &.{},
+        .v_b = if (cfg.attn_bias) try g.vec("attn_v.bias", cfg.kvDim()) else &.{},
+        .o_b = if (cfg.attn_out_bias) try g.vec("attn_output.bias", cfg.d_model) else &.{},
+        .sinks = if (cfg.attn_sinks) try g.vec("attn_sinks.weight", cfg.heads) else &.{},
+        .router_b = if (cfg.router_bias) try g.vec("ffn_gate_inp.bias", cfg.experts) else &.{},
         // Sliding layers alternate with full ones, starting with a sliding one, as released.
         .window = if (layer % 2 == 0) cfg.sliding_window else 0,
     };
 }
 
-/// Adds `b` to every row of `x` (rows of b.len).
+/// Adds `b` to every row of `x` (rows of b.len); an empty `b` adds nothing.
 pub fn addRows(x: []f32, b: []const f32) void
 {
+    if (b.len == 0)
+    {
+        return;
+    }
     var off: usize = 0;
     while (off < x.len) : (off += b.len)
     {

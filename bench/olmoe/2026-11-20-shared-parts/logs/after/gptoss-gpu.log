@@ -1,0 +1,13 @@
+load: non-expert weights and 32 of 32 experts, 12.10 GB in 2.24 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (12.10 GB in 0.31 s)
+local: context 256 tokens + 24 generated, chunks of 64; KV cache all in memory, f32, 98304 bytes per token: 0.03 GB in memory (all of it would be 0.03 GB), GPU attention off
+warning: gpu: a mxfp4 weight (2880x2880) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+local: prefill 64 of 256 positions, 1.2 s
+local: prefill 128 of 256 positions, 2.4 s
+local: prefill 192 of 256 positions, 3.8 s
+local: prefill time: projections 0.1 s, QK norm and rope 0.0 s, attention 1.1 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.1 s, experts 3.8 s, LM head 0.0 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.2 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 3.9 s, LM head 0.1 s
+local: time to first token 5.254 s (49 tokens/s prefill); decode 0.186 s per token (5.37 tokens/s) over 23 steps from position 256; resident memory 12289 MB
+local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/gptoss-gpu.bin bit for bit
+gpu: 648 calls on mxfp4 weights ran on the CPU (biased)
+local: heap: 224 allocations, 224 frees, peak 109.9 MB, 0 bytes still allocated at exit (balanced)

@@ -1,0 +1,25 @@
+load: 2 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 114 MB
+load: non-expert weights and 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+shm: context 40 tokens + 16 generated, chunks of 16; KV cache all in memory, f32, 128 bytes per token: 0.00 GB in memory (all of it would be 0.00 GB), GPU attention off
+warning: gpu: a f32 weight (64x16) runs on the CPU: no GPU kernel reads its format or width
+load: 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 114 MB
+shm: prefill 16 of 40 positions, 0.0 s
+shm: prefill 32 of 40 positions, 0.0 s
+shm: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: time to first token 0.024 s (1695 tokens/s prefill); decode 0.004 s per token (226.78 tokens/s) over 15 steps from position 40; resident memory 126 MB
+shm: saved 16 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/tiny-glm53-shm3.bin
+shm: 533 expert calls sent to 2 peers, 347 run locally; payload f32
+shm: rank 1 (GX10-02): 305 expert calls
+shm: rank 2 (GX10-02): 228 expert calls
+expert: rank 1 ran 305 expert FFNs for rank 0 in 64 grouped jobs, 303 us each on average (max 1542 us), 0.02 s in all; resident memory 118 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: rank 2 ran 228 expert FFNs for rank 0 in 63 grouped jobs, 328 us each on average (max 1422 us), 0.02 s in all; resident memory 118 MB; 0 non-finite GPU outputs replaced by the CPU's
+gpu: 16 calls on f32 weights ran on the CPU (no_kernel)
+expert: heap: 48 allocations, 48 frees, peak 1.1 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 48 allocations, 48 frees, peak 1.1 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 128 allocations, 128 frees, peak 1.9 MB, 0 bytes still allocated at exit (balanced)

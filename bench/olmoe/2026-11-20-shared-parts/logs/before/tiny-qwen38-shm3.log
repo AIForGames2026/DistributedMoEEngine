@@ -1,0 +1,23 @@
+load: 5 of 16 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 114 MB
+load: 5 of 16 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 114 MB
+load: non-expert weights and 6 of 16 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+shm: context 40 tokens + 16 generated, chunks of 16; KV cache all in memory, f32, 512 bytes per token: 0.00 GB in memory (all of it would be 0.00 GB), GPU attention off
+shm: prefill 16 of 40 positions, 0.0 s
+shm: prefill 32 of 40 positions, 0.0 s
+shm: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: time to first token 0.019 s (2100 tokens/s prefill); decode 0.004 s per token (277.38 tokens/s) over 15 steps from position 40; resident memory 126 MB
+shm: saved 16 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/tiny-qwen38-shm3.bin
+shm: 529 expert calls sent to 2 peers, 351 run locally; payload f32
+shm: rank 1 (GX10-02): 255 expert calls
+shm: rank 2 (GX10-02): 274 expert calls
+expert: rank 1 ran 255 expert FFNs for rank 0 in 58 grouped jobs, 274 us each on average (max 1438 us), 0.02 s in all; resident memory 118 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: rank 2 ran 274 expert FFNs for rank 0 in 58 grouped jobs, 298 us each on average (max 1333 us), 0.02 s in all; resident memory 118 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 48 allocations, 48 frees, peak 1.3 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 48 allocations, 48 frees, peak 1.3 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 148 allocations, 148 frees, peak 1.8 MB, 0 bytes still allocated at exit (balanced)

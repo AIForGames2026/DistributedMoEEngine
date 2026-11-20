@@ -1,0 +1,6 @@
+load: non-expert weights and 60 of 60 experts, 15.22 GB in 2.50 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (15.22 GB in 0.40 s)
+local: OpenAI-compatible API at http://127.0.0.1:18742/v1 (model "Qwen1.5-MoE-A2.7B-Chat-Q8_0", prompts from the GGUF's chat template, context 4096 tokens, reusing shared prompt prefixes)
+local: chat page with the live diagram at http://127.0.0.1:18742/
+local: request 1: 26 prompt tokens (0 reused), 2 generated in 0.15 s, first token 133 ms, 51.1 tokens/s decoding, finish stop
+local: request 2: 29 prompt tokens (4 reused), 51 generated in 1.11 s, first token 121 ms, 50.9 tokens/s decoding, finish stop

@@ -72,7 +72,7 @@ The website is now the engine itself: recorded chats and runs of the real engine
 **In this build**
 - **Generation and chat:** token-by-token generation with a KV cache, matching transformers' `generate()` (TASK-24), and an OpenAI-compatible server with a built-in chat page (TASK-30).
 - **The Beta engine features:** a lookahead router that guesses the next layers' experts so they load in time (TASK-11), exact miss handling when a guess is wrong (TASK-14), a swarm tracker that expert processes join and that notices a lost one (TASK-09), a KV cache that spills to NVMe for 128k-token prompts (TASK-12), and expert processes on a CPU (TASK-22) or an RTX 30-series GPU (TASK-26).
-- **Beyond the Beta plan:** any number of expert machines (TASK-33); Qwen3-30B-A3B, Qwen3.6, Qwen3.8-Flash-Next, GLM-5.3-Flash, Mixtral, DeepSeek V3 and gpt-oss; every GGUF quant format, tokenizers and chat templates read from the GGUF (TASK-29, 31, 32, 36 to 39); and an operator dashboard (TASK-25).
+- **Beyond the Beta plan:** any number of expert machines (TASK-33); Qwen3-30B-A3B, Qwen3.6, Qwen3.8-Flash-Next, GLM-5.3-Flash, Mixtral, DeepSeek V3, gpt-oss and Qwen2-MoE, every family run by one step loop from a table of parts (TASK-42); every GGUF quant format, tokenizers and chat templates read from the GGUF (TASK-29, 31, 32, 36 to 39); and an operator dashboard (TASK-25).
 - **The website:** nine recordings, each with two diagrams at their own speeds (All experts, and One token climbing the layers), a chat that reads like a chat, and a status line with a progress bar for each. Each result links to its raw data in [`bench/`](bench/).
 
 **Changed after Testing Session 1** ([feedback summary](FEEDBACK.md))

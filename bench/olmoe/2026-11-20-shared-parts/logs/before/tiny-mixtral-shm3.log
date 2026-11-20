@@ -1,0 +1,23 @@
+load: 2 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+load: 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+load: non-expert weights and 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+shm: context 40 tokens + 16 generated, chunks of 16; KV cache all in memory, f32, 512 bytes per token: 0.00 GB in memory (all of it would be 0.00 GB), GPU attention off
+shm: prefill 16 of 40 positions, 0.0 s
+shm: prefill 32 of 40 positions, 0.0 s
+shm: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: time to first token 0.007 s (5373 tokens/s prefill); decode 0.001 s per token (986.17 tokens/s) over 15 steps from position 40; resident memory 120 MB
+shm: saved 16 tokens and their logits to /home/admin/lukehinojosa/bench-t42/base/tiny-mixtral-shm3.bin
+shm: 143 expert calls sent to 2 peers, 77 run locally; payload f32
+shm: rank 1 (GX10-02): 79 expert calls
+shm: rank 2 (GX10-02): 64 expert calls
+expert: rank 1 ran 79 expert FFNs for rank 0 in 25 grouped jobs, 288 us each on average (max 1581 us), 0.01 s in all; resident memory expert: rank 2 ran 64 expert FFNs for rank 0 in 27 grouped jobs, 117 MB; 0 non-finite GPU outputs replaced by the CPU's
+284 us each on average (max 1483 us), 0.01 s in all; resident memory 116 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 46 allocations, 46 frees, peak 0.5 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 46 allocations, 46 frees, peak 0.5 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 109 allocations, 109 frees, peak 0.8 MB, 0 bytes still allocated at exit (balanced)

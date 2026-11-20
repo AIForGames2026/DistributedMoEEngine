@@ -1,0 +1,11 @@
+load: non-expert weights and 64 of 64 experts, 7.36 GB in 1.32 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.36 GB in 0.19 s)
+local: context 256 tokens + 24 generated, chunks of 64; KV cache all in memory, f32, 262144 bytes per token: 0.08 GB in memory (all of it would be 0.07 GB), GPU attention on
+local: prefill 64 of 256 positions, 0.1 s
+local: prefill 128 of 256 positions, 0.2 s
+local: prefill 192 of 256 positions, 0.3 s
+local: prefill time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 0.432 s (593 tokens/s prefill); decode 0.010 s per token (100.85 tokens/s) over 23 steps from position 256; resident memory 7565 MB
+local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/olmoe-gpu.bin bit for bit
+local: heap: 124 allocations, 124 frees, peak 100.5 MB, 0 bytes still allocated at exit (balanced)

@@ -1,5 +1,5 @@
 //! DeepSeek V3 and Kimi K2 (TASK-39, transformers' deepseek_v3, GGUF "deepseek2"),
-//! run by `olmoe.step` through `step` here. Each layer's attention is MLA: keys and
+//! whose layers `olmoe.step` runs with the parts here. Each layer's attention is MLA: keys and
 //! values come from one latent per position, plus a small key part shared by every
 //! head that rotates (decoupled rope). The cache keeps each position's normalized
 //! latent then its rotated key part, and attention runs on them with each head's
@@ -68,7 +68,6 @@ pub fn config(h: gguf.Header) !Config
     const rope = try g.int("rope.dimension_count");
     const d_ff = try g.int("expert_feed_forward_length");
     var cfg: Config = .{
-        .arch = .deepseek2,
         .layers = try g.int("block_count"),
         .d_model = try g.int("embedding_length"),
         .heads = try g.int("attention.head_count"),
@@ -126,9 +125,9 @@ pub fn config(h: gguf.Header) !Config
     return cfg;
 }
 
-/// A DeepSeek V3 layer beyond `olmoe.Layer`: without a query rank `q_b` is the whole query projection.
+/// MLA with decoupled rope: without a query rank `q_b` is the whole query projection.
 /// `k_b` holds each head's key projection transposed, `v_b` each head's value projection.
-pub const Parts = struct {
+pub const Mla = struct {
     q_a: Mat = Mat.empty,
     q_a_norm: []f32 = &.{},
     q_b: Mat,
@@ -137,10 +136,6 @@ pub const Parts = struct {
     k_b: Mat,
     v_b: Mat,
     out: Mat,
-    /// The dense feed-forward block of a leading layer, or the shared experts of an MoE layer.
-    mlp: Expert,
-    /// The router's choice bias, in an MoE layer; empty for none.
-    bias: []f32 = &.{},
 };
 
 const Tensors = struct {
@@ -207,8 +202,8 @@ const Tensors = struct {
     }
 };
 
-/// The non-expert weights, as `olmoe.Weights` (whose `init` calls this for the arch).
-pub fn weights(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader.Plan, region: []const u8) !olmoe.Weights
+/// The non-expert weights, as `olmoe.Weights` (`families.zig` names this for the architecture).
+pub fn weights(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader.Plan, region: []const u8) anyerror!olmoe.Weights
 {
     var self: olmoe.Weights = .{ .cfg = cfg, .embed = undefined, .layers = undefined, .out_norm = undefined, .head = undefined, .arena = .init(gpa) };
     errdefer self.arena.deinit();
@@ -225,22 +220,22 @@ pub fn weights(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader
     for (self.layers, 0..) |*l, i|
     {
         const dense = i < cfg.dense_layers;
-        var parts: Parts = .{
+        var parts: Mla = .{
             .q_b = undefined,
             .kv_a = try t.lmat(i, "attn_kv_a_mqa.weight", cfg.head_dim, d),
             .kv_a_norm = try t.lflat(i, "attn_kv_a_norm.weight", kvr),
             .k_b = try t.lmat(i, "attn_k_b.weight", heads * kvr, nope),
             .v_b = try t.lmat(i, "attn_v_b.weight", heads * cfg.mla_v, kvr),
             .out = try t.lmat(i, "attn_output.weight", d, heads * cfg.mla_v),
-            .mlp = if (dense) .{
-                .gate = try t.lmat(i, "ffn_gate.weight", cfg.dense_ff, d),
-                .up = try t.lmat(i, "ffn_up.weight", cfg.dense_ff, d),
-                .down = try t.lmat(i, "ffn_down.weight", d, cfg.dense_ff),
-            } else .{
-                .gate = try t.lmat(i, "ffn_gate_shexp.weight", cfg.shared_ff, d),
-                .up = try t.lmat(i, "ffn_up_shexp.weight", cfg.shared_ff, d),
-                .down = try t.lmat(i, "ffn_down_shexp.weight", d, cfg.shared_ff),
-            },
+        };
+        const mlp: Expert = if (dense) .{
+            .gate = try t.lmat(i, "ffn_gate.weight", cfg.dense_ff, d),
+            .up = try t.lmat(i, "ffn_up.weight", cfg.dense_ff, d),
+            .down = try t.lmat(i, "ffn_down.weight", d, cfg.dense_ff),
+        } else .{
+            .gate = try t.lmat(i, "ffn_gate_shexp.weight", cfg.shared_ff, d),
+            .up = try t.lmat(i, "ffn_up_shexp.weight", cfg.shared_ff, d),
+            .down = try t.lmat(i, "ffn_down_shexp.weight", d, cfg.shared_ff),
         };
         if (cfg.mla_q_rank > 0)
         {
@@ -252,22 +247,23 @@ pub fn weights(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader
         {
             parts.q_b = try t.lmat(i, "attn_q.weight", heads * cfg.mla_k, d);
         }
-        if (!dense and t.has(i, "exp_probs_b.bias"))
-        {
-            parts.bias = try t.lflat(i, "exp_probs_b.bias", cfg.experts);
-        }
         l.* = .{
             .attn_norm = try t.lflat(i, "attn_norm.weight", d),
             .ffn_norm = try t.lflat(i, "ffn_norm.weight", d),
             .router = if (dense) Mat.empty else try t.lmat(i, "ffn_gate_inp.weight", cfg.experts, d),
-            .ds = parts,
+            .mla_rope = parts,
+            .mlp = mlp,
         };
+        if (!dense and t.has(i, "exp_probs_b.bias"))
+        {
+            l.route_bias = try t.lflat(i, "exp_probs_b.bias", cfg.experts);
+        }
     }
     return self;
 }
 
 /// Buffers for one step, sized for `n` tokens.
-const Buffers = struct {
+pub const Buffers = struct {
     qa: []f32,
     q: []f32,
     nope: []f32,
@@ -279,7 +275,7 @@ const Buffers = struct {
     gather: []f32,
     gather_out: []f32,
 
-    fn init(a: std.mem.Allocator, cfg: Config, n: usize) !Buffers
+    pub fn init(a: std.mem.Allocator, cfg: Config, n: usize) !Buffers
     {
         const heads = cfg.heads;
         const kvr = cfg.mla_kv_rank;
@@ -301,7 +297,7 @@ const Buffers = struct {
 
 /// One MLA layer on `n` normalized inputs `x` from position `pos0`; each position's
 /// latent and rotated key part go into the cache's layer `li`.
-fn mla(b: *const Buffers, cfg: Config, w: Parts, rope: *const olmoe.Rope, cs: []const f32, sn: []const f32, cache: *olmoe.KvCache, li: usize, x: []const f32, n: usize, pos0: usize, out: []f32, scratch: []f32) void
+pub fn mla(b: *const Buffers, cfg: Config, w: Mla, rope: *const olmoe.Rope, cs: []const f32, sn: []const f32, cache: *olmoe.KvCache, li: usize, x: []const f32, n: usize, pos0: usize, out: []f32, scratch: []f32) void
 {
     const heads = cfg.heads;
     const kvr = cfg.mla_kv_rank;
@@ -428,7 +424,8 @@ const Attend = struct {
 
 /// Sigmoid scores; the top k by score plus bias among the best groups (each scored by its
 /// two best), as transformers does it; their scores renormalized if set, then scaled.
-fn route(cfg: Config, bias: []const f32, logits: []f32, n: usize, idx: []u32, wts: []f32, gaps: []f32) void
+/// GLM-5.3-Flash's router is this with one group.
+pub fn route(cfg: Config, bias: []const f32, logits: []f32, n: usize, idx: []u32, wts: []f32, gaps: []f32) void
 {
     const k = cfg.top_k;
     const e = cfg.experts;
@@ -494,142 +491,5 @@ fn route(cfg: Config, bias: []const f32, logits: []f32, n: usize, idx: []u32, wt
             }
             wv.* *= cfg.route_scale;
         }
-    }
-}
-
-/// `olmoe.step` for DeepSeek V3.
-pub fn step(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, cache: *olmoe.KvCache, tokens: []const u32, logits: []f32, trace: ?olmoe.Trace) !void
-{
-    const cfg = w.cfg;
-    const n = tokens.len;
-    const d = cfg.d_model;
-    const k = cfg.top_k;
-    const pos0 = cache.len;
-    if (pos0 + n > cache.cap)
-    {
-        return error.ContextFull;
-    }
-    if (logits.len < cfg.vocab)
-    {
-        return error.LogitsTooSmall;
-    }
-    if (cache.tier != null or cache.format != .f32)
-    {
-        return error.Unsupported;
-    }
-    const all_logits = logits.len >= n * cfg.vocab;
-    if (moe.mark) |m|
-    {
-        m(moe.ctx, true, n);
-    }
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var rope: olmoe.Rope = .init(cfg);
-    // DeepSeek's YaRN leaves cos and sin unscaled; its size goes into `attn_scale`.
-    rope.scale = 1;
-    const cs = try a.alloc(f32, n * rope.half);
-    const sn = try a.alloc(f32, n * rope.half);
-    for (0..n) |t|
-    {
-        rope.angles(pos0 + t, cs[t * rope.half ..][0..rope.half], sn[t * rope.half ..][0..rope.half]);
-    }
-    const h = try a.alloc(f32, n * d);
-    const x = try a.alloc(f32, n * d);
-    const y = try a.alloc(f32, n * d);
-    const tmp = try a.alloc(f32, n * d);
-    const big = @max(@max(cfg.dense_ff, cfg.shared_ff), cfg.d_ff);
-    const g = try a.alloc(f32, n * big);
-    const u = try a.alloc(f32, n * big);
-    const scratch = try a.alloc(f32, @max(@max(d, cfg.heads * cfg.mla_v), @max(big, @max(cfg.mla_q_rank, cfg.heads * cfg.mla_k))));
-    const probs = try a.alloc(f32, n * cfg.experts);
-    const idx = try a.alloc(u32, n * k);
-    const wts = try a.alloc(f32, n * k);
-    const cap_count = try a.alloc(u32, if (moe.capacity != null) cfg.experts else 0);
-    const cap_list = try a.alloc(u32, if (moe.capacity != null) n * k else 0);
-    const bufs = try Buffers.init(a, cfg, n);
-
-    for (tokens, 0..) |tok, t|
-    {
-        if (tok >= cfg.vocab)
-        {
-            return error.BadToken;
-        }
-        w.embed.row(tok, h[t * d ..][0..d]);
-    }
-    const threads = if (n >= olmoe.parallel_tokens) olmoe.cpuThreads() else 1;
-    const prof = &olmoe.profile;
-    for (w.layers, 0..) |*l, li|
-    {
-        const parts = l.ds.?;
-        var pt = olmoe.nowNs();
-        @memcpy(x, h);
-        glm53.normRows(threads, x, l.attn_norm, cfg.eps, d, n);
-        mla(&bufs, cfg, parts, &rope, cs, sn, cache, li, x, n, pos0, y, scratch);
-        olmoe.Profile.lap(&prof.attention, &pt);
-        for (h, y) |*hv, yv|
-        {
-            hv.* += yv;
-        }
-        @memcpy(x, h);
-        glm53.normRows(threads, x, l.ffn_norm, cfg.eps, d, n);
-        @memset(y, 0);
-        if (li < cfg.dense_layers)
-        {
-            glm53.mlp(parts.mlp, 0, x, n, g, u, tmp, y, scratch);
-            olmoe.Profile.lap(&prof.experts, &pt);
-        }
-        else
-        {
-            l.router.matmul(x, n, probs, scratch);
-            const gaps: []f32 = if (trace) |tr| (if (tr.gaps.len > 0) tr.gaps[li * n ..][0..n] else &.{}) else &.{};
-            route(cfg, parts.bias, probs, n, idx, wts, gaps);
-            if (moe.capacity) |cp|
-            {
-                cp.apply(idx, wts, n * k, cap_count, cap_list);
-            }
-            olmoe.Profile.lap(&prof.router, &pt);
-            try moe.run(moe.ctx, li, x, n, idx, wts, y);
-            glm53.mlp(parts.mlp, 0, x, n, g, u, tmp, y, scratch);
-            olmoe.Profile.lap(&prof.experts, &pt);
-            if (trace) |tr|
-            {
-                @memcpy(tr.topk[li * n * k ..][0 .. n * k], idx);
-            }
-        }
-        for (h, y) |*hv, yv|
-        {
-            hv.* += yv;
-        }
-        if (!olmoe.allFinite(h))
-        {
-            std.log.err("step: a non-finite value in the residual after layer {d} (positions {d} to {d})", .{ li, pos0, pos0 + n - 1 });
-            return error.NonFinite;
-        }
-        if (trace) |tr|
-        {
-            if (tr.hidden.len > 0)
-            {
-                @memcpy(tr.hidden[li * n * d ..][0 .. n * d], h);
-            }
-        }
-    }
-    cache.len = pos0 + n;
-    var head_t = olmoe.nowNs();
-    defer olmoe.Profile.lap(&prof.head, &head_t);
-    const first: usize = if (all_logits) 0 else n - 1;
-    const rows = n - first;
-    for (first..n) |t|
-    {
-        olmoe.rmsnorm(h[t * d ..][0..d], w.out_norm, cfg.eps, x[(t - first) * d ..][0..d]);
-    }
-    w.head.matmul(x, rows, logits, scratch);
-    if (olmoe.after_step) |f|
-    {
-        f();
-    }
-    if (moe.mark) |m|
-    {
-        m(moe.ctx, false, n);
     }
 }

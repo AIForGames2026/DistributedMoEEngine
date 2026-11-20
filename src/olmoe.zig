@@ -25,6 +25,12 @@
 //! query's highest-scoring blocks of tokens, and a hashed n-gram embedding
 //! at one layer.
 //!
+//! Since TASK-42 every family runs through `step`: `families.zig` describes
+//! each GGUF architecture by its parts in `Config`, and each layer calls the
+//! parts it has (GQA attention here, Gated DeltaNet, or KDA and MLA from
+//! `glm53.zig` and `deepseek.zig`), with plain, hyper-connection or mHC residuals,
+//! a softmax or sigmoid router, and a dense or MoE feed-forward block.
+//!
 //! Weights stay in their GGUF block format and are dequantized one row at a
 //! time. The MoE block calls experts through `Moe`, so a process can run the
 //! experts it owns and send the rest to a peer (`olmoe_run.zig`).
@@ -39,30 +45,35 @@ const qwen38 = @import("qwen38.zig");
 const glm53 = @import("glm53.zig");
 const deepseek = @import("deepseek.zig");
 const gptoss = @import("gptoss.zig");
+const families = @import("families.zig");
 pub const KvFormat = kv_format.KvFormat;
 
-/// The model families the engine runs.
-pub const Arch = enum {
-    /// OLMoE: QK norm over the whole projection, top-k probabilities used as is.
-    olmoe,
-    /// Qwen3-MoE (TASK-12): grouped KV heads, QK norm per head, top-k renormalized.
-    qwen3moe,
-    /// Qwen3.5-MoE (TASK-29): Qwen3-MoE plus Gated DeltaNet layers, gated attention, and a shared expert.
-    qwen35moe,
-    /// Qwen3.8-Flash-Next (TASK-31): Qwen3.5-MoE with hyper-connections, QSA, and an n-gram embedding.
-    qwen4exp,
-    /// GLM-5.3-Flash (TASK-32, GGUF "glm5-next"): KDA and MLA layers with a DSA indexer, mHC, dense leading layers.
-    glm5next,
-    /// Mixtral (TASK-39, GGUF "llama" with experts): grouped KV heads, no QK norm, rope on adjacent pairs.
-    mixtral,
-    /// DeepSeek V3 and Kimi K2 (TASK-39, GGUF "deepseek2"): MLA with decoupled rope, grouped sigmoid routing.
-    deepseek2,
-    /// gpt-oss (TASK-39, GGUF "gpt-oss"): attention sinks, sliding windows, biases, and its own SwiGLU.
-    gptoss,
-};
+pub const QkNorm = enum { none, whole, per_head };
+pub const Router = enum { softmax, sigmoid };
 
 pub const Config = struct {
-    arch: Arch = .olmoe,
+    /// The family's name, for messages, and its name with YaRN turned on, if it differs.
+    name: []const u8 = "OLMoE",
+    name_yarn: []const u8 = "",
+    /// QK norm: none, over each token's whole projection (OLMoE), or over each head.
+    qk_norm: QkNorm = .per_head,
+    /// The GGUF name of each layer's norm before its feed-forward block.
+    ffn_norm_name: []const u8 = "ffn_norm",
+    /// The Gated DeltaNet's projections are merged as [qkv; z] and [beta; alpha] (llama.cpp's Qwen3.8).
+    ssm_merged: bool = false,
+    /// Router scores: a softmax, or sigmoids chosen by score plus a bias (DeepSeek V3, GLM-5.3-Flash).
+    router: Router = .softmax,
+    /// Biases on the query, key and value projections, on the output projection, and on the router,
+    /// and a learned sink per head in each attention softmax (gpt-oss has all four).
+    attn_bias: bool = false,
+    attn_out_bias: bool = false,
+    router_bias: bool = false,
+    attn_sinks: bool = false,
+    /// Experts with biases and gpt-oss's clamped SwiGLU.
+    expert_bias: bool = false,
+    swiglu_oai: bool = false,
+    /// YaRN scales cos and sin by its size; DeepSeek V3 puts it in `attn_scale` instead.
+    yarn_mscale: bool = true,
     layers: usize,
     d_model: usize,
     heads: usize,
@@ -232,155 +243,10 @@ pub const Config = struct {
         return self.dsa_budget / self.dsa_pool;
     }
 
-    pub fn fromGguf(h: gguf.Header) !Config {
-        const name = h.getString("general.architecture") orelse return error.NotOlmoe;
-        const arch: Arch = if (std.mem.eql(u8, name, "glm5-next"))
-            .glm5next
-        else if (std.mem.eql(u8, name, "llama"))
-            .mixtral
-        else if (std.mem.eql(u8, name, "gpt-oss"))
-            .gptoss
-        else
-            std.meta.stringToEnum(Arch, name) orelse return error.NotOlmoe;
-        if (arch == .glm5next)
-        {
-            return glm53.config(h);
-        }
-        if (arch == .deepseek2)
-        {
-            return deepseek.config(h);
-        }
-        const Keys = struct {
-            hh: gguf.Header,
-            prefix: []const u8,
-            buf: [96]u8 = undefined,
-
-            fn key(s: *@This(), k: []const u8) []const u8
-            {
-                return std.fmt.bufPrint(&s.buf, "{s}.{s}", .{ s.prefix, k }) catch unreachable;
-            }
-
-            fn int(s: *@This(), k: []const u8) !usize
-            {
-                return @intCast(s.hh.getInt(s.key(k)) orelse
-                {
-                    std.log.err("missing GGUF key {s}", .{s.key(k)});
-                    return error.MissingKey;
-                });
-            }
-
-            fn opt(s: *@This(), k: []const u8) ?usize
-            {
-                return if (s.hh.getInt(s.key(k))) |v| @intCast(v) else null;
-            }
-
-            fn float(s: *@This(), k: []const u8, default: f32) f32
-            {
-                const v = s.hh.get(s.key(k)) orelse return default;
-                return switch (v) {
-                    .float => |x| @floatCast(x),
-                    else => default,
-                };
-            }
-        };
-        var g: Keys = .{ .hh = h, .prefix = name };
-        const d = try g.int("embedding_length");
-        const heads = try g.int("attention.head_count");
-        const kv_heads = g.opt("attention.head_count_kv") orelse heads;
-        if (kv_heads == 0 or heads % kv_heads != 0)
-        {
-            return error.Unsupported;
-        }
-        const embd = h.tensor("token_embd.weight") orelse return error.MissingTensor;
-        var cfg: Config = .{
-            .arch = arch,
-            .layers = try g.int("block_count"),
-            .d_model = d,
-            .heads = heads,
-            .kv_heads = kv_heads,
-            .head_dim = g.opt("attention.key_length") orelse d / heads,
-            .d_ff = g.opt("expert_feed_forward_length") orelse try g.int("feed_forward_length"),
-            .experts = try g.int("expert_count"),
-            .top_k = try g.int("expert_used_count"),
-            .vocab = @intCast(embd.dims[1]),
-            .eps = g.float("attention.layer_norm_rms_epsilon", 1e-5),
-            .rope_theta = g.float("rope.freq_base", 10000),
-        };
-        if (arch == .mixtral)
-        {
-            // A dense Llama has no experts; llama.cpp converts Mixtral as "llama", rotating adjacent pairs.
-            if (g.opt("expert_count") == null or (g.opt("rope.dimension_count") orelse cfg.head_dim) != cfg.head_dim or h.get("llama.rope.scaling.type") != null)
-            {
-                return error.Unsupported;
-            }
-            cfg.rope_adjacent = true;
-        }
-        if (arch == .gptoss)
-        {
-            try gptoss.configure(h, &cfg);
-        }
-        if (arch == .qwen35moe or arch == .qwen4exp)
-        {
-            cfg.rope_dim = g.opt("rope.dimension_count") orelse 0;
-            cfg.attn_interval = g.opt("full_attention_interval") orelse 4;
-            cfg.attn_gate = true;
-            cfg.shared_ff = try g.int("expert_shared_feed_forward_length");
-            cfg.ssm_conv = try g.int("ssm.conv_kernel");
-            cfg.ssm_dk = try g.int("ssm.state_size");
-            cfg.ssm_k_heads = try g.int("ssm.group_count");
-            cfg.ssm_v_heads = try g.int("ssm.time_step_rank");
-            const inner = try g.int("ssm.inner_size");
-            if (cfg.ssm_v_heads == 0 or inner % cfg.ssm_v_heads != 0 or cfg.ssm_v_heads % cfg.ssm_k_heads != 0 or cfg.layers % cfg.attn_interval != 0)
-            {
-                return error.Unsupported;
-            }
-            cfg.ssm_dv = inner / cfg.ssm_v_heads;
-        }
-        if (arch == .qwen4exp)
-        {
-            cfg.ssm_sigmoid_gate = true;
-            cfg.streams = try g.int("hyper_connection.count");
-            cfg.hc_rank = try g.int("hyper_connection.low_rank");
-            cfg.qsa_heads = try g.int("attention.indexer.head_count");
-            cfg.qsa_dim = try g.int("attention.indexer.key_length");
-            cfg.qsa_budget = try g.int("attention.indexer.top_k");
-            // Every attention layer compresses by the same ratio, and no other layer does.
-            for (0..cfg.layers) |l|
-            {
-                const r: usize = @intCast(h.intAt(g.key("attention.compress_ratios"), l) orelse return error.MissingKey);
-                if (cfg.recurrent(l) != (r == 0) or (r != 0 and cfg.qsa_block != 0 and r != cfg.qsa_block))
-                {
-                    return error.Unsupported;
-                }
-                if (r != 0)
-                {
-                    cfg.qsa_block = r;
-                }
-            }
-            if (cfg.streams < 2 or cfg.qsa_block == 0 or cfg.qsa_budget % cfg.qsa_block != 0 or cfg.qsa_dim > max_head or cfg.qsa_dim > cfg.head_dim)
-            {
-                return error.Unsupported;
-            }
-            // One layer with the n-gram embedding, as in the released model.
-            if (h.intAt(g.key("ple.layers"), 1) != null)
-            {
-                return error.Unsupported;
-            }
-            if (h.intAt(g.key("ple.layers"), 0)) |pl|
-            {
-                cfg.ple_layer = @intCast(pl);
-                cfg.ple_ngram = try g.int("ple.ngram_size");
-                cfg.ple_heads_per = try g.int("ple.heads_per_ngram");
-                cfg.ple_conv = try g.int("ple.conv_kernel");
-                cfg.ple_eos = @intCast(try g.int("ple.eos_token_id"));
-                cfg.ple_row = try g.int("embedding_length_per_layer_input");
-                if (cfg.ple_ngram < 2 or cfg.ple_ngram > max_ngram or cfg.pleHeads() > max_ple_heads or cfg.ple_layer.? >= cfg.layers)
-                {
-                    return error.Unsupported;
-                }
-            }
-        }
-        return cfg;
+    /// The model's description, from its family's entry in `families.zig`.
+    pub fn fromGguf(h: gguf.Header) !Config
+    {
+        return (try families.find(h)).config(h);
     }
 
     /// Longest n-gram and most hash heads the n-gram embedding handles.
@@ -774,7 +640,7 @@ fn qkNorm(cfg: Config, v: []f32, w: []const f32) void
     {
         return;
     }
-    if (cfg.arch == .olmoe)
+    if (cfg.qk_norm == .whole)
     {
         rmsnorm(v, w, cfg.eps, v);
         return;
@@ -806,7 +672,7 @@ fn softplus(x: f32) f32
 }
 
 /// Largest value-head size `recurrentMix` handles.
-const max_head = 256;
+pub const max_head = 256;
 
 /// A Gated DeltaNet layer (TASK-29) on `n` new tokens: their normalized
 /// inputs `x` (n x d_model) become `out` (n x d_model), and `state` moves on
@@ -1158,7 +1024,7 @@ pub const Rope = struct {
             const interp = r.inv_freq[i] / f;
             r.inv_freq[i] = interp * (1 - extrapolate) + r.inv_freq[i] * extrapolate;
         }
-        r.scale = 0.1 * @log(f) + 1.0;
+        r.scale = if (cfg.yarn_mscale) 0.1 * @log(f) + 1.0 else 1;
         return r;
     }
 
@@ -1597,12 +1463,21 @@ pub const Layer = struct {
     indexer: ?Indexer = null,
     /// The n-gram embedding, in its one layer.
     ple: ?PleLayer = null,
-    /// GLM-5.3-Flash's blocks (TASK-32); `router` is empty in its dense layers.
-    glm: ?glm53.Parts = null,
-    /// DeepSeek V3's blocks (TASK-39); `router` is empty in its dense layers.
-    ds: ?deepseek.Parts = null,
-    /// gpt-oss's biases and sinks (TASK-39).
-    oss: ?gptoss.Parts = null,
+    /// In place of attention: KDA, or MLA with a DSA indexer (GLM-5.3-Flash, TASK-32),
+    /// or MLA with decoupled rope (DeepSeek V3, TASK-39).
+    kda: ?glm53.Kda = null,
+    mla_dsa: ?glm53.Mla = null,
+    mla_rope: ?deepseek.Mla = null,
+    /// With mHC (GLM-5.3-Flash), the mixes of the streams before attention and the feed-forward
+    /// block, each followed by its norm.
+    mhc_attn: ?glm53.Hc = null,
+    mhc_ffn: ?glm53.Hc = null,
+    /// A dense layer's feed-forward block (`router` is then empty), or ungated shared experts.
+    mlp: ?Expert = null,
+    /// A sigmoid router's choice bias; empty for none.
+    route_bias: []f32 = &.{},
+    /// Attention and router biases, sinks and a window (gpt-oss's, TASK-39; Qwen2-MoE's query, key and value biases).
+    extras: ?gptoss.Parts = null,
 };
 
 /// A hyper-connection (TASK-31): an RMSNorm over each stream (`norm`, streams x d_model),
@@ -1688,15 +1563,15 @@ pub const Weights = struct {
         return list.toOwnedSlice(gpa);
     }
 
-    pub fn init(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader.Plan, region: []const u8) !Weights {
-        if (cfg.arch == .glm5next)
-        {
-            return glm53.weights(gpa, h, cfg, plan, region);
-        }
-        if (cfg.arch == .deepseek2)
-        {
-            return deepseek.weights(gpa, h, cfg, plan, region);
-        }
+    /// Loaded as the model's family says.
+    pub fn init(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader.Plan, region: []const u8) !Weights
+    {
+        return (try families.find(h)).weights(gpa, h, cfg, plan, region);
+    }
+
+    /// The layout most families share: attention or Gated DeltaNet layers, each with experts.
+    pub fn standard(gpa: std.mem.Allocator, h: gguf.Header, cfg: Config, plan: loader.Plan, region: []const u8) anyerror!Weights
+    {
         var self: Weights = .{ .cfg = cfg, .embed = undefined, .layers = undefined, .out_norm = undefined, .head = undefined, .arena = .init(gpa) };
         errdefer self.arena.deinit();
         const a = self.arena.allocator();
@@ -1777,14 +1652,20 @@ pub const Weights = struct {
             const t = try g.info("per_layer_token_embd.weight");
             var p: Ple = .{ .table = undefined, .mult = @splat(0), .offsets = @splat(0), .sizes = @splat(0) };
             p.table = try g.mat("per_layer_token_embd.weight", @intCast(t.dims[1]), cfg.ple_row);
+            // The keys carry the file's architecture as their prefix.
+            const arch = h.getString("general.architecture").?;
+            var kb: [3][96]u8 = undefined;
+            const mult_key = std.fmt.bufPrint(&kb[0], "{s}.ple.layer_multipliers", .{arch}) catch return error.MissingKey;
+            const offsets_key = std.fmt.bufPrint(&kb[1], "{s}.ple.head_offsets", .{arch}) catch return error.MissingKey;
+            const sizes_key = std.fmt.bufPrint(&kb[2], "{s}.ple.head_vocab_sizes", .{arch}) catch return error.MissingKey;
             for (0..cfg.ple_ngram) |i|
             {
-                p.mult[i] = @bitCast(h.intAt("qwen4exp.ple.layer_multipliers", i) orelse return error.MissingKey);
+                p.mult[i] = @bitCast(h.intAt(mult_key, i) orelse return error.MissingKey);
             }
             for (0..cfg.pleHeads()) |i|
             {
-                p.offsets[i] = @bitCast(h.intAt("qwen4exp.ple.head_offsets", i) orelse return error.MissingKey);
-                p.sizes[i] = @bitCast(h.intAt("qwen4exp.ple.head_vocab_sizes", i) orelse return error.MissingKey);
+                p.offsets[i] = @bitCast(h.intAt(offsets_key, i) orelse return error.MissingKey);
+                p.sizes[i] = @bitCast(h.intAt(sizes_key, i) orelse return error.MissingKey);
                 if (p.sizes[i] == 0 or p.offsets[i] + p.sizes[i] > p.table.rows)
                 {
                     return error.BadShape;
@@ -1800,12 +1681,11 @@ pub const Weights = struct {
                     return std.fmt.bufPrint(b, "blk.{d}.{s}.weight", .{ layer, s }) catch unreachable;
                 }
             }.f;
-            // OLMoE normalizes the whole projection; Qwen3 each head.
-            const qn = if (cfg.arch == .olmoe) cfg.qDim() else cfg.head_dim;
-            const kn = if (cfg.arch == .olmoe) cfg.kvDim() else cfg.head_dim;
+            const qn = if (cfg.qk_norm == .whole) cfg.qDim() else cfg.head_dim;
+            const kn = if (cfg.qk_norm == .whole) cfg.kvDim() else cfg.head_dim;
             l.* = .{
                 .attn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, "attn_norm"), d),
-                .ffn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, if (cfg.arch == .qwen35moe or cfg.arch == .gptoss) "post_attention_norm" else "ffn_norm"), d),
+                .ffn_norm = if (hyper) &.{} else try g.vec(n(&buf, i, cfg.ffn_norm_name), d),
                 .router = try g.mat(n(&buf, i, "ffn_gate_inp"), cfg.experts, d),
             };
             if (hyper)
@@ -1826,7 +1706,7 @@ pub const Weights = struct {
                     .conv = try g.flat(n(&buf, i, "ple_conv1d"), R * cfg.ple_conv),
                 };
             }
-            if (cfg.recurrent(i) and cfg.arch == .qwen4exp)
+            if (cfg.recurrent(i) and cfg.ssm_merged)
             {
                 // llama.cpp merges weights that read the same input: [qkv; z] and [beta; alpha].
                 var b2: [64]u8 = undefined;
@@ -1869,15 +1749,14 @@ pub const Weights = struct {
                 l.k = try g.mat(n(&buf, i, "attn_k"), cfg.kvDim(), d);
                 l.v = try g.mat(n(&buf, i, "attn_v"), cfg.kvDim(), d);
                 l.o = try g.mat(n(&buf, i, "attn_output"), d, cfg.qDim());
-                // Mixtral and gpt-oss have no QK norm.
-                if (cfg.arch != .mixtral and cfg.arch != .gptoss)
+                if (cfg.qk_norm != .none)
                 {
                     l.q_norm = try g.vec(n(&buf, i, "attn_q_norm"), qn);
                     l.k_norm = try g.vec(n(&buf, i, "attn_k_norm"), kn);
                 }
-                if (cfg.arch == .gptoss)
+                if (cfg.attn_bias or cfg.attn_out_bias or cfg.attn_sinks or cfg.router_bias)
                 {
-                    l.oss = try gptoss.parts(h, plan, region, a, cfg, i);
+                    l.extras = try gptoss.parts(h, plan, region, a, cfg, i);
                 }
                 if (cfg.qsa_heads > 0)
                 {
@@ -2340,17 +2219,10 @@ pub fn forwardAs(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, tokens: []
 
 /// Runs `tokens` at the positions after those already in `cache`, adding
 /// them to it. `logits` takes every new position's logits (n x vocab), or
-/// only the last one's if it holds fewer rows than that.
+/// only the last one's if it holds fewer rows than that. Every family runs
+/// here, each layer through the parts it has (TASK-42).
 pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache, tokens: []const u32, logits: []f32, trace: ?Trace) !void
 {
-    if (w.cfg.arch == .glm5next)
-    {
-        return glm53.step(gpa, w, moe, cache, tokens, logits, trace);
-    }
-    if (w.cfg.arch == .deepseek2)
-    {
-        return deepseek.step(gpa, w, moe, cache, tokens, logits, trace);
-    }
     const cfg = w.cfg;
     const n = tokens.len;
     const d = cfg.d_model;
@@ -2365,6 +2237,12 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     {
         return error.LogitsTooSmall;
     }
+    const has: Has = .of(w);
+    // MLA reads its cache as f32 in memory.
+    if ((has.mla_dsa or has.mla_rope) and (cache.tier != null or cache.format != .f32))
+    {
+        return error.Unsupported;
+    }
     if (moe.mark) |m|
     {
         m(moe.ctx, true, n);
@@ -2372,35 +2250,26 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a = arena.allocator();
-    const qd = cfg.qDim();
-    const kvd = cfg.kvDim();
-    const group = cfg.heads / cfg.kv_heads;
-    const rope: Rope = .init(cfg);
+    const qd = if (has.gqa) cfg.qDim() else 0;
+    const rope: Rope = if (has.gqa or has.mla_rope) .init(cfg) else .{ .inv_freq = undefined, .half = 0, .scale = 1 };
     // With hyper-connections, each token's residual is several streams, and `inj` weighs a block's output per stream.
     const R = cfg.residual();
-    const h = try a.alloc(f32, n * R);
+    var h = try a.alloc(f32, n * R);
     const inj = try a.alloc(f32, n * cfg.streams);
-    const hc_bufs = try qwen38.Buffers.init(a, cfg, n);
-    const iq = try a.alloc(f32, n * cfg.qsa_heads * cfg.qsa_dim);
+    var hcfg = cfg;
+    if (!has.hc)
+    {
+        hcfg.streams = 1;
+    }
+    const hc_bufs = try qwen38.Buffers.init(a, hcfg, n);
+    var mhc: ?glm53.Mhc = if (has.mhc) try glm53.Mhc.init(a, cfg, n) else null;
     const x = try a.alloc(f32, n * d);
-    const q = try a.alloc(f32, n * qd);
-    // With an output gate, the query projection gives each head's query then its gate.
-    const qg = try a.alloc(f32, if (cfg.attn_gate) 2 * n * qd else 0);
-    const gate = try a.alloc(f32, if (cfg.attn_gate) n * qd else 0);
-    const att = try a.alloc(f32, n * qd);
     const tmp = try a.alloc(f32, n * @max(d, qd));
     // Cos and sin for each new position, shared by every layer.
     const rope_cs = try a.alloc(f32, n * rope.half);
     const rope_sn = try a.alloc(f32, n * rope.half);
-    const scores = try a.alloc(f32, pos0 + n);
-    const kn = try a.alloc(f32, n * kvd);
-    const vn = try a.alloc(f32, n * kvd);
-    const tile_count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
-    const tiles_k = try a.alloc(u64, tile_count);
-    const tiles_v = try a.alloc(u64, tile_count);
-    const scratch = try a.alloc(f32, @max(@max(d, qd), @max(cfg.d_ff, @max(cfg.ssm_v_heads * cfg.ssm_dv, cfg.shared_ff))));
-    const kh = try a.alloc(f32, cfg.head_dim);
-    const vh = try a.alloc(f32, cfg.head_dim);
+    const big = @max(@max(cfg.d_ff, cfg.shared_ff), @max(cfg.dense_ff, cfg.ssm_v_heads * cfg.ssm_dv));
+    const scratch = try a.alloc(f32, @max(@max(@max(d, qd), @max(big, R)), @max(@max(cfg.heads * cfg.mla_v, cfg.heads * cfg.mla_k), cfg.mla_q_rank)));
     const probs = try a.alloc(f32, n * cfg.experts);
     const idx = try a.alloc(u32, n * k);
     const wts = try a.alloc(f32, n * k);
@@ -2414,7 +2283,23 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
     const wanted_list = try a.alloc(u32, votes.len);
     const cap_count = try a.alloc(u32, if (moe.capacity != null) cfg.experts else 0);
     const cap_list = try a.alloc(u32, if (moe.capacity != null) n * k else 0);
-    const mix_bufs = try MixBuffers.init(a, cfg, n);
+    var mcfg = cfg;
+    if (!has.gdn)
+    {
+        mcfg.attn_interval = 0;
+    }
+    if (!has.gated_shared)
+    {
+        mcfg.shared_ff = 0;
+    }
+    const mix_bufs = try MixBuffers.init(a, mcfg, n);
+    // A dense block or ungated shared experts: gate, up, and output.
+    const mlp_g = try a.alloc(f32, if (has.mlp) n * big else 0);
+    const mlp_u = try a.alloc(f32, mlp_g.len);
+    const mlp_y = try a.alloc(f32, if (has.mlp) n * d else 0);
+    const glm_bufs: ?glm53.Buffers = if (has.kda or has.mla_dsa) try glm53.Buffers.init(a, cfg, n) else null;
+    const ds_bufs: ?deepseek.Buffers = if (has.mla_rope) try deepseek.Buffers.init(a, cfg, n) else null;
+    const attn: Attention = if (has.gqa) try .init(a, cfg, n, pos0) else undefined;
 
     for (tokens, 0..) |tok, t|
     {
@@ -2430,7 +2315,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         }
     }
     const guess_inj = try a.alloc(f32, if (la != null) n * cfg.streams else 0);
-    const ahead: Guesser = .{ .w = w, .moe = moe, .n = n, .kx = kx, .out = guess, .val = guess_val, .votes = votes, .wanted_list = wanted_list, .hc = &hc_bufs, .inj = guess_inj };
+    const ahead: Guesser = .{ .w = w, .moe = moe, .n = n, .kx = kx, .out = guess, .val = guess_val, .votes = votes, .wanted_list = wanted_list, .hc = &hc_bufs, .inj = guess_inj, .mhc = if (mhc) |*m| m else null };
     if (cache.tier) |tr|
     {
         try tr.begin(tr.ctx, pos0);
@@ -2445,10 +2330,12 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         }
         p.predict_ns += nowNs() - t0;
     }
-    const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.head_dim)));
     // Loops over tokens split across threads in long passes; each token comes out the same.
     const threads = if (n >= parallel_tokens) cpuThreads() else 1;
-    pool.parallelFor(threads, n, TokenLoops.Angles{ .rope = &rope, .pos0 = pos0, .cs = rope_cs, .sn = rope_sn }, TokenLoops.Angles.run);
+    if (rope.half > 0)
+    {
+        pool.parallelFor(threads, n, TokenLoops.Angles{ .rope = &rope, .pos0 = pos0, .cs = rope_cs, .sn = rope_sn }, TokenLoops.Angles.run);
+    }
     for (w.layers, 0..) |*l, li|
     {
         const layer_t0 = if (la != null) nowNs() else 0;
@@ -2461,9 +2348,18 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         {
             qwen38.mix(cfg, hy, &hc_bufs, h, n, x, inj);
         }
+        else if (l.mhc_attn) |hc|
+        {
+            mhc.?.pre(cfg, hc, l.attn_norm, h, n, x, scratch);
+            Profile.lap(&profile.output, &pt);
+        }
         else
         {
             pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.attn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
+        }
+        if (dump) |f|
+        {
+            f("attn_in", li, x[0 .. n * d]);
         }
         if (l.lin) |lin|
         {
@@ -2471,189 +2367,40 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             try recurrentMix(&mix_bufs, cfg, lin, cache.recurrentState(ri), cache.recurrentStateDev(ri), x, n, tmp, scratch);
             Profile.lap(&profile.recurrent, &pt);
         }
-        else
+        else if (l.kda) |kw|
+        {
+            glm53.kda(&glm_bufs.?, cfg, kw, cache.recurrentState(cfg.recurrentIndex(li)), x, n, tmp, scratch);
+            Profile.lap(&profile.recurrent, &pt);
+        }
+        else if (l.mla_dsa) |mw|
         {
             const ai = cfg.attnIndex(li);
-            const qp = if (cfg.attn_gate) qg else q;
-            const fused = if (gpu_matmuls) |f| f(&.{ l.q, l.k, l.v }, x[0 .. n * d], n, &.{ qp[0 .. n * l.q.rows], kn[0 .. n * kvd], vn[0 .. n * kvd] }) else false;
-            if (!fused)
-            {
-                l.q.matmul(x, n, qp, scratch);
-                l.k.matmul(x, n, kn, scratch);
-                l.v.matmul(x, n, vn, scratch);
-            }
-            if (l.oss) |os|
-            {
-                gptoss.addRows(qp[0 .. n * qd], os.q_b);
-                gptoss.addRows(kn[0 .. n * kvd], os.k_b);
-                gptoss.addRows(vn[0 .. n * kvd], os.v_b);
-            }
-            if (cfg.attn_gate)
-            {
-                pool.parallelFor(threads, n, TokenLoops.SplitGate{ .qg = qg, .q = q, .gate = gate, .heads = cfg.heads, .hd = cfg.head_dim }, TokenLoops.SplitGate.run);
-            }
-            Profile.lap(&profile.projections, &pt);
-            pool.parallelFor(threads, n, TokenLoops.QkRope{ .cfg = cfg, .rope = &rope, .q = q, .k = kn, .q_norm = l.q_norm, .k_norm = l.k_norm, .cs = rope_cs, .sn = rope_sn }, TokenLoops.QkRope.run);
-            cache.store(ai, pos0, n, kn, vn);
-            // QSA keeps only some blocks once there are more than its budget; until then attention is dense.
-            const sparse = if (l.indexer) |ix| blk: {
-                qwen38.index(cfg, ix, &rope, rope_cs, rope_sn, x, n, pos0, cache.qsaKeys(ai), cache.qsaBlocks(ai), iq, scratch);
-                break :blk !qwen38.dense(cfg, pos0, n);
-            } else false;
-            const kept: []i32 = if (trace) |tr| (if (tr.qsa.len > 0) tr.qsa[ai * n * cfg.qsaTop() ..][0 .. n * cfg.qsaTop()] else &.{}) else &.{};
-            if (l.indexer != null and !sparse)
-            {
-                @memset(kept, -1);
-            }
-            Profile.lap(&profile.qk_rope, &pt);
-            var on_gpu = false;
-            if (sparse)
-            {
-                var done = false;
-                if (gpu_qsa) |f|
-                {
-                    if (cache.dev_qsa != 0 and cache.format == .f32 and (cache.dev_k != 0 or cache.tier != null))
-                    {
-                        if (cache.tier) |tr|
-                        {
-                            try tr.tiles(tr.ctx, ai, pos0 + n, tiles_k, tiles_v);
-                        }
-                        else
-                        {
-                            cache.tiles(ai, pos0 + n, tiles_k, tiles_v);
-                        }
-                        const count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
-                        done = f(.{ .cfg = cfg, .q = q, .iq = iq, .n = n, .pos0 = pos0, .scale = scale, .blocks_dev = cache.qsaBlocksDev(ai), .tiles_k = tiles_k[0..count], .tiles_v = tiles_v[0..count], .out = att, .kept = kept });
-                        profile.qsa_gpu += @intFromBool(done);
-                        // The GPU writes only the queries that choose; the others keep every block.
-                        for (0..if (done and kept.len > 0) n else 0) |t|
-                        {
-                            if ((pos0 + t + 1) / cfg.qsa_block <= cfg.qsaTop())
-                            {
-                                @memset(kept[t * cfg.qsaTop() ..][0..cfg.qsaTop()], -1);
-                            }
-                        }
-                    }
-                }
-                if (!done)
-                {
-                    if (cache.tier != null)
-                    {
-                        return error.OffloadNeedsGpu;
-                    }
-                    if (cache.format != .f32)
-                    {
-                        return error.Unsupported;
-                    }
-                    profile.qsa_cpu += 1;
-                    pool.parallelFor(threads, n, qwen38.Attend{ .cfg = cfg, .q = q, .iq = iq, .keys = cache.keysF32(ai), .values = cache.valuesF32(ai), .blocks = cache.qsaBlocks(ai), .pos0 = pos0, .scale = scale, .out = att, .kept = kept }, qwen38.Attend.run);
-                }
-                on_gpu = true; // `att` is done, so the dense loops below are skipped
-
-            }
-            else if (gpu_attention != null and l.oss == null and (cache.dev_k != 0 or cache.tier != null))
-            {
-                if (cache.tier) |tr|
-                {
-                    try tr.tiles(tr.ctx, ai, pos0 + n, tiles_k, tiles_v);
-                }
-                else
-                {
-                    cache.tiles(ai, pos0 + n, tiles_k, tiles_v);
-                }
-                const count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
-                on_gpu = gpu_attention.?(.{
-                    .q = q,
-                    .n = n,
-                    .pos0 = pos0,
-                    .heads = cfg.heads,
-                    .kv_heads = cfg.kv_heads,
-                    .kvd = kvd,
-                    .scale = scale,
-                    .tiles_k = tiles_k[0..count],
-                    .tiles_v = tiles_v[0..count],
-                    .splits = AttentionJob.splitsFor(n, cfg.heads, cfg.kv_heads, count),
-                    .out = att,
-                    .format = cache.format,
-                    .hd = cfg.head_dim,
-                });
-            }
-            if (!on_gpu and cache.tier != null)
-            {
-                return error.OffloadNeedsGpu;
-            }
-            // A compact cache decodes each position's head into `kh` and `vh` as it is read.
-            const plain = cache.format == .f32;
-            const layer_k = if (on_gpu or !plain) &[_]f32{} else cache.keysF32(ai);
-            const layer_v = if (on_gpu or !plain) &[_]f32{} else cache.valuesF32(ai);
-            for (0..n) |t|
-            {
-                if (on_gpu)
-                {
-                    break;
-                }
-                const last = pos0 + t;
-                // gpt-oss: a sliding layer sees the last `sliding_window` positions, and a sink per head joins each softmax.
-                const window = if (l.oss) |os| os.window else 0;
-                const from = if (window > 0 and last + 1 > window) last + 1 - window else 0;
-                for (0..cfg.heads) |hd|
-                {
-                    const off = hd * cfg.head_dim;
-                    const kv_off = hd / group * cfg.head_dim;
-                    const qh = q[t * qd + off ..][0..cfg.head_dim];
-                    const sink: ?f32 = if (l.oss) |os| os.sinks[hd] else null;
-                    var mx: f32 = if (sink) |sv| sv else -std.math.inf(f32);
-                    for (0..last + 1) |s|
-                    {
-                        if (s < from)
-                        {
-                            scores[s] = -std.math.inf(f32);
-                            continue;
-                        }
-                        const ks = if (plain) layer_k[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
-                            cache.format.part(0).decodeHead(cache.keys(ai)[s * cache.row[0] ..][0..cache.row[0]], kvd, hd / group, kh);
-                            break :blk kh;
-                        };
-                        scores[s] = dot(qh, ks) * scale;
-                        mx = @max(mx, scores[s]);
-                    }
-                    var sum: f32 = if (sink) |sv| @exp(sv - mx) else 0;
-                    for (scores[from .. last + 1]) |*sc|
-                    {
-                        sc.* = @exp(sc.* - mx);
-                        sum += sc.*;
-                    }
-                    const out = att[t * qd + off ..][0..cfg.head_dim];
-                    @memset(out, 0);
-                    for (from..last + 1) |s|
-                    {
-                        const p = scores[s] / sum;
-                        const vs = if (plain) layer_v[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
-                            cache.format.part(1).decodeHead(cache.values(ai)[s * cache.row[1] ..][0..cache.row[1]], kvd, hd / group, vh);
-                            break :blk vh;
-                        };
-                        for (out, vs) |*o, vv|
-                        {
-                            o.* += p * vv;
-                        }
-                    }
-                }
-            }
-            if (cfg.attn_gate)
-            {
-                pool.parallelFor(threads, n, TokenLoops.ApplyGate{ .att = att, .gate = gate, .qd = qd }, TokenLoops.ApplyGate.run);
-            }
+            const top = cfg.dsaTop();
+            const kept: []i32 = if (trace) |tr| (if (tr.qsa.len > 0) tr.qsa[ai * n * top ..][0 .. n * top] else &.{}) else &.{};
+            glm53.mla(&glm_bufs.?, cfg, mw, cache, ai, x, n, pos0, tmp, kept, scratch);
             Profile.lap(&profile.attention, &pt);
-            l.o.matmul(att, n, tmp, scratch);
-            if (l.oss) |os|
-            {
-                gptoss.addRows(tmp[0 .. n * d], os.o_b);
-            }
+        }
+        else if (l.mla_rope) |mw|
+        {
+            deepseek.mla(&ds_bufs.?, cfg, mw, &rope, rope_cs, rope_sn, cache, cfg.attnIndex(li), x, n, pos0, tmp, scratch);
+            Profile.lap(&profile.attention, &pt);
+        }
+        else
+        {
+            try attn.run(cfg, l, cache, cfg.attnIndex(li), &rope, rope_cs, rope_sn, x, n, pos0, threads, trace, tmp, scratch, &pt);
+        }
+        if (dump) |f|
+        {
+            f("attn_out", li, tmp[0 .. n * d]);
         }
         const attn_max = if (nanTrace()) maxAbs(tmp[0 .. n * d]) else 0;
         if (l.hc_attn != null)
         {
             qwen38.inject(cfg, h, tmp, inj, n);
+        }
+        else if (l.mhc_attn != null)
+        {
+            mhc.?.post(cfg, &h, tmp, n);
         }
         else
         {
@@ -2674,40 +2421,82 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         {
             qwen38.mix(cfg, hy, &hc_bufs, h, n, x, inj);
         }
+        else if (l.mhc_ffn) |hc|
+        {
+            mhc.?.pre(cfg, hc, l.ffn_norm, h, n, x, scratch);
+        }
         else
         {
             pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = l.ffn_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
         }
+        if (dump) |f|
+        {
+            f("mlp_in", li, x[0 .. n * d]);
+        }
         Profile.lap(&profile.output, &pt);
-        l.router.matmul(x, n, probs, scratch);
-        if (l.oss) |os|
-        {
-            gptoss.addRows(probs[0 .. n * cfg.experts], os.router_b);
-        }
-        pool.parallelFor(threads, n, TokenLoops.Route{ .cfg = cfg, .probs = probs, .idx = idx, .wts = wts }, TokenLoops.Route.run);
-        if (la) |p|
-        {
-            scoreGuesses(p, guess, idx, li, n, k, kx, horizon, cfg.layers);
-        }
-        if (moe.capacity) |cap|
-        {
-            cap.apply(idx, wts, n * k, cap_count, cap_list);
-        }
-        Profile.lap(&profile.router, &pt);
+        const out = tmp[0 .. n * d];
         @memset(tmp, 0);
-        try moe.run(moe.ctx, li, x, n, idx, wts, tmp[0 .. n * d]);
-        if (l.shared) |se|
+        const dense = li < cfg.dense_layers;
+        if (dense)
         {
-            try sharedExpert(&mix_bufs, se, l.shared_gate, x, n, tmp[0 .. n * d], scratch);
+            glm53.mlp(l.mlp.?, cfg.swiglu_limit, x, n, mlp_g, mlp_u, mlp_y, out, scratch);
+            Profile.lap(&profile.experts, &pt);
         }
-        Profile.lap(&profile.experts, &pt);
+        else
+        {
+            l.router.matmul(x, n, probs, scratch);
+            if (l.extras) |ex|
+            {
+                gptoss.addRows(probs[0 .. n * cfg.experts], ex.router_b);
+            }
+            switch (cfg.router)
+            {
+                .softmax => pool.parallelFor(threads, n, TokenLoops.Route{ .cfg = cfg, .probs = probs, .idx = idx, .wts = wts }, TokenLoops.Route.run),
+                .sigmoid =>
+                {
+                    const gaps: []f32 = if (trace) |tr| (if (tr.gaps.len > 0) tr.gaps[li * n ..][0..n] else &.{}) else &.{};
+                    deepseek.route(cfg, l.route_bias, probs, n, idx, wts, gaps);
+                },
+            }
+            if (la) |p|
+            {
+                scoreGuesses(p, guess, idx, li, n, k, kx, horizon, cfg.layers);
+            }
+            if (moe.capacity) |cap|
+            {
+                cap.apply(idx, wts, n * k, cap_count, cap_list);
+            }
+            Profile.lap(&profile.router, &pt);
+            try moe.run(moe.ctx, li, x, n, idx, wts, out);
+            if (dump) |f|
+            {
+                f("routed_out", li, out);
+            }
+            if (l.shared) |se|
+            {
+                try sharedExpert(&mix_bufs, se, l.shared_gate, x, n, out, scratch);
+            }
+            if (l.mlp) |e|
+            {
+                glm53.mlp(e, cfg.swiglu_limit, x, n, mlp_g, mlp_u, mlp_y, out, scratch);
+            }
+            Profile.lap(&profile.experts, &pt);
+            if (dump) |f|
+            {
+                f("mlp_out", li, out);
+            }
+        }
         if (nanTrace())
         {
-            std.debug.print("trace: layer {d} at {d}+{d}: input {e:.3}, attention out {e:.3}, experts out {e:.3}, residual {e:.3}\n", .{ li, pos0, n, maxAbs(x[0 .. n * d]), attn_max, maxAbs(tmp[0 .. n * d]), maxAbs(h) });
+            std.debug.print("trace: layer {d} at {d}+{d}: input {e:.3}, attention out {e:.3}, experts out {e:.3}, residual {e:.3}\n", .{ li, pos0, n, maxAbs(x[0 .. n * d]), attn_max, maxAbs(out), maxAbs(h) });
         }
         if (l.hc_ffn != null)
         {
             qwen38.inject(cfg, h, tmp, inj, n);
+        }
+        else if (l.mhc_ffn != null)
+        {
+            mhc.?.post(cfg, &h, out, n);
         }
         else
         {
@@ -2722,7 +2511,7 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         if (!allFinite(h))
         {
             std.log.err("step: a non-finite value in the residual after layer {d} (positions {d} to {d}); non-finite rows: expert input {d}, expert output {d}, residual {d}, first at token {d}", .{
-                li, pos0, pos0 + n - 1, badRows(x[0 .. n * d], d), badRows(tmp[0 .. n * d], d), badRows(h, R), firstBadRow(h, R),
+                li, pos0, pos0 + n - 1, badRows(x[0 .. n * d], d), badRows(out, d), badRows(h, R), firstBadRow(h, R),
             });
             return error.NonFinite;
         }
@@ -2732,7 +2521,11 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             {
                 @memcpy(tr.hidden[li * n * R ..][0 .. n * R], h);
             }
-            @memcpy(tr.topk[li * n * k ..][0 .. n * k], idx);
+            // A dense layer chooses no experts, so its rows stay as they were.
+            if (!dense)
+            {
+                @memcpy(tr.topk[li * n * k ..][0 .. n * k], idx);
+            }
         }
     }
     cache.len = pos0 + n;
@@ -2756,6 +2549,13 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
             w.head.matmul(x, 1, logits, scratch);
         }
     }
+    else if (cfg.streams > 1)
+    {
+        // mHC's streams are averaged, then normalized.
+        const first: usize = if (all_logits) 0 else n - 1;
+        glm53.streamMean(cfg, w.out_norm, h, first, n, x);
+        w.head.matmul(x, n - first, logits, scratch);
+    }
     else if (all_logits)
     {
         pool.parallelFor(threads, n, TokenLoops.Norm{ .h = h, .x = x, .w = w.out_norm, .eps = cfg.eps, .d = d }, TokenLoops.Norm.run);
@@ -2775,6 +2575,275 @@ pub fn step(gpa: std.mem.Allocator, w: *const Weights, moe: Moe, cache: *KvCache
         m(moe.ctx, false, n);
     }
 }
+
+/// Which parts the model's layers use, so a step sizes only the buffers they need.
+const Has = struct {
+    gqa: bool = false,
+    gdn: bool = false,
+    kda: bool = false,
+    mla_dsa: bool = false,
+    mla_rope: bool = false,
+    hc: bool = false,
+    mhc: bool = false,
+    mlp: bool = false,
+    gated_shared: bool = false,
+
+    fn of(w: *const Weights) Has
+    {
+        var s: Has = .{};
+        for (w.layers) |l|
+        {
+            s.gdn = s.gdn or l.lin != null;
+            s.kda = s.kda or l.kda != null;
+            s.mla_dsa = s.mla_dsa or l.mla_dsa != null;
+            s.mla_rope = s.mla_rope or l.mla_rope != null;
+            s.gqa = s.gqa or (l.lin == null and l.kda == null and l.mla_dsa == null and l.mla_rope == null);
+            s.hc = s.hc or l.hc_attn != null;
+            s.mhc = s.mhc or l.mhc_attn != null;
+            s.mlp = s.mlp or l.mlp != null;
+            s.gated_shared = s.gated_shared or l.shared != null;
+        }
+        return s;
+    }
+};
+
+/// Grouped-query attention (with QK norm, an output gate, QSA, biases, sinks and a window
+/// as the layer has them): its buffers for one step, and `run` for one layer.
+const Attention = struct {
+    q: []f32,
+    qg: []f32,
+    gate: []f32,
+    att: []f32,
+    kn: []f32,
+    vn: []f32,
+    iq: []f32,
+    scores: []f32,
+    tiles_k: []u64,
+    tiles_v: []u64,
+    kh: []f32,
+    vh: []f32,
+
+    fn init(a: std.mem.Allocator, cfg: Config, n: usize, pos0: usize) !Attention
+    {
+        const qd = cfg.qDim();
+        const kvd = cfg.kvDim();
+        const tile_count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
+        return .{
+            .q = try a.alloc(f32, n * qd),
+            // With an output gate, the query projection gives each head's query then its gate.
+            .qg = try a.alloc(f32, if (cfg.attn_gate) 2 * n * qd else 0),
+            .gate = try a.alloc(f32, if (cfg.attn_gate) n * qd else 0),
+            .att = try a.alloc(f32, n * qd),
+            .kn = try a.alloc(f32, n * kvd),
+            .vn = try a.alloc(f32, n * kvd),
+            .iq = try a.alloc(f32, n * cfg.qsa_heads * cfg.qsa_dim),
+            .scores = try a.alloc(f32, pos0 + n),
+            .tiles_k = try a.alloc(u64, tile_count),
+            .tiles_v = try a.alloc(u64, tile_count),
+            .kh = try a.alloc(f32, cfg.head_dim),
+            .vh = try a.alloc(f32, cfg.head_dim),
+        };
+    }
+
+    /// Attention layer `ai` on `n` normalized inputs `x` from `pos0`, into `out` (n x d_model).
+    fn run(self: *const Attention, cfg: Config, l: *const Layer, cache: *KvCache, ai: usize, rope: *const Rope, rope_cs: []const f32, rope_sn: []const f32, x: []const f32, n: usize, pos0: usize, threads: usize, trace: ?Trace, out: []f32, scratch: []f32, pt: *u64) !void
+    {
+        const d = cfg.d_model;
+        const qd = cfg.qDim();
+        const kvd = cfg.kvDim();
+        const group = cfg.heads / cfg.kv_heads;
+        const q = self.q;
+        const qg = self.qg;
+        const gate = self.gate;
+        const att = self.att;
+        const kn = self.kn;
+        const vn = self.vn;
+        const iq = self.iq;
+        const scores = self.scores;
+        const tiles_k = self.tiles_k;
+        const tiles_v = self.tiles_v;
+        const kh = self.kh;
+        const vh = self.vh;
+        const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.head_dim)));
+        const qp = if (cfg.attn_gate) qg else q;
+        const fused = if (gpu_matmuls) |f| f(&.{ l.q, l.k, l.v }, x[0 .. n * d], n, &.{ qp[0 .. n * l.q.rows], kn[0 .. n * kvd], vn[0 .. n * kvd] }) else false;
+        if (!fused)
+        {
+            l.q.matmul(x, n, qp, scratch);
+            l.k.matmul(x, n, kn, scratch);
+            l.v.matmul(x, n, vn, scratch);
+        }
+        if (l.extras) |ex|
+        {
+            gptoss.addRows(qp[0 .. n * qd], ex.q_b);
+            gptoss.addRows(kn[0 .. n * kvd], ex.k_b);
+            gptoss.addRows(vn[0 .. n * kvd], ex.v_b);
+        }
+        if (cfg.attn_gate)
+        {
+            pool.parallelFor(threads, n, TokenLoops.SplitGate{ .qg = qg, .q = q, .gate = gate, .heads = cfg.heads, .hd = cfg.head_dim }, TokenLoops.SplitGate.run);
+        }
+        Profile.lap(&profile.projections, pt);
+        pool.parallelFor(threads, n, TokenLoops.QkRope{ .cfg = cfg, .rope = rope, .q = q, .k = kn, .q_norm = l.q_norm, .k_norm = l.k_norm, .cs = rope_cs, .sn = rope_sn }, TokenLoops.QkRope.run);
+        cache.store(ai, pos0, n, kn, vn);
+        // QSA keeps only some blocks once there are more than its budget; until then attention is dense.
+        const sparse = if (l.indexer) |ix| blk: {
+            qwen38.index(cfg, ix, rope, rope_cs, rope_sn, x, n, pos0, cache.qsaKeys(ai), cache.qsaBlocks(ai), iq, scratch);
+            break :blk !qwen38.dense(cfg, pos0, n);
+        } else false;
+        const kept: []i32 = if (trace) |tr| (if (tr.qsa.len > 0) tr.qsa[ai * n * cfg.qsaTop() ..][0 .. n * cfg.qsaTop()] else &.{}) else &.{};
+        if (l.indexer != null and !sparse)
+        {
+            @memset(kept, -1);
+        }
+        Profile.lap(&profile.qk_rope, pt);
+        // Sinks and windows run on the CPU only.
+        const plain_softmax = if (l.extras) |ex| ex.sinks.len == 0 and ex.window == 0 else true;
+        var on_gpu = false;
+        if (sparse)
+        {
+            var done = false;
+            if (gpu_qsa) |f|
+            {
+                if (cache.dev_qsa != 0 and cache.format == .f32 and (cache.dev_k != 0 or cache.tier != null))
+                {
+                    if (cache.tier) |tr|
+                    {
+                        try tr.tiles(tr.ctx, ai, pos0 + n, tiles_k, tiles_v);
+                    }
+                    else
+                    {
+                        cache.tiles(ai, pos0 + n, tiles_k, tiles_v);
+                    }
+                    const count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
+                    done = f(.{ .cfg = cfg, .q = q, .iq = iq, .n = n, .pos0 = pos0, .scale = scale, .blocks_dev = cache.qsaBlocksDev(ai), .tiles_k = tiles_k[0..count], .tiles_v = tiles_v[0..count], .out = att, .kept = kept });
+                    profile.qsa_gpu += @intFromBool(done);
+                    // The GPU writes only the queries that choose; the others keep every block.
+                    for (0..if (done and kept.len > 0) n else 0) |t|
+                    {
+                        if ((pos0 + t + 1) / cfg.qsa_block <= cfg.qsaTop())
+                        {
+                            @memset(kept[t * cfg.qsaTop() ..][0..cfg.qsaTop()], -1);
+                        }
+                    }
+                }
+            }
+            if (!done)
+            {
+                if (cache.tier != null)
+                {
+                    return error.OffloadNeedsGpu;
+                }
+                if (cache.format != .f32)
+                {
+                    return error.Unsupported;
+                }
+                profile.qsa_cpu += 1;
+                pool.parallelFor(threads, n, qwen38.Attend{ .cfg = cfg, .q = q, .iq = iq, .keys = cache.keysF32(ai), .values = cache.valuesF32(ai), .blocks = cache.qsaBlocks(ai), .pos0 = pos0, .scale = scale, .out = att, .kept = kept }, qwen38.Attend.run);
+            }
+            on_gpu = true; // `att` is done, so the dense loops below are skipped
+
+        }
+        else if (gpu_attention != null and plain_softmax and (cache.dev_k != 0 or cache.tier != null))
+        {
+            if (cache.tier) |tr|
+            {
+                try tr.tiles(tr.ctx, ai, pos0 + n, tiles_k, tiles_v);
+            }
+            else
+            {
+                cache.tiles(ai, pos0 + n, tiles_k, tiles_v);
+            }
+            const count = (pos0 + n + AttentionJob.tile_positions - 1) / AttentionJob.tile_positions;
+            on_gpu = gpu_attention.?(.{
+                .q = q,
+                .n = n,
+                .pos0 = pos0,
+                .heads = cfg.heads,
+                .kv_heads = cfg.kv_heads,
+                .kvd = kvd,
+                .scale = scale,
+                .tiles_k = tiles_k[0..count],
+                .tiles_v = tiles_v[0..count],
+                .splits = AttentionJob.splitsFor(n, cfg.heads, cfg.kv_heads, count),
+                .out = att,
+                .format = cache.format,
+                .hd = cfg.head_dim,
+            });
+        }
+        if (!on_gpu and cache.tier != null)
+        {
+            return error.OffloadNeedsGpu;
+        }
+        // A compact cache decodes each position's head into `kh` and `vh` as it is read.
+        const plain = cache.format == .f32;
+        const layer_k = if (on_gpu or !plain) &[_]f32{} else cache.keysF32(ai);
+        const layer_v = if (on_gpu or !plain) &[_]f32{} else cache.valuesF32(ai);
+        for (0..n) |t|
+        {
+            if (on_gpu)
+            {
+                break;
+            }
+            const last = pos0 + t;
+            // gpt-oss: a sliding layer sees the last `sliding_window` positions, and a sink per head joins each softmax.
+            const window = if (l.extras) |ex| ex.window else 0;
+            const from = if (window > 0 and last + 1 > window) last + 1 - window else 0;
+            for (0..cfg.heads) |hd|
+            {
+                const off = hd * cfg.head_dim;
+                const kv_off = hd / group * cfg.head_dim;
+                const qh = q[t * qd + off ..][0..cfg.head_dim];
+                const sink: ?f32 = if (l.extras) |ex| (if (ex.sinks.len > 0) ex.sinks[hd] else null) else null;
+                var mx: f32 = if (sink) |sv| sv else -std.math.inf(f32);
+                for (0..last + 1) |s|
+                {
+                    if (s < from)
+                    {
+                        scores[s] = -std.math.inf(f32);
+                        continue;
+                    }
+                    const ks = if (plain) layer_k[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
+                        cache.format.part(0).decodeHead(cache.keys(ai)[s * cache.row[0] ..][0..cache.row[0]], kvd, hd / group, kh);
+                        break :blk kh;
+                    };
+                    scores[s] = dot(qh, ks) * scale;
+                    mx = @max(mx, scores[s]);
+                }
+                var sum: f32 = if (sink) |sv| @exp(sv - mx) else 0;
+                for (scores[from .. last + 1]) |*sc|
+                {
+                    sc.* = @exp(sc.* - mx);
+                    sum += sc.*;
+                }
+                const o = att[t * qd + off ..][0..cfg.head_dim];
+                @memset(o, 0);
+                for (from..last + 1) |s|
+                {
+                    const p = scores[s] / sum;
+                    const vs = if (plain) layer_v[s * kvd + kv_off ..][0..cfg.head_dim] else blk: {
+                        cache.format.part(1).decodeHead(cache.values(ai)[s * cache.row[1] ..][0..cache.row[1]], kvd, hd / group, vh);
+                        break :blk vh;
+                    };
+                    for (o, vs) |*ov, vv|
+                    {
+                        ov.* += p * vv;
+                    }
+                }
+            }
+        }
+        if (cfg.attn_gate)
+        {
+            pool.parallelFor(threads, n, TokenLoops.ApplyGate{ .att = att, .gate = gate, .qd = qd }, TokenLoops.ApplyGate.run);
+        }
+        Profile.lap(&profile.attention, pt);
+        l.o.matmul(att, n, out, scratch);
+        if (l.extras) |ex|
+        {
+            gptoss.addRows(out[0 .. n * d], ex.o_b);
+        }
+    }
+};
 
 /// Called at the end of every step when set (TASK-17: the memory budget's check).
 pub var after_step: ?*const fn () void = null;
@@ -2923,7 +2992,7 @@ const TokenLoops = struct {
                     pv.* /= sum;
                 }
                 topK(p, k, self.idx[t * k ..][0..k], self.wts[t * k ..][0..k]);
-                if (cfg.arch != .olmoe)
+                if (cfg.route_norm)
                 {
                     // Qwen3 renormalizes the chosen probabilities to sum to 1.
                     const wt = self.wts[t * k ..][0..k];
@@ -2956,6 +3025,8 @@ const Guesser = struct {
     /// With hyper-connections (TASK-31): the mix's buffers and stream weights, free between a block's inject and the next mix.
     hc: *const qwen38.Buffers,
     inj: []f32,
+    /// With mHC: its buffers, likewise free there.
+    mhc: ?*const glm53.Mhc = null,
 
     /// Guesses layer `target`'s experts from the hidden states `h`, `hz` layers
     /// early, and passes them to `moe.prefetch`. `x` and `logits` are scratch
@@ -2966,11 +3037,19 @@ const Guesser = struct {
         const d = cfg.d_model;
         const n = self.n;
         const tl = &self.w.layers[target];
+        if (target < cfg.dense_layers)
+        {
+            return;
+        }
         const out = self.out[((hz - 1) * cfg.layers + target) * n * self.kx ..][0 .. n * self.kx];
         if (tl.hc_ffn) |hy|
         {
             // The target layer's own mix of the streams as they are now, in place of its norm.
             qwen38.mix(cfg, hy, self.hc, h, n, x, self.inj);
+        }
+        else if (tl.mhc_ffn) |hc|
+        {
+            self.mhc.?.pre(cfg, hc, tl.ffn_norm, h, n, x, scratch);
         }
         else
         {
@@ -2982,9 +3061,17 @@ const Guesser = struct {
         tl.router.matmul(x, n, logits, scratch);
         for (0..n) |t|
         {
-            // Softmax keeps the order, so the raw router outputs rank the same.
+            // Softmax keeps the order, so the raw router outputs rank the same; a sigmoid router ranks by score plus bias.
             const row = out[t * self.kx ..][0..self.kx];
-            topK(logits[t * cfg.experts ..][0..cfg.experts], self.kx, row, self.val);
+            const scores = logits[t * cfg.experts ..][0..cfg.experts];
+            if (cfg.router == .sigmoid)
+            {
+                for (scores, 0..) |*v, e|
+                {
+                    v.* = sigmoid(v.*) + if (tl.route_bias.len > 0) tl.route_bias[e] else 0;
+                }
+            }
+            topK(scores, self.kx, row, self.val);
             const p = self.moe.ahead.?;
             if (p.mispredict > 0)
             {
@@ -3203,7 +3290,7 @@ pub const LocalExperts = struct {
 
     pub fn init(a: std.mem.Allocator, cfg: Config, m: loader.Model, owned: []const bool, plan: loader.Plan, region: []const u8) !LocalExperts {
         swiglu_limit = cfg.swiglu_limit;
-        swiglu_oai = cfg.arch == .gptoss;
+        swiglu_oai = cfg.swiglu_oai;
         const ex = try a.alloc(?Expert, cfg.layers * cfg.experts);
         for (ex, 0..) |*e, i| {
             const layer: u32 = @intCast(i / cfg.experts);
@@ -3473,7 +3560,7 @@ test "capacity keeps each expert's highest-weight calls and drops the rest" {
     cap.apply(&idx, &wts, idx.len, &count, &list);
     try std.testing.expectEqual(@as(u64, 3), cap.dropped);
     try std.testing.expectEqualSlices(u32, &want, &idx);
-    const cfg: Config = .{ .arch = .olmoe, .layers = 1, .d_model = 1, .d_ff = 1, .heads = 1, .kv_heads = 1, .head_dim = 1, .experts = 64, .top_k = 8, .vocab = 1, .eps = 0, .rope_theta = 0 };
+    const cfg: Config = .{ .layers = 1, .d_model = 1, .d_ff = 1, .heads = 1, .kv_heads = 1, .head_dim = 1, .experts = 64, .top_k = 8, .vocab = 1, .eps = 0, .rope_theta = 0 };
     try std.testing.expectEqual(@as(u32, 10), Capacity.limitFor(1.25, 64, cfg, 1));
     try std.testing.expectEqual(@as(u32, 1), Capacity.limitFor(1.25, 1, cfg, 1));
     // Half the experts each: 1.25 x 64 tokens x 8 choices / 2.
@@ -3747,7 +3834,7 @@ test "tiny Qwen3-MoE with YaRN matches transformers (tools/ref/ref_qwen3.py --ti
     var h = try gguf.parse(gpa, file, file.len);
     defer h.deinit(gpa);
     const cfg = (try Config.fromGguf(h)).withYarn(4, 16);
-    try std.testing.expectEqual(Arch.qwen3moe, cfg.arch);
+    try std.testing.expectEqualStrings("Qwen3-MoE", cfg.name);
     try std.testing.expectEqual(@as(usize, 2), cfg.kv_heads);
     try std.testing.expectEqual(@as(usize, 32), cfg.head_dim);
     var m = try loader.Model.fromGguf(gpa, h);
@@ -3825,7 +3912,7 @@ test "tiny Qwen3.5-MoE (Gated DeltaNet, gated attention, shared expert) matches 
     var h = try gguf.parse(gpa, file, file.len);
     defer h.deinit(gpa);
     const cfg = try Config.fromGguf(h);
-    try std.testing.expectEqual(Arch.qwen35moe, cfg.arch);
+    try std.testing.expectEqualStrings("Qwen3.5-MoE", cfg.name);
     try std.testing.expect(cfg.recurrent(0) and cfg.recurrent(2) and !cfg.recurrent(3));
     try std.testing.expectEqual(@as(usize, 1), cfg.attnLayers());
     try std.testing.expectEqual(@as(usize, 8), cfg.rotaryDim());
@@ -3928,7 +4015,7 @@ test "tiny Qwen3.8-Flash-Next (hyper-connections, QSA, n-gram embedding) matches
     var h = try gguf.parse(gpa, file, file.len);
     defer h.deinit(gpa);
     const cfg = try Config.fromGguf(h);
-    try std.testing.expectEqual(Arch.qwen4exp, cfg.arch);
+    try std.testing.expectEqualStrings("Qwen3.8-Flash-Next", cfg.name);
     try std.testing.expectEqual(@as(usize, 4), cfg.streams);
     try std.testing.expectEqual(@as(usize, 2), cfg.qsaTop());
     try std.testing.expectEqual(@as(?usize, 1), cfg.ple_layer);
@@ -4072,7 +4159,7 @@ test "tiny GLM-5.3-Flash (mHC, KDA, MLA with DSA, dense layers) matches transfor
     var h = try gguf.parse(gpa, file, file.len);
     defer h.deinit(gpa);
     const cfg = try Config.fromGguf(h);
-    try std.testing.expectEqual(Arch.glm5next, cfg.arch);
+    try std.testing.expectEqualStrings("GLM-5.3-Flash", cfg.name);
     try std.testing.expectEqual(@as(usize, 4), cfg.streams);
     try std.testing.expectEqual(@as(usize, 1), cfg.dense_layers);
     try std.testing.expectEqual(@as(usize, 2), cfg.dsaTop());
@@ -4474,7 +4561,7 @@ test "topK keeps order and breaks ties toward the lower index" {
 
 /// Runs a TASK-39 tiny model against transformers' outputs from its tools/ref script: logits,
 /// each recorded hidden state, each MoE layer's chosen experts as a set, and greedy generation.
-fn checkTiny(comptime stem: []const u8, arch: Arch) !void
+fn checkTiny(comptime stem: []const u8, name: []const u8) !void
 {
     const tfref = @import("tfref.zig");
     const gpa = std.testing.allocator;
@@ -4486,7 +4573,7 @@ fn checkTiny(comptime stem: []const u8, arch: Arch) !void
     var h = try gguf.parse(gpa, file, file.len);
     defer h.deinit(gpa);
     const cfg = try Config.fromGguf(h);
-    try std.testing.expectEqual(arch, cfg.arch);
+    try std.testing.expectEqualStrings(name, cfg.name);
     var m = try loader.Model.fromGguf(gpa, h);
     defer m.deinit(gpa);
     var whole = [_]loader.Range{.{ .offset = 0, .len = file.len }};
@@ -4580,15 +4667,20 @@ fn checkTiny(comptime stem: []const u8, arch: Arch) !void
 
 test "tiny Mixtral (GGUF llama with experts, rope on adjacent pairs) matches transformers (tools/ref/ref_mixtral.py --tiny)"
 {
-    try checkTiny("mixtral_tiny", .mixtral);
+    try checkTiny("mixtral_tiny", "Mixtral");
 }
 
 test "tiny DeepSeek V3 (MLA with decoupled rope, grouped routing, YaRN) matches transformers (tools/ref/ref_deepseek.py --tiny)"
 {
-    try checkTiny("deepseek_tiny", .deepseek2);
+    try checkTiny("deepseek_tiny", "DeepSeek V3");
 }
 
 test "tiny gpt-oss (sinks, sliding window, biases, MXFP4 experts) matches transformers (tools/ref/ref_gptoss.py --tiny)"
 {
-    try checkTiny("gptoss_tiny", .gptoss);
+    try checkTiny("gptoss_tiny", "gpt-oss");
+}
+
+test "tiny Qwen2-MoE (attention biases, gated shared expert, built from existing parts) matches transformers (tools/ref/ref_qwen2moe.py --tiny)"
+{
+    try checkTiny("qwen2moe_tiny", "Qwen2-MoE");
 }

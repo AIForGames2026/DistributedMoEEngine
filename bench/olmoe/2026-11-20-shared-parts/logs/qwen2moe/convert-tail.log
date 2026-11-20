@@ -1,0 +1,5 @@
+INFO:gguf.vocab:Setting clean_spaces to False
+INFO:gguf.gguf_writer:Writing the following files:
+INFO:gguf.gguf_writer:Qwen1.5-MoE-A2.7B-Chat-Q8_0.gguf: n_tensors = 411, total_size = 15.2G
+INFO:hf-to-gguf:Model successfully exported to Qwen1.5-MoE-A2.7B-Chat-Q8_0.gguf
+rc=0

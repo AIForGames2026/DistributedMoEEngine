@@ -1,0 +1,13 @@
+load: non-expert weights and 288 of 288 experts (through the expert cache), 10.13 GB in 1.83 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.13 GB in 0.26 s)
+local: expert cache: 5000 slots (70.90 GB), 2 loader threads, 288 experts of layers below 1 loaded and kept in 4.46 s; cached experts run on the GPU
+local: context 256 tokens + 24 generated, chunks of 64; KV cache all in memory, f32, 22528 bytes per token: 0.01 GB in memory (all of it would be 0.01 GB), GPU attention off
+local: prefill 64 of 256 positions, 15.0 s
+local: prefill 128 of 256 positions, 28.6 s
+local: prefill 192 of 256 positions, 40.9 s
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.1 s, Gated DeltaNet 1.6 s, output 1.7 s, router 0.2 s, experts 57.1 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.4 s, Gated DeltaNet 1.6 s, output 0.7 s, router 0.5 s, experts 5.0 s, LM head 0.1 s
+local: time to first token 61.885 s (4 tokens/s prefill); decode 0.406 s per token (2.47 tokens/s) over 23 steps from position 256; resident memory 83038 MB
+local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/glm53-gpu.bin bit for bit
+local: expert cache: 28306 expert calls: 27.8% already loaded, 5.5% loaded by a hint in time, 1.0% hinted but still loading, 65.6% missed; 66229 calls set aside while others ran; 55535.7 ms with nothing to run but loads; 21955 loads (3100 for hints, 310.79 GB, 6.15 ms each); 238 hinted experts evicted unused; 15663 hints dropped as stale, 0 for a full queue
+local: heap: 203 allocations, 203 frees, peak 3237.8 MB, 0 bytes still allocated at exit (balanced)

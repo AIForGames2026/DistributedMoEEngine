@@ -1,0 +1,12 @@
+load: non-expert weights and 8 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+local: context 40 tokens + 16 generated, chunks of 16; KV cache all in memory, f32, 128 bytes per token: 0.00 GB in memory (all of it would be 0.00 GB), GPU attention off
+warning: gpu: a f32 weight (64x16) runs on the CPU: no GPU kernel reads its format or width
+local: prefill 16 of 40 positions, 0.0 s
+local: prefill 32 of 40 positions, 0.0 s
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+local: time to first token 0.017 s (2308 tokens/s prefill); decode 0.002 s per token (552.39 tokens/s) over 15 steps from position 40; resident memory 123 MB
+local: PASS: all 16 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/tiny-glm53-gpu.bin bit for bit
+gpu: 16 calls on f32 weights ran on the CPU (no_kernel)
+local: heap: 107 allocations, 107 frees, peak 1.7 MB, 0 bytes still allocated at exit (balanced)

@@ -1,0 +1,29 @@
+load: non-expert weights and 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+shm: context 40 tokens + 16 generated, chunks of 16; KV cache all in memory, f32, 768 bytes per token: 0.00 GB in memory (all of it would be 0.00 GB), GPU attention off
+load: 2 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+warning: gpu: a mxfp4 weight (64x64) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+warning: gpu: a mxfp4 weight (64x64) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+load: 3 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 113 MB
+warning: gpu: a mxfp4 weight (64x64) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+shm: prefill 16 of 40 positions, 0.0 s
+shm: prefill 32 of 40 positions, 0.0 s
+shm: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+shm: time to first token 0.044 s (902 tokens/s prefill); decode 0.002 s per token (606.58 tokens/s) over 15 steps from position 40; resident memory 119 MB
+shm: PASS: all 16 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/tiny-gptoss-shm3.bin bit for bit
+shm: 217 expert calls sent to 2 peers, 113 run locally; payload f32
+shm: rank 1 (GX10-02): 100 expert calls
+shm: rank 2 (GX10-02): 117 expert calls
+expert: rank 2 ran 117 expert FFNs for rank 0 in 42 grouped jobs, expert: rank 1 ran 100 expert FFNs for rank 0 in 36 grouped jobs, 981 us each on average (max 5553 us), 0.04 s in all; resident memory 1060 us each on average (max 5403 us), 0.04 s in all; resident memory 117 MB; 0 non-finite GPU outputs replaced by the CPU's
+117 MB; 0 non-finite GPU outputs replaced by the CPU's
+gpu: 31 calls on mxfp4 weights ran on the CPU (biased)
+gpu: 36 calls on mxfp4 weights ran on the CPU (biased)
+gpu: 42 calls on mxfp4 weights ran on the CPU (biased)
+expert: heap: 48 allocations, 48 frees, peak 0.5 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 48 allocations, 48 frees, peak 0.5 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 113 allocations, 113 frees, peak 0.9 MB, 0 bytes still allocated at exit (balanced)

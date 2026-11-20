@@ -2132,16 +2132,7 @@ fn writeFile(path: []const u8, bytes: []const u8) !void
 /// The model, for messages.
 fn modelName(cfg: olmoe.Config) []const u8
 {
-    return switch (cfg.arch) {
-        .olmoe => "OLMoE",
-        .qwen3moe => if (cfg.yarn > 0) "Qwen3-MoE (YaRN)" else "Qwen3-MoE",
-        .qwen35moe => "Qwen3.5-MoE",
-        .qwen4exp => "Qwen3.8-Flash-Next",
-        .glm5next => "GLM-5.3-Flash",
-        .mixtral => "Mixtral",
-        .deepseek2 => "DeepSeek V3",
-        .gptoss => "gpt-oss",
-    };
+    return if (cfg.yarn > 0 and cfg.name_yarn.len > 0) cfg.name_yarn else cfg.name;
 }
 
 /// Largest absolute difference; a NaN anywhere counts as infinitely wrong

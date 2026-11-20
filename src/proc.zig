@@ -327,7 +327,7 @@ pub fn listModels(a: std.mem.Allocator, dir: []const u8) ![]ModelFile
 }
 
 /// The names in folder `dir`, without "." and "..".
-fn fileNames(a: std.mem.Allocator, dir: []const u8) ![][]const u8
+pub fn fileNames(a: std.mem.Allocator, dir: []const u8) ![][]const u8
 {
     var out: std.ArrayList([]const u8) = .empty;
     if (is_windows)

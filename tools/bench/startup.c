@@ -1,7 +1,7 @@
 /* TASK-01: process start to first kernel call. Spawns the engine with
  * --first-kernel (it exits right after its first GEMM) and reports the median
  * wall time over N runs, after 3 warm-up runs.
- *   startup <path/to/tensorfold> [runs]
+ *   startup <path/to/tfswarm-poc> [runs]
  * Exit status 1 if the median is 5 ms or more. */
 #define _GNU_SOURCE
 #include <spawn.h>
@@ -47,7 +47,7 @@ static int cmp(const void *a, const void *b)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <tensorfold> [runs]\n", argv[0]);
+        fprintf(stderr, "usage: %s <tfswarm-poc> [runs]\n", argv[0]);
         return 2;
     }
     int runs = argc > 2 ? atoi(argv[2]) : 20;

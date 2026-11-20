@@ -1,7 +1,7 @@
 //! Model files (TASK-08, TASK-10): opening a GGUF or ModelOpt NVFP4
 //! safetensors checkpoint, parsing its header into a `loader.Model`, and
 //! reading a `loader.Plan` into memory through the TASK-03 io_uring O_DIRECT
-//! reader, or on Windows its unbuffered ReadFile twin (TASK-40). Shared by `tfload` and `olmoe`.
+//! reader, or on Windows its unbuffered ReadFile twin (TASK-40). Shared by `tfload` and `tfswarm`.
 const std = @import("std");
 const c = std.c;
 const is_windows = @import("builtin").os.tag == .windows;

@@ -84,6 +84,28 @@ pub fn listenTcp(addr: u32, port: u16, backlog: c_int) !Fd
     return fd;
 }
 
+/// The port a socket is bound to, as for one listening on port 0.
+pub fn localPort(fd: Fd) ?u16
+{
+    if (is_windows)
+    {
+        var sa: ws.sockaddr.in = undefined;
+        var len: c_int = @sizeOf(ws.sockaddr.in);
+        if (win32.getsockname(fd, &sa, &len) != 0)
+        {
+            return null;
+        }
+        return std.mem.bigToNative(u16, sa.port);
+    }
+    var sa: c.sockaddr.in = undefined;
+    var len: c.socklen_t = @sizeOf(c.sockaddr.in);
+    if (c.getsockname(fd, @ptrCast(&sa), &len) != 0)
+    {
+        return null;
+    }
+    return std.mem.bigToNative(u16, sa.port);
+}
+
 pub fn accept(lfd: Fd) ?Fd
 {
     if (is_windows)

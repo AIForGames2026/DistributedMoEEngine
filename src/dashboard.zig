@@ -1,12 +1,17 @@
-//! The operator dashboard behind `olmoe dashboard` (TASK-25). Linux and Windows (TASK-43).
+//! The operator dashboard behind `tfswarm dashboard` (TASK-25). Linux and Windows (TASK-43).
 //!
-//!   olmoe dashboard --models DIR [--listen [IP:]PORT] [--node-port P]
+//!   tfswarm dashboard --models DIR [--listen [IP:]PORT] [--node-port P]
 //!                   [--token-file F] [--node-secret-file F] [--api-key-file F]
 //!                   [--nodes-file F] [--engine PATH] [--router-port P]
 //!                   [--expert-port P] [--log-dir DIR]
+//!   tfswarm dashboard --settings FILE [options]
+//!
+//! With `--settings` (TASK-44, as the Windows tray launcher starts it) the
+//! options come from that file, the secrets, nodes and logs sit beside it, and
+//! the page's Settings panel edits it; options after it still override.
 //!
 //! A supervisor on the machine that runs rank 0. It serves a page where an
-//! operator signs in with the admin token, approves node agents (`olmoe node`)
+//! operator signs in with the admin token, approves node agents (`tfswarm node`)
 //! as they link, loads a model across the chosen nodes, and chats with it. It
 //! starts the router (rank 0, with `--serve` on a local port) as its own child,
 //! tells each node's agent to start one expert rank, and stops them all again.
@@ -21,6 +26,9 @@
 //!   POST /api/load               {"model", "nodes", ...}         (signed in)
 //!   POST /api/stop                                               (signed in)
 //!   GET  /live, /telemetry       the router's live diagram       (signed in)
+//!   GET  /api/settings, POST /api/settings, POST /api/restart  (signed in, TASK-44)
+//!   POST /api/login-link         a one-time sign-in link        (admin token, not from a page)
+//!   GET  /signin/CODE            signs in once with that link, then goes to /
 //!   /v1/...                      the router's API (the API key, if set, or signed in)
 //!
 //! Every control action needs a session cookie from the login or the admin
@@ -37,6 +45,7 @@ const auth = @import("auth.zig");
 const proc = @import("proc.zig");
 const tcp = @import("transport/tcp.zig");
 const node_agent = @import("node_agent.zig");
+const settings_file = @import("settings.zig");
 
 const page_html = @embedFile("dashboard.html");
 const page_js = @embedFile("dashboard.js");
@@ -62,7 +71,12 @@ const Options = struct {
     router_port: u16 = 18080,
     expert_port: u16 = 47401,
     log_dir: []const u8 = "dashboard-logs",
+    settings_path: ?[]const u8 = null,
 };
+
+const loopback: u32 = @bitCast([4]u8{ 127, 0, 0, 1 });
+
+const restart_code = settings_file.restart_code;
 
 /// A node agent as the dashboard knows it.
 const Node = struct {
@@ -120,6 +134,7 @@ const State = struct {
     /// What the supervisor should do next.
     pending: ?*Plan = null,
     stop_requested: bool = false,
+    restart_requested: bool = false,
     router_pid: ?i32 = null,
 
     fn lock(self: *State) void
@@ -182,11 +197,23 @@ var api_key: ?[]const u8 = null;
 var engine_path: []const u8 = "";
 var login_mutex: plat.Mutex = .{};
 var open_conns: std.atomic.Value(usize) = .init(0);
+/// The options it started with; the live ones in `opts_global` change with the Settings panel.
+var started_opts: Options = .{};
+
+/// One-time sign-in links handed to the tray launcher.
+const LoginCode = struct {
+    hex: [32]u8 = undefined,
+    expires_ns: u64 = 0,
+};
+var login_codes: [8]LoginCode = @splat(.{});
+var codes_mutex: plat.Mutex = .{};
+const code_ttl_ns = 60 * std.time.ns_per_s;
 
 const usage =
-    \\usage: olmoe dashboard --models DIR [--listen [IP:]PORT] [--node-port P] [--token-file F]
+    \\usage: tfswarm dashboard --models DIR [--listen [IP:]PORT] [--node-port P] [--token-file F]
     \\                       [--node-secret-file F] [--api-key-file F] [--nodes-file F] [--engine PATH]
     \\                       [--router-port P] [--expert-port P] [--log-dir DIR]
+    \\       tfswarm dashboard --settings FILE [options]
     \\
 ;
 
@@ -194,6 +221,13 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
 {
     gpa_global = gpa;
     var opts: Options = .{};
+    for (args, 0..) |arg, j|
+    {
+        if (std.mem.eql(u8, arg, "--settings") and j + 1 < args.len)
+        {
+            try applySettings(gpa, &opts, args[j + 1]);
+        }
+    }
     var i: usize = 0;
     while (i < args.len) : (i += 2)
     {
@@ -256,18 +290,24 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
         {
             opts.log_dir = v;
         }
+        else if (std.mem.eql(u8, k, "--settings"))
+        {
+            // Already read, before the other options.
+        }
         else
         {
             std.debug.print("dashboard: unknown option {s}\n" ++ usage, .{k});
             std.process.exit(2);
         }
     }
-    if (opts.models.len == 0)
+    // With a settings file, the models folder can still be chosen on the Settings panel.
+    if (opts.models.len == 0 and opts.settings_path == null)
     {
         std.debug.print(usage, .{});
         std.process.exit(2);
     }
     opts_global = opts;
+    started_opts = opts;
     admin_token = try auth.loadSecret(gpa, opts.token_file, "admin token");
     node_secret = try auth.loadSecret(gpa, opts.secret_file, "node secret");
     if (opts.api_key_file) |f|
@@ -300,8 +340,34 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
     {
         std.debug.print("dashboard: listening beyond this machine over plain HTTP; use it only on a private network or behind a TLS proxy\n", .{});
     }
+    if (opts.settings_path) |p|
+    {
+        std.debug.print("dashboard: settings from {s}{s}\n", .{ p, if (opts.models.len == 0) "; no models folder is set yet" else "" });
+    }
     // The supervisor runs on this thread, which lives as long as the router it starts.
     supervise();
+}
+
+/// Takes the options, and the paths of the secrets, nodes and logs, from a settings file.
+fn applySettings(gpa: std.mem.Allocator, opts: *Options, path: []const u8) !void
+{
+    const s = settings_file.load(gpa, path) orelse {
+        std.debug.print("dashboard: cannot read the settings in {s}\n", .{path});
+        std.process.exit(2);
+    };
+    const d = s.dashboard;
+    opts.settings_path = path;
+    opts.models = d.models;
+    opts.addr = if (d.open_to_network) 0 else loopback;
+    opts.port = d.port;
+    opts.node_port = d.node_port;
+    opts.router_port = d.router_port;
+    opts.expert_port = d.expert_port;
+    opts.token_file = try settings_file.beside(gpa, path, "dashboard.token");
+    opts.secret_file = try settings_file.beside(gpa, path, "node.secret");
+    opts.nodes_file = try settings_file.beside(gpa, path, "dashboard.nodes");
+    opts.log_dir = try settings_file.beside(gpa, path, "dashboard-logs");
+    opts.api_key_file = if (d.api_key) try settings_file.beside(gpa, path, "api.key") else null;
 }
 
 fn listenOn(addr: u32, port: u16) !sock.Fd
@@ -578,7 +644,7 @@ fn handle(a: std.mem.Allocator, fd: sock.Fd) !void
     }
     if (std.mem.startsWith(u8, path, "/v1/"))
     {
-        if (api_key) |key|
+        if (currentApiKey()) |key|
         {
             const ok_key = if (head.authorization) |h| (if (auth.bearer(h)) |t| auth.secretEql(t, key) else false) else false;
             if (!ok_key and !signedIn(head))
@@ -603,6 +669,27 @@ fn handle(a: std.mem.Allocator, fd: sock.Fd) !void
             return apiError(fd, 403, "Sign in from the dashboard's own page.");
         }
         return login(a, fd, body);
+    }
+    if (std.mem.startsWith(u8, path, "/signin/") and get)
+    {
+        return signinLink(a, fd, path["/signin/".len..]);
+    }
+    if (std.mem.eql(u8, path, "/api/login-link"))
+    {
+        if (!post)
+        {
+            return apiError(fd, 405, "Use POST.");
+        }
+        // Only a program holding the admin token may ask, never a page in a browser.
+        const t = if (head.authorization) |h| auth.bearer(h) else null;
+        if (head.origin != null or t == null or !auth.secretEql(t.?, admin_token))
+        {
+            return apiError(fd, 401, "This needs the admin token as a Bearer header.");
+        }
+        var code: [32]u8 = undefined;
+        makeCode(&code);
+        const out = try std.fmt.allocPrint(a, "{{\"path\":\"/signin/{s}\",\"expires_s\":{d}}}", .{ code, code_ttl_ns / std.time.ns_per_s });
+        return sendSimple(fd, 200, "application/json", out, "");
     }
     // Everything below needs a signed-in operator.
     if (std.mem.startsWith(u8, path, "/api/") or std.mem.eql(u8, path, "/live") or std.mem.eql(u8, path, "/telemetry"))
@@ -631,6 +718,10 @@ fn handle(a: std.mem.Allocator, fd: sock.Fd) !void
             return apiError(fd, 405, "Use GET.");
         }
         return sendSimple(fd, 200, "application/json", try stateJson(a), "");
+    }
+    if (std.mem.eql(u8, path, "/api/settings") and get)
+    {
+        return sendSimple(fd, 200, "application/json", try settingsJson(a), "");
     }
     if (!post)
     {
@@ -670,7 +761,197 @@ fn handle(a: std.mem.Allocator, fd: sock.Fd) !void
         state.stop_requested = true;
         return sendSimple(fd, 202, "application/json", "{\"ok\":true}", "");
     }
+    if (std.mem.eql(u8, path, "/api/settings"))
+    {
+        return saveSettings(a, fd, body);
+    }
+    if (std.mem.eql(u8, path, "/api/restart"))
+    {
+        if (opts_global.settings_path == null)
+        {
+            return apiError(fd, 409, "Only a dashboard started with --settings, as the tray launcher starts it, restarts itself.");
+        }
+        state.lock();
+        state.restart_requested = true;
+        state.unlock();
+        std.debug.print("dashboard: restarting at the operator's request\n", .{});
+        return sendSimple(fd, 202, "application/json", "{\"ok\":true}", "");
+    }
     return apiError(fd, 404, "Not found.");
+}
+
+/// The API key `/v1` needs right now, if any.
+fn currentApiKey() ?[]const u8
+{
+    state.lock();
+    defer state.unlock();
+    return api_key;
+}
+
+/// Makes a one-time sign-in code, in place of an expired one or else the oldest.
+fn makeCode(out: *[32]u8) void
+{
+    var raw: [16]u8 = undefined;
+    auth.randomBytes(&raw);
+    out.* = std.fmt.bytesToHex(raw, .lower);
+    codes_mutex.acquire();
+    defer codes_mutex.release();
+    var slot = &login_codes[0];
+    for (&login_codes) |*c_|
+    {
+        if (c_.expires_ns < slot.expires_ns)
+        {
+            slot = c_;
+        }
+    }
+    slot.* = .{ .hex = out.*, .expires_ns = proc.monoNs() + code_ttl_ns };
+}
+
+/// True, once, for a code that has not expired.
+fn takeCode(code: []const u8) bool
+{
+    if (code.len != 32)
+    {
+        return false;
+    }
+    codes_mutex.acquire();
+    defer codes_mutex.release();
+    const now = proc.monoNs();
+    for (&login_codes) |*c_|
+    {
+        if (c_.expires_ns > now and auth.secretEql(&c_.hex, code))
+        {
+            c_.expires_ns = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+/// `rest` is CODE, or CODE/settings to land on the Settings view.
+fn signinLink(a: std.mem.Allocator, fd: sock.Fd, rest: []const u8) !void
+{
+    const slash = std.mem.indexOfScalar(u8, rest, '/') orelse rest.len;
+    const code = rest[0..slash];
+    const to: []const u8 = if (std.mem.eql(u8, rest[slash..], "/settings")) "/#settings" else "/";
+    if (!takeCode(code))
+    {
+        std.debug.print("dashboard: refused a used or expired sign-in link\n", .{});
+        return sendSimple(fd, 303, "text/plain", "", "Location: /#link-expired\r\n");
+    }
+    var id: [auth.id_len]u8 = undefined;
+    sessions.create(proc.monoNs(), &id);
+    const extra = try std.fmt.allocPrint(a, "Set-Cookie: {s}={s}; HttpOnly; SameSite=Strict; Path=/; Max-Age={d}\r\nLocation: {s}\r\n", .{ cookie_name, id, auth.session_ttl_ns / std.time.ns_per_s, to });
+    std.debug.print("dashboard: an operator signed in with a one-time link\n", .{});
+    return sendSimple(fd, 303, "text/plain", "", extra);
+}
+
+/// The Settings panel's view: the saved settings, whether they wait for a restart, and the secrets to copy.
+fn settingsJson(a: std.mem.Allocator) ![]const u8
+{
+    state.lock();
+    const live = opts_global;
+    const key = api_key;
+    state.unlock();
+    var d: settings_file.Dashboard = .{
+        .models = live.models,
+        .open_to_network = live.addr != loopback,
+        .port = live.port,
+        .node_port = live.node_port,
+        .router_port = live.router_port,
+        .expert_port = live.expert_port,
+        .api_key = key != null,
+    };
+    if (live.settings_path) |p|
+    {
+        if (settings_file.load(a, p)) |s|
+        {
+            d = s.dashboard;
+        }
+    }
+    const was = started_opts;
+    const restart = (if (d.open_to_network) @as(u32, 0) else loopback) != was.addr or d.port != was.port or d.node_port != was.node_port or
+        d.router_port != was.router_port or d.expert_port != was.expert_port;
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(a, "{\"file\":");
+    if (live.settings_path) |p|
+    {
+        try proc.jsonString(a, &out, p);
+    }
+    else
+    {
+        try out.appendSlice(a, "null");
+    }
+    try out.print(a, ",\"restart_needed\":{},\"dashboard\":{f},\"admin_token\":", .{ restart, std.json.fmt(d, .{}) });
+    try proc.jsonString(a, &out, admin_token);
+    try out.appendSlice(a, ",\"node_secret\":");
+    try proc.jsonString(a, &out, node_secret);
+    try out.appendSlice(a, ",\"api_key\":");
+    if (key) |k|
+    {
+        try proc.jsonString(a, &out, k);
+    }
+    else
+    {
+        try out.appendSlice(a, "null");
+    }
+    try out.append(a, '}');
+    return out.items;
+}
+
+/// Saves the Settings panel. The models folder and the API key apply at once, the ports after a restart.
+fn saveSettings(a: std.mem.Allocator, fd: sock.Fd, body: []const u8) !void
+{
+    const path = opts_global.settings_path orelse {
+        return apiError(fd, 409, "This dashboard was started without --settings, so its options come from the command line.");
+    };
+    const d = std.json.parseFromSliceLeaky(settings_file.Dashboard, a, body, .{ .ignore_unknown_fields = true }) catch {
+        return apiError(fd, 400, "The settings are malformed.");
+    };
+    if (d.models.len > 0)
+    {
+        var buf: [4096]u8 = undefined;
+        if (plat.realPath(try a.dupeSentinel(u8, d.models, 0), &buf) == null)
+        {
+            return apiError(fd, 400, "That models folder does not exist.");
+        }
+    }
+    const ports = [_]u16{ d.port, d.node_port, d.router_port, d.expert_port };
+    for (ports, 0..) |p, j|
+    {
+        if (p < 1024)
+        {
+            return apiError(fd, 400, "Ports must be 1024 or higher.");
+        }
+        for (ports[j + 1 ..]) |q|
+        {
+            if (p == q)
+            {
+                return apiError(fd, 400, "Each port must be different.");
+            }
+        }
+    }
+    var s = settings_file.load(a, path) orelse settings_file.Settings{ .role = "dashboard" };
+    s.dashboard = d;
+    settings_file.save(a, path, s) catch {
+        return apiError(fd, 500, "Could not write the settings file.");
+    };
+    // Earlier copies may still be in use, so the old strings are kept, not freed.
+    const models = try gpa_global.dupe(u8, d.models);
+    var key: ?[]const u8 = null;
+    if (d.api_key)
+    {
+        const key_file = try settings_file.beside(gpa_global, path, "api.key");
+        key = auth.loadSecret(gpa_global, key_file, "API key") catch {
+            return apiError(fd, 500, "Could not create the API key file.");
+        };
+    }
+    state.lock();
+    opts_global.models = models;
+    api_key = key;
+    state.unlock();
+    std.debug.print("dashboard: settings saved to {s}\n", .{path});
+    return sendSimple(fd, 200, "application/json", try settingsJson(a), "");
 }
 
 const page_headers = "Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'\r\nX-Frame-Options: SAMEORIGIN\r\n";
@@ -1009,6 +1290,10 @@ fn stateJson(a: std.mem.Allocator) ![]const u8
     var out: std.ArrayList(u8) = .empty;
     var host_buf: [64]u8 = undefined;
     const mem = proc.memory(a);
+    state.lock();
+    const models_dir = opts_global.models;
+    const keyed = api_key != null;
+    state.unlock();
     try out.appendSlice(a, "{\"local\":{\"name\":");
     try proc.jsonString(a, &out, proc.hostName(&host_buf));
     try out.print(a, ",\"mem_total_mb\":{d},\"mem_available_mb\":{d},\"gpu\":", .{ mem.total_mb, mem.available_mb });
@@ -1021,7 +1306,8 @@ fn stateJson(a: std.mem.Allocator) ![]const u8
         try out.appendSlice(a, "null");
     }
     try out.appendSlice(a, ",\"models\":[");
-    for (try proc.listModels(a, opts_global.models), 0..) |m, i|
+    const models = if (models_dir.len == 0) &.{} else proc.listModels(a, models_dir) catch &.{};
+    for (models, 0..) |m, i|
     {
         try out.appendSlice(a, if (i == 0) "{\"name\":" else ",{\"name\":");
         try proc.jsonString(a, &out, m.name);
@@ -1034,7 +1320,9 @@ fn stateJson(a: std.mem.Allocator) ![]const u8
         try out.appendSlice(a, r.dev);
         try out.append(a, '"');
     }
-    try out.print(a, "]}},\"api_key\":{},\"node_port\":{d},\"nodes\":[", .{ api_key != null, opts_global.node_port });
+    try out.appendSlice(a, "],\"models_dir\":");
+    try proc.jsonString(a, &out, models_dir);
+    try out.print(a, "}},\"managed\":{},\"api_key\":{},\"node_port\":{d},\"nodes\":[", .{ opts_global.settings_path != null, keyed, opts_global.node_port });
     const router_log = try std.fmt.allocPrint(a, "{s}/router.log", .{opts_global.log_dir});
     state.lock();
     {
@@ -1097,9 +1385,16 @@ fn supervise() noreturn
         state.lock();
         const next = state.pending;
         const stop = state.stop_requested;
+        const restart = state.restart_requested;
         state.pending = null;
         state.stop_requested = false;
         state.unlock();
+        if (restart)
+        {
+            stopAll(gpa, &router, "restarting the dashboard");
+            std.debug.print("dashboard: exiting with {d} so the launcher starts it again\n", .{restart_code});
+            std.process.exit(restart_code);
+        }
         if (next != null or stop)
         {
             stopAll(gpa, &router, if (next != null) "replacing the loaded model" else "stopped by the operator");

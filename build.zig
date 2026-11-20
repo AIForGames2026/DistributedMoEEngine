@@ -49,7 +49,7 @@ pub fn build(b: *std.Build) void {
     // The TCP transport uses Winsock on Windows.
     if (target.result.os.tag == .windows) engine.linkSystemLibrary("ws2_32", .{});
 
-    const exe = b.addExecutable(.{ .name = "tensorfold", .root_module = engine });
+    const exe = b.addExecutable(.{ .name = "tfswarm-poc", .root_module = engine });
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -222,7 +222,10 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
     // The operator dashboard's page (TASK-25).
     olmoe_mod.addAnonymousImport("dashboard.html", .{ .root_source_file = b.path("web/dashboard.html") });
     olmoe_mod.addAnonymousImport("dashboard.js", .{ .root_source_file = b.path("web/dashboard.js") });
-    const gpu = b.option(bool, "gpu", "Build olmoe with CUDA matmuls (needs nvcc and the driver)") orelse false;
+    // The first-run setup page (TASK-44).
+    olmoe_mod.addAnonymousImport("setup.html", .{ .root_source_file = b.path("web/setup.html") });
+    olmoe_mod.addAnonymousImport("setup.js", .{ .root_source_file = b.path("web/setup.js") });
+    const gpu = b.option(bool, "gpu", "Build tfswarm with CUDA matmuls (needs nvcc and the driver)") orelse false;
     const olmoe_options = b.addOptions();
     olmoe_options.addOption(bool, "rdma", rdma);
     olmoe_options.addOption(bool, "gpu", gpu);
@@ -265,8 +268,22 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         olmoe_mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "include" }) });
         linkCuda(b, olmoe_mod, cuda, on_windows);
     }
-    const olmoe = b.addExecutable(.{ .name = "olmoe", .root_module = olmoe_mod });
-    b.step("olmoe", "Build the OLMoE forward-pass tool (needs liburing)").dependOn(&b.addInstallArtifact(olmoe, .{}).step);
+    const olmoe = b.addExecutable(.{ .name = "tfswarm", .root_module = olmoe_mod });
+    const olmoe_step = b.step("tfswarm", "Build the engine, tfswarm (needs liburing)");
+    olmoe_step.dependOn(&b.addInstallArtifact(olmoe, .{}).step);
+    // The Windows tray launcher (TASK-44), installed beside tfswarm.exe; no console window, no libc.
+    if (on_windows)
+    {
+        const launcher_mod = b.createModule(.{
+            .root_source_file = b.path("src/launcher.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        launcher_mod.addWin32ResourceFile(.{ .file = b.path("res/windows/launcher.rc") });
+        const launcher = b.addExecutable(.{ .name = "tfswarm-operator", .root_module = launcher_mod });
+        launcher.subsystem = .windows;
+        olmoe_step.dependOn(&b.addInstallArtifact(launcher, .{}).step);
+    }
 
     // Attention kernel benchmark (TASK-12), with the same kernels.
     if (gpu) {

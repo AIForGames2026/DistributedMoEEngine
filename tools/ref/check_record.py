@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks that `--record` costs no speed and changes no result (TASK-16).
 
-Runs `olmoe ... --context N --tokens F --generate M` once with `--save` as
+Runs `tfswarm ... --context N --tokens F --generate M` once with `--save` as
 the reference, then alternates runs without and with `--record`, each with
 `--compare` against the reference, so every run must give the same tokens
 and logits bit for bit. Reports the median decode speed of each, and checks
@@ -9,7 +9,7 @@ that every recording holds one line per engine step, with nothing dropped.
 --peer starts rank 1 before each run of a split. Standard library only.
 
 Usage:
-  python3 tools/ref/check_record.py --cmd "zig-out/bin/olmoe local MODEL --gpu" [--peer "..."] [--context 512] [--generate 256] [--reps 3]
+  python3 tools/ref/check_record.py --cmd "zig-out/bin/tfswarm local MODEL --gpu" [--peer "..."] [--context 512] [--generate 256] [--reps 3]
 """
 import argparse
 import json
@@ -36,13 +36,13 @@ def run(args, extra, peer):
             p.kill()
     if r.returncode != 0:
         print(r.stderr[-3000:], file=sys.stderr)
-        raise SystemExit("olmoe failed")
+        raise SystemExit("tfswarm failed")
     return r.stderr
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cmd", required=True, help="olmoe and its arguments, without --context/--tokens/--generate")
+    ap.add_argument("--cmd", required=True, help="tfswarm and its arguments, without --context/--tokens/--generate")
     ap.add_argument("--peer", default="", help="a command that starts rank 1 for each run")
     ap.add_argument("--peer-wait", type=float, default=0.0)
     ap.add_argument("--context", type=int, default=512)

@@ -1,7 +1,11 @@
-//! The node agent behind `olmoe node` (TASK-25). Linux and Windows (TASK-43).
+//! The node agent behind `tfswarm node` (TASK-25). Linux and Windows (TASK-43).
 //!
-//!   olmoe node --dashboard IP[:PORT] --secret-file F --models DIR
+//!   tfswarm node --dashboard IP[:PORT] --secret-file F --models DIR
 //!              [--engine PATH] [--name NAME] [--log-dir DIR] [--advertise IP]
+//!   tfswarm node --settings FILE [options]
+//!
+//! With `--settings` (TASK-44, as the Windows tray launcher starts it) the
+//! options come from that file's "node" part, and the secret and logs sit beside it.
 //!
 //! Runs on each machine that may hold experts. It links to the operator
 //! dashboard (port 47310 by default), proves it holds the shared node secret and
@@ -53,13 +57,21 @@ const Rank = struct {
 };
 
 const usage =
-    \\usage: olmoe node --dashboard IP[:PORT] --models DIR [--secret-file F] [--engine PATH] [--name NAME] [--log-dir DIR] [--advertise IP]
+    \\usage: tfswarm node --dashboard IP[:PORT] --models DIR [--secret-file F] [--engine PATH] [--name NAME] [--log-dir DIR] [--advertise IP]
+    \\       tfswarm node --settings FILE [options]
     \\
 ;
 
 pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
 {
     var opts: Options = .{};
+    for (args, 0..) |arg, j|
+    {
+        if (std.mem.eql(u8, arg, "--settings") and j + 1 < args.len)
+        {
+            try applySettings(gpa, &opts, args[j + 1]);
+        }
+    }
     var i: usize = 0;
     while (i < args.len) : (i += 2)
     {
@@ -109,6 +121,10 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
             };
             opts.advertise = v;
         }
+        else if (std.mem.eql(u8, args[i], "--settings"))
+        {
+            // Already read, before the other options.
+        }
         else
         {
             std.debug.print("node: unknown option {s}\n" ++ usage, .{args[i]});
@@ -155,6 +171,27 @@ pub fn main(gpa: std.mem.Allocator, args: []const []const u8) !void
         }
         proc.sleepMs(2000);
     }
+}
+
+/// Takes the options, and the paths of the secret and logs, from a settings file.
+fn applySettings(gpa: std.mem.Allocator, opts: *Options, path: []const u8) !void
+{
+    const settings = @import("settings.zig");
+    const s = settings.load(gpa, path) orelse {
+        std.debug.print("node: cannot read the settings in {s}\n", .{path});
+        std.process.exit(2);
+    };
+    const n = s.node;
+    if (settings.hostPort(n.dashboard, default_port)) |hp|
+    {
+        opts.host = hp.host;
+        opts.port = hp.port;
+    }
+    opts.models = n.models;
+    opts.name = if (n.name.len > 0) n.name else null;
+    opts.advertise = if (n.advertise.len > 0) n.advertise else null;
+    opts.secret_file = try settings.beside(gpa, path, "node.secret");
+    opts.log_dir = try settings.beside(gpa, path, "node-logs");
 }
 
 /// One link to the dashboard, until it fails.

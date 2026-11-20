@@ -1,4 +1,4 @@
-//! The generation loop behind `olmoe serve` (TASK-30): prefills a prompt
+//! The generation loop behind `tfswarm serve` (TASK-30): prefills a prompt
 //! (reusing what the cache already holds of it), then samples tokens one at a
 //! time and hands their text to a sink as it becomes final. Kept apart from
 //! sockets and the model, so it is tested with a fake engine.

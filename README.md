@@ -15,87 +15,44 @@ Run AI models too big for one machine across a small cluster of NVIDIA DGX Spark
 
 **Linux or WSL2 (Ubuntu 24.04):**
 
-```bash
-git clone https://github.com/AIForGames2026/DistributedMoEEngine.git
-cd DistributedMoEEngine
-sudo apt install liburing-dev # io_uring, for reading model files
-bash tools/setup/install-zig.sh # Zig 0.17.0 in ~/tools/zig, no sudo
-export PATH="$HOME/tools/zig:$PATH"
-zig build install -Doptimize=ReleaseFast
-```
+1. Clone the repo and `cd` into it.
+2. Install io_uring: `sudo apt install liburing-dev`
+3. Install Zig 0.17.0 (no sudo): `bash tools/setup/install-zig.sh && export PATH="$HOME/tools/zig:$PATH"`
+4. Build: `zig build install -Doptimize=ReleaseFast`
 
-**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine (`olmoe.exe`: `local`, `shm`, `expert` and `router` over TCP, `--serve` with the live page, the dashboard and node agent, and `-Gpu` for CUDA) and the two-process check. RDMA and the tracker run in WSL2.
-
-```powershell
-.\build.ps1
-```
+**Windows 11:** in PowerShell at the repo root, run `.\build.ps1` (it installs Zig if needed; add `-Gpu` for CUDA).
 
 Prefer not to build? [Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) has binaries, each with a SHA-256 checksum.
 
 ## Run
 
-Split a tiny model across two processes and check the output against PyTorch. It ends with `PASS`.
+- **Quick check:** `zig-out/bin/dispatch shm --moe` splits a tiny model across two processes and ends with `PASS`.
+- **Two machines:** run `zig-out/bin/dispatch expert --port 7470 --moe` on the first, then `zig-out/bin/dispatch router --host <first machine's IP> --port 7470 --moe` on the second.
+- **Website locally:** in `web/`, run `npm ci && npm run build && npm run preview` (needs [Node.js 22](https://nodejs.org)).
+- **The real 7 GB model, RDMA or GPU:** see [Building and running everything](docs/BUILDING.md).
 
-```bash
-zig-out/bin/dispatch shm --moe # Windows: .\zig-out\bin\dispatch.exe shm --moe
-```
+### Operator dashboard
 
-Or across two machines, starting the first one first:
+Run a model across several machines from one page.
 
-```bash
-zig-out/bin/dispatch expert --port 7470 --moe # first machine
-zig-out/bin/dispatch router --host <first machine's IP> --port 7470 --moe # second machine
-```
+**Windows:**
 
-Build the website locally and open the URL it prints (needs [Node.js 22](https://nodejs.org)):
+1. Double-click `tfswarm-operator.exe` (next to `tfswarm.exe`).
+2. On the setup page, choose "Host the dashboard" or "Join a dashboard" and pick your models folder.
+3. To join, paste the node secret from the dashboard's Settings ("Copy node secret").
+4. On the dashboard, approve each joined PC, tick it under Model, and press Load.
 
-```bash
-cd web
-npm ci
-npm run build
-npm run preview
-```
+Click the tray icon to reopen the dashboard; its menu has Settings, the admin token, logs and Quit.
 
-To run the real 7 GB model, over RDMA or on a GPU, see [Building and running everything](docs/BUILDING.md).
+**Linux:**
 
-### Operator dashboard (Linux and Windows)
+1. On the main machine, run `zig-out/bin/tfswarm dashboard --models ~/models`.
+2. Open `http://127.0.0.1:8080/` and sign in with the token in `dashboard.token`.
+3. Copy `node.secret` to each other machine and `chmod 600` it.
+4. On each, run `zig-out/bin/tfswarm node --dashboard <dashboard IP> --models ~/models --secret-file node.secret`.
+5. On the dashboard, approve each machine, tick it under Model, and press Load.
 
-Run a model across several machines from one page. Start the dashboard on the machine that will hold rank 0. On its first run it writes an admin token to `dashboard.token` and a node secret to `node.secret`:
-
-```bash
-zig-out/bin/olmoe dashboard --models ~/models
-```
-
-Open `http://127.0.0.1:8080/` and sign in with the token. On each other machine, copy `node.secret` over (`chmod 600`), put the same model in a models directory, and start an agent:
-
-```bash
-zig-out/bin/olmoe node --dashboard <dashboard IP> --models ~/models --secret-file node.secret
-```
-
-Approve the machine on the page, tick it under Model, and press Load. Chat on the page, or point any OpenAI-compatible client at `http://<dashboard>:8080/v1`. The dashboard speaks plain HTTP and listens only on 127.0.0.1 unless you pass `--listen`, so keep it on a private network or behind a TLS proxy. Every option is in [Building and running everything](docs/BUILDING.md).
-
-**On Windows**, the dashboard and the agent run natively in PowerShell (TASK-43), with the same options. Keep `dashboard.token` and `node.secret` in a folder inside your user profile (`C:\Users\<you>\...`), which only you, SYSTEM and Administrators can read; a secret anywhere else is refused. For example:
-
-```powershell
-mkdir $HOME\tensorfold; cd $HOME\tensorfold
-D:\path\to\zig-out\bin\olmoe.exe dashboard --models E:\models
-```
-
-To make a Windows PC an expert node, copy `node.secret` into your profile there and start the agent; no WSL2, `--advertise` or tunnel is needed. Windows asks once whether `olmoe.exe` may accept connections:
-
-```powershell
-olmoe.exe node --dashboard <dashboard IP> --models E:\models --secret-file $HOME\tensorfold\node.secret
-```
-
-Without the dashboard, a native Windows expert needs no WSL2 or tunnel: start it in PowerShell, then point the router at the PC's address (Windows asks once whether `olmoe.exe` may accept connections):
-
-```powershell
-.\zig-out\bin\olmoe.exe expert MODEL.gguf --port 7480 --payload f32
-```
-
-```bash
-zig-out/bin/olmoe router MODEL.gguf --host <PC address> --port 7480 --golden G.tfref --payload f32
-```
+Chat on the page, or point any OpenAI-compatible client at `http://<dashboard>:8080/v1`. The dashboard uses plain HTTP, so keep it on a private network. Every option, and running it from PowerShell, is in [Building and running everything](docs/BUILDING.md).
 
 ## Documentation
 
@@ -129,7 +86,7 @@ The website is now the engine itself: recorded chats and runs of the real engine
 - **Release Candidate (`v0.9.0-rc1`, Nov 29):** the benchmark report and architecture whitepaper (TASK-19), developer documentation and the API freeze (TASK-20), and sharing the project with other developers once the site is final ([#52](https://github.com/AIForGames2026/DistributedMoEEngine/issues/52)).
 - **Final (`v1.0.0`, Dec 6):** the public release and docs freeze.
 - Post-v1 work in progress (GLM-5.3-Flash's 128k prompt over two Sparks, TASK-32) adds results to `bench/`, not new site content.
-- **Amended Nov 20:** the native Windows engine (TASK-40) and the native Windows dashboard and node agent (TASK-43) are pulled in before v1. They add Windows code; Linux builds and tests are unchanged.
+- **Amended Nov 20:** the native Windows engine (TASK-40) and the native Windows dashboard and node agent (TASK-43), and the Windows tray launcher with settings in the dashboard (TASK-44), are pulled in before v1. They add Windows code; Linux builds and tests are unchanged.
 
 **Not in this build**
 - Compressed expert streaming (TASK-13) was cut on Nov 11.
@@ -181,27 +138,13 @@ Engine binaries are not part of this slice and classmates are not asked to run a
 
 The site is hosted on GitHub Pages (the Dec 6 host), and any member with write access can redeploy:
 
-1. Check it locally: the main page replays each recording, and `inspector.html` plays through the mission:
+1. Check it locally: in `web/`, run `npm ci && npm test && npm run build && npm run preview`.
+2. Push to `main`; the [Pages workflow](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml) builds, checks and publishes the site.
+3. To redeploy with no code change, run `gh workflow run pages.yml --ref main`.
+4. When it passes, open the [live site](https://aiforgames2026.github.io/DistributedMoEEngine/) in a private window and replay each recording.
+5. On a fork, first set **Settings > Pages > Source** to **GitHub Actions**.
 
-   ```bash
-   cd web
-   npm ci
-   npm test
-   npm run build
-   npm run preview
-   ```
-
-2. Push to `main`. Any change under `web/`, to a recording under `bench/`, or to `.github/workflows/pages.yml` starts the [Pages workflow](https://github.com/AIForGames2026/DistributedMoEEngine/actions/workflows/pages.yml). It builds the site, fails if the bundle holds an executable or installer, a page without a Content-Security-Policy, or a main page over 5 MB to load, and publishes it. The recordings on the main page are listed in `web/showcase.json`.
-3. To redeploy with no code change, use **Run workflow** on that page, or run:
-
-   ```bash
-   gh workflow run pages.yml --ref main
-   ```
-
-4. Wait for the workflow to pass, then open https://aiforgames2026.github.io/DistributedMoEEngine/ in a private window, ideally on another machine. Replay each recording, then play through the mission on `inspector.html`, with no console errors.
-5. First-time setup only, on a fork: under **Settings > Pages**, set **Source** to **GitHub Actions**.
-
-During a test window, push only fixes the session needs, and list each one in the [release notes](#release-notes).
+The main page's recordings are listed in `web/showcase.json`. During a test window, push only fixes the session needs, and list each one in the [release notes](#release-notes).
 
 </details>
 

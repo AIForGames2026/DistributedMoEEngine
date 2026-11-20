@@ -1,15 +1,16 @@
 //! OLMoE-1B-7B (TASK-10), Qwen3-MoE (TASK-12), Qwen3.5-MoE (TASK-29) or Qwen3.8-Flash-Next (TASK-31) forward pass split across
 //! any number of processes (TASK-33; two by default). Linux, and Windows without RDMA or the tracker (TASK-40, TASK-43).
 //!
-//!   olmoe local MODEL --golden G.tfref                 one process, every expert
-//!   olmoe shm   MODEL --golden G.tfref [options]       --ranks N processes (default 2), shared memory
-//!   olmoe rdma  MODEL --golden G.tfref [options]       the same over RDMA (-Drdma=true)
-//!   olmoe expert MODEL --port P [--rank R --ranks N]   an expert rank over TCP (rank 1 by default)
-//!   olmoe router MODEL --host IP --port P --golden G.tfref [options]
-//!   olmoe router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ...  one --peer per expert rank, in rank order
-//!   olmoe rdma-expert / rdma-router                    the same over RDMA
-//!   olmoe dashboard --models DIR                       the operator dashboard (TASK-25, dashboard.zig)
-//!   olmoe node --dashboard IP --models DIR             its node agent (node_agent.zig)
+//!   tfswarm local MODEL --golden G.tfref                 one process, every expert
+//!   tfswarm shm   MODEL --golden G.tfref [options]       --ranks N processes (default 2), shared memory
+//!   tfswarm rdma  MODEL --golden G.tfref [options]       the same over RDMA (-Drdma=true)
+//!   tfswarm expert MODEL --port P [--rank R --ranks N]   an expert rank over TCP (rank 1 by default)
+//!   tfswarm router MODEL --host IP --port P --golden G.tfref [options]
+//!   tfswarm router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ...  one --peer per expert rank, in rank order
+//!   tfswarm rdma-expert / rdma-router                    the same over RDMA
+//!   tfswarm dashboard --models DIR                       the operator dashboard (TASK-25, dashboard.zig)
+//!   tfswarm node --dashboard IP --models DIR             its node agent (node_agent.zig)
+//!   tfswarm setup                                        first-run setup page (TASK-44, setup.zig)
 //!
 //! options: --payload fp8|bf16|f32 (default fp8), --placement FILE, --slots S,
 //!          --dev D, --gid G (RDMA), --gpu (Q8_0 matmuls on CUDA; -Dgpu=true),
@@ -219,6 +220,10 @@ pub fn main(init: std.process.Init) !void {
         {
             return node_agent.main(init.gpa, all.items[2..]);
         }
+        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "setup"))
+        {
+            return @import("setup.zig").main(init.gpa, all.items[2..]);
+        }
         if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "gpu-formats"))
         {
             if (!build_options.gpu)
@@ -231,13 +236,14 @@ pub fn main(init: std.process.Init) !void {
     }
     const opts = parseArgs(init) catch {
         std.debug.print(
-            \\usage: olmoe local|shm|rdma MODEL --golden G.tfref [--ranks N] [options]
-            \\       olmoe dashboard --models DIR [options]   (TASK-25: the operator dashboard)
-            \\       olmoe node --dashboard IP[:PORT] --models DIR [options]   (its node agent)
-            \\       olmoe gpu-formats   (TASK-36: every weight format's GPU kernels against the CPU)
-            \\       olmoe expert|rdma-expert MODEL --port P [--rank R --ranks N] [options]
-            \\       olmoe router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
-            \\       olmoe router|rdma-router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ... --golden G.tfref [options]
+            \\usage: tfswarm local|shm|rdma MODEL --golden G.tfref [--ranks N] [options]
+            \\       tfswarm dashboard --models DIR [options]   (TASK-25: the operator dashboard)
+            \\       tfswarm node --dashboard IP[:PORT] --models DIR [options]   (its node agent)
+            \\       tfswarm setup [--settings FILE]   (TASK-44: the first-run setup page)
+            \\       tfswarm gpu-formats   (TASK-36: every weight format's GPU kernels against the CPU)
+            \\       tfswarm expert|rdma-expert MODEL --port P [--rank R --ranks N] [options]
+            \\       tfswarm router|rdma-router MODEL --host IP --port P --golden G.tfref [options]
+            \\       tfswarm router|rdma-router MODEL --peer [tcp:|rdma:]IP:PORT[@DEV] ... --golden G.tfref [options]
             \\options: --payload fp8|bf16|f32  --placement FILE  --slots S  --dev D  --gid G  --gpu  --yarn F
             \\         --generate N  --temperature T  --top-k K  --seed S  --minutes M
             \\         --lookahead H  --extra E  --cache N  --pin L  --loaders N  --mispredict P
@@ -1435,7 +1441,7 @@ fn runForked(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool) !
 }
 
 /// Windows `shm` (TASK-40): with no fork, rank 0 makes a named shared region for
-/// each expert rank and starts it as `olmoe shm-expert` with this run's options.
+/// each expert rank and starts it as `tfswarm shm-expert` with this run's options.
 fn runSpawned(gpa: std.mem.Allocator, opts: Options, slots: u16) !void
 {
     const io = proc_init.io;

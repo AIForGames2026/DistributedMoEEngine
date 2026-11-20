@@ -100,6 +100,40 @@ pub fn loadSecret(gpa: std.mem.Allocator, path: []const u8, label: []const u8) !
     return gpa.dupe(u8, text);
 }
 
+/// Writes a secret someone pasted (such as the node secret, TASK-44), owner-only on
+/// Linux and only inside the profile folder on Windows; `loadSecret` then reads it.
+pub fn saveSecret(gpa: std.mem.Allocator, path: []const u8, secret: []const u8) error{ SecretTooShort, SecretMalformed, SecretExposed, WriteFailed, OutOfMemory }!void
+{
+    const text = std.mem.trim(u8, secret, " \t\r\n");
+    if (text.len < 32 or text.len > 256)
+    {
+        return error.SecretTooShort;
+    }
+    for (text) |ch|
+    {
+        if (ch < 0x21 or ch > 0x7e)
+        {
+            return error.SecretMalformed;
+        }
+    }
+    const dir = try gpa.dupeSentinel(u8, std.fs.path.dirname(path) orelse ".", 0);
+    defer gpa.free(dir);
+    if (is_windows and !plat.inUserProfile(dir))
+    {
+        return error.SecretExposed;
+    }
+    const tmp = try std.fmt.allocPrintSentinel(gpa, "{s}.tmp", .{path}, 0);
+    defer gpa.free(tmp);
+    const dst = try gpa.dupeSentinel(u8, path, 0);
+    defer gpa.free(dst);
+    const line = try std.fmt.allocPrint(gpa, "{s}\n", .{text});
+    defer gpa.free(line);
+    if (!plat.replaceFile(tmp, dst, line))
+    {
+        return error.WriteFailed;
+    }
+}
+
 fn loadSecretWindows(gpa: std.mem.Allocator, path: [:0]const u8, label: []const u8) ![]u8
 {
     // The folder is checked first, so no secret is ever written outside the profile.

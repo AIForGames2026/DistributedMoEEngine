@@ -1,4 +1,4 @@
-//! The few process and file calls `olmoe` makes outside the model reader, on
+//! The few process and file calls `tfswarm` makes outside the model reader, on
 //! Linux through libc and on Windows through Win32 (TASK-40).
 const std = @import("std");
 const c = std.c;

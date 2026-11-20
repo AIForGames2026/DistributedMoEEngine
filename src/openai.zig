@@ -1,4 +1,4 @@
-//! OpenAI chat completions format for `olmoe serve` (TASK-30): reads a
+//! OpenAI chat completions format for `tfswarm serve` (TASK-30): reads a
 //! `POST /v1/chat/completions` body and writes responses, stream chunks,
 //! model lists, and errors, so `curl`, the `openai` package, and existing chat
 //! clients work unchanged.
@@ -6,7 +6,7 @@
 //! Beyond OpenAI's fields it accepts `top_k`, vLLM's
 //! `chat_template_kwargs.enable_thinking` (and Qwen3.8's `reasoning_effort`) and assistant `reasoning_content`,
 //! and `return_tokens`, which adds the prompt and completion token ids to the
-//! `tensorfold` object every response carries (with timings and reuse).
+//! `tfswarm` object every response carries (with timings and reuse).
 const std = @import("std");
 const chat = @import("chat.zig");
 
@@ -324,9 +324,9 @@ fn writeUsage(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: Stats) !void {
     });
 }
 
-fn writeTensorfold(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: Stats) !void {
+fn writeExtension(gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: Stats) !void {
     const decode_rate = if (s.decode_ns > 0) @as(f64, @floatFromInt(s.decode_steps)) / (@as(f64, @floatFromInt(s.decode_ns)) / 1e9) else 0;
-    try out.print(gpa, ",\"tensorfold\":{{\"cached_tokens\":{d},\"ttft_ms\":{d:.1},\"decode_tokens_per_s\":{d:.2}", .{
+    try out.print(gpa, ",\"tfswarm\":{{\"cached_tokens\":{d},\"ttft_ms\":{d:.1},\"decode_tokens_per_s\":{d:.2}", .{
         s.cached_tokens, @as(f64, @floatFromInt(s.ttft_ns)) / 1e6, decode_rate,
     });
     inline for (.{ .{ "prompt_ids", s.prompt_ids }, .{ "completion_ids", s.completion_ids } }) |f|
@@ -356,7 +356,7 @@ pub fn writeCompletion(gpa: std.mem.Allocator, out: *std.ArrayList(u8), ids: Ids
     }
     try out.print(gpa, "}},\"logprobs\":null,\"finish_reason\":\"{t}\"}}]", .{finish});
     try writeUsage(gpa, out, s);
-    try writeTensorfold(gpa, out, s);
+    try writeExtension(gpa, out, s);
     try out.append(gpa, '}');
 }
 
@@ -378,7 +378,7 @@ pub fn writeChunk(gpa: std.mem.Allocator, out: *std.ArrayList(u8), ids: Ids, del
     try out.appendSlice(gpa, "}]}\n\n");
 }
 
-/// The last chunk before `[DONE]`: usage (if asked for) and the tensorfold object.
+/// The last chunk before `[DONE]`: usage (if asked for) and the tfswarm object.
 pub fn writeUsageChunk(gpa: std.mem.Allocator, out: *std.ArrayList(u8), ids: Ids, s: Stats, include_usage: bool) !void {
     try out.appendSlice(gpa, "data: ");
     try writeIds(gpa, out, ids, "chat.completion.chunk");
@@ -387,14 +387,14 @@ pub fn writeUsageChunk(gpa: std.mem.Allocator, out: *std.ArrayList(u8), ids: Ids
     {
         try writeUsage(gpa, out, s);
     }
-    try writeTensorfold(gpa, out, s);
+    try writeExtension(gpa, out, s);
     try out.appendSlice(gpa, "}\n\ndata: [DONE]\n\n");
 }
 
 pub fn writeModels(gpa: std.mem.Allocator, out: *std.ArrayList(u8), model: []const u8, created: i64) !void {
     try out.appendSlice(gpa, "{\"object\":\"list\",\"data\":[{\"id\":");
     try writeString(gpa, out, model);
-    try out.print(gpa, ",\"object\":\"model\",\"created\":{d},\"owned_by\":\"tensorfold\"}}]}}", .{created});
+    try out.print(gpa, ",\"object\":\"model\",\"created\":{d},\"owned_by\":\"tfswarm\"}}]}}", .{created});
 }
 
 pub fn writeError(gpa: std.mem.Allocator, out: *std.ArrayList(u8), message: []const u8, kind: []const u8, param: ?[]const u8) !void {
@@ -468,5 +468,5 @@ test "writes chunks that parse as JSON" {
     const whole = try std.json.parseFromSlice(std.json.Value, gpa, out.items, .{});
     defer whole.deinit();
     try std.testing.expectEqual(@as(i64, 5), whole.value.object.get("usage").?.object.get("total_tokens").?.integer);
-    try std.testing.expectEqual(@as(usize, 3), whole.value.object.get("tensorfold").?.object.get("prompt_ids").?.array.items.len);
+    try std.testing.expectEqual(@as(usize, 3), whole.value.object.get("tfswarm").?.object.get("prompt_ids").?.array.items.len);
 }

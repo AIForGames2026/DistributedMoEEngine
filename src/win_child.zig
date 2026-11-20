@@ -259,6 +259,6 @@ test "command lines quote what needs it" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try std.testing.expectEqualStrings("olmoe.exe expert C:\\m\\x.gguf --port 5", try commandLine(a, &.{ "olmoe.exe", "expert", "C:\\m\\x.gguf", "--port", "5" }));
+    try std.testing.expectEqualStrings("tfswarm.exe expert C:\\m\\x.gguf --port 5", try commandLine(a, &.{ "tfswarm.exe", "expert", "C:\\m\\x.gguf", "--port", "5" }));
     try std.testing.expectEqualStrings("\"C:\\Program Files\\o.exe\" \"\" \"a\\\"b\" \"c d\\\\\"", try commandLine(a, &.{ "C:\\Program Files\\o.exe", "", "a\"b", "c d\\" }));
 }

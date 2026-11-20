@@ -7,7 +7,7 @@ const Arena = @import("arena.zig").Arena;
 // @cImport so the build does not depend on translate-c.
 extern fn tf_version() c_uint;
 
-/// Usage: tensorfold [--n N] [--first-kernel]
+/// Usage: tfswarm-poc [--n N] [--first-kernel]
 ///   --n N           GEMM size (default 1024)
 ///   --first-kernel  exit right after the first kernel call; used by
 ///                   tools/bench/startup.c to time process start to first kernel
@@ -89,6 +89,7 @@ test {
     _ = @import("expert_cache.zig");
     _ = @import("auth.zig");
     _ = @import("proc.zig");
+    _ = @import("settings.zig");
     if (@import("builtin").os.tag == .windows)
     {
         _ = @import("win_child.zig");

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TensorFold Live</title>
+<title>TFSwarm Live</title>
 <style>
 :root {
   --bg: #f6f7f9;
@@ -167,7 +167,7 @@ body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px
 </head>
 <body>
 <header>
-  <h1>TensorFold Live</h1>
+  <h1>TFSwarm Live</h1>
   <span class="badge" id="badge" hidden>Recording of the real engine</span>
   <span class="meta"><span id="dot" class="dot"></span><span id="conn">connecting to the engine</span></span>
   <span class="meta" id="model"></span>
@@ -1770,7 +1770,7 @@ async function send(text) {
           if (ch.delta?.content) reply.add("content", ch.delta.content);
           if (ch.finish_reason) finish = ch.finish_reason;
         }
-        if (chunk.tensorfold) extra = { ...chunk.tensorfold, completion_tokens: chunk.usage?.completion_tokens };
+        if (chunk.tfswarm) extra = { ...chunk.tfswarm, completion_tokens: chunk.usage?.completion_tokens };
       }
     }
     const { content, reasoning } = reply;
@@ -1866,7 +1866,7 @@ function parseTrace(text) {
   if (!lines.length) throw new Error("the file is empty");
   let hello;
   try { hello = JSON.parse(lines[0]); } catch { throw new Error("its first line is not JSON"); }
-  if (!hello || hello.t !== "hello" || !validHello(hello)) throw new Error("it does not start with a TensorFold hello line");
+  if (!hello || hello.t !== "hello" || !validHello(hello)) throw new Error("it does not start with a TFSwarm hello line");
   const items = [];
   let rejected = 0, truncated = false, steps = 0;
   for (let i = 1; i < lines.length; i++) {
@@ -1933,7 +1933,7 @@ async function loadTrace(name, blob) {
   try {
     trace = parseTrace(await readText(blob));
   } catch (e) {
-    showProblem(`${name} is not a TensorFold recording: ${e.message}.`);
+    showProblem(`${name} is not a TFSwarm recording: ${e.message}.`);
     return;
   }
   startReplay(name, trace, null);

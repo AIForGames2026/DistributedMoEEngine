@@ -55,25 +55,138 @@ async function api(path, body) {
 function showLogin() {
   $("login").hidden = false;
   $("app").hidden = true;
+  $("settingsview").hidden = true;
   $("status").hidden = true;
   $("logout").hidden = true;
+  $("settingsbtn").hidden = true;
   if (polling) {
     clearInterval(polling);
     polling = null;
+  }
+  if (location.hash === "#link-expired") {
+    $("loginerror").textContent = "That sign-in link was already used or has expired. Open the dashboard again from the tray icon, or paste the admin token.";
+    $("loginerror").hidden = false;
+    history.replaceState(null, "", "/");
   }
   $("token").focus();
 }
 
 function showApp() {
   $("login").hidden = true;
-  $("app").hidden = false;
   $("status").hidden = false;
   $("logout").hidden = false;
+  $("settingsbtn").hidden = false;
   if (!polling) {
     polling = setInterval(refresh, 1000);
   }
+  showView();
   refresh();
 }
+
+// The Settings view lives at #settings, so the tray can open it directly.
+function showView() {
+  const settings = location.hash === "#settings";
+  $("app").hidden = settings;
+  $("settingsview").hidden = !settings;
+  $("settingsbtn").textContent = settings ? "Back to the dashboard" : "Settings";
+  if (settings) {
+    loadSettings();
+  }
+}
+
+window.addEventListener("hashchange", () => {
+  if ($("login").hidden) {
+    showView();
+  }
+});
+
+$("settingsbtn").addEventListener("click", () => {
+  location.hash = location.hash === "#settings" ? "" : "#settings";
+});
+
+let secrets = {};
+
+function fillSettings(s) {
+  secrets = { token: s.admin_token, secret: s.node_secret, key: s.api_key };
+  const d = s.dashboard;
+  $("s-models").value = d.models;
+  $("s-open").checked = d.open_to_network;
+  $("s-key").checked = d.api_key;
+  $("s-port").value = d.port;
+  $("s-node-port").value = d.node_port;
+  $("s-router-port").value = d.router_port;
+  $("s-expert-port").value = d.expert_port;
+  $("apikeyrow").hidden = !s.api_key;
+  $("settingsfile").textContent = s.file || "";
+  const managed = s.file != null;
+  $("unmanaged").hidden = managed;
+  for (const e of document.querySelectorAll("#settingsview .form input, #savesettings")) {
+    e.disabled = !managed;
+  }
+  $("restartbar").hidden = !(managed && s.restart_needed);
+}
+
+async function loadSettings() {
+  $("settingserror").textContent = "";
+  try {
+    fillSettings(await api("/api/settings"));
+  } catch (e) {
+    $("settingserror").textContent = e.message;
+  }
+}
+
+// The clipboard API needs a secure page (localhost counts); over plain HTTP elsewhere, copy through a hidden field.
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const t = el("textarea", { readonly: true, style: "position:fixed;opacity:0" });
+    t.value = text;
+    document.body.append(t);
+    t.select();
+    document.execCommand("copy");
+    t.remove();
+  }
+  $("copied").textContent = `Copied the ${what}. Treat it like a password.`;
+}
+
+$("copytoken").addEventListener("click", () => copyText(secrets.token, "admin token"));
+$("copysecret").addEventListener("click", () => copyText(secrets.secret, "node secret"));
+$("copykey").addEventListener("click", () => copyText(secrets.key, "API key"));
+
+$("savesettings").addEventListener("click", async () => {
+  $("settingserror").textContent = "";
+  $("settingsmsg").hidden = true;
+  try {
+    const s = await api("/api/settings", {
+      models: $("s-models").value.trim(),
+      open_to_network: $("s-open").checked,
+      api_key: $("s-key").checked,
+      port: Number($("s-port").value),
+      node_port: Number($("s-node-port").value),
+      router_port: Number($("s-router-port").value),
+      expert_port: Number($("s-expert-port").value),
+    });
+    fillSettings(s);
+    $("settingsmsg").textContent = "Saved. The models folder and the API key apply now.";
+    $("settingsmsg").hidden = false;
+    nodesSig = "";
+    $("model").dataset.names = "";
+  } catch (e) {
+    $("settingserror").textContent = e.message;
+  }
+});
+
+$("restart").addEventListener("click", async () => {
+  $("restart").disabled = true;
+  try {
+    await api("/api/restart", {});
+    $("restartbar").textContent = "Restarting. The tray launcher opens the dashboard again in a new tab, signed in; you can close this one.";
+  } catch (e) {
+    $("settingserror").textContent = e.message;
+    $("restart").disabled = false;
+  }
+});
 
 async function refresh() {
   try {
@@ -180,7 +293,7 @@ function renderNodes(s) {
   }
   $("nodecount").textContent = `${s.nodes.length} known, ${online} online`;
   const host = location.hostname || "DASHBOARD_IP";
-  $("agentcmd").textContent = `olmoe node --dashboard ${host}:${s.node_port} --models /path/to/models --secret-file node.secret`;
+  $("agentcmd").textContent = `tfswarm node --dashboard ${host}:${s.node_port} --models /path/to/models --secret-file node.secret`;
 }
 
 function renderModelForm(s) {
@@ -191,7 +304,7 @@ function renderModelForm(s) {
     sel.replaceChildren(...s.local.models.map((m) => el("option", { value: m.name }, `${m.name} (${size(m.bytes)})`)));
     sel.dataset.names = names.join("|");
     if (names.length === 0) {
-      sel.append(el("option", { value: "" }, "No models found in the --models directory"));
+      sel.append(el("option", { value: "" }, s.managed ? "No models found; set the models folder in Settings" : "No models found in the --models directory"));
     }
   }
   if (names.includes(current)) {

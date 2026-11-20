@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Holds a short scripted conversation with `olmoe ... --serve --record FILE`
+"""Holds a short scripted conversation with `tfswarm ... --serve --record FILE`
 (TASK-16), so the recording has a chat to replay. Standard library only.
 
 Usage:
@@ -35,7 +35,7 @@ def main():
         with urllib.request.urlopen(req, timeout=600) as r:
             out = json.load(r)
         m = out["choices"][0]["message"]
-        t = out["tensorfold"]
+        t = out["tfswarm"]
         print(f"> {turn}\n{m['content'].strip()[:300]}\n  ({out['usage']['completion_tokens']} tokens, first token {t['ttft_ms']:.0f} ms, "
               f"{t['decode_tokens_per_s']:.1f} tokens/s, finish {out['choices'][0]['finish_reason']})\n")
         msgs.append({"role": "assistant", "content": m["content"]})

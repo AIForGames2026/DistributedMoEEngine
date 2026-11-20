@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Times `olmoe ... --serve` against `olmoe` itself (TASK-30), in two steps.
+"""Times `tfswarm ... --serve` against `tfswarm` itself (TASK-30), in two steps.
 
   server: sends each prompt greedily as a streamed chat request, with no
           viewer and with a viewer reading the live diagram's feed, and
@@ -9,15 +9,15 @@
           client that many decode steps later; --lead N says how many. The server needs --no-reuse so
           every request prefills its whole prompt, like olmoe. Run it on the
           server's machine.
-  direct: runs `olmoe MODE MODEL --context N --tokens F --generate M` on the
+  direct: runs `tfswarm MODE MODEL --context N --tokens F --generate M` on the
           same prompt tokens, M being what the server generated, and records
-          what olmoe reports. --peer starts rank 1 before each run of a split.
+          what tfswarm reports. --peer starts rank 1 before each run of a split.
 
 Standard library only.
 
 Usage:
   python3 tools/ref/bench_serve.py server --base http://127.0.0.1:8091 --out serve.json [--reps 3] [--max-tokens 128]
-  python3 tools/ref/bench_serve.py direct --results serve.json --cmd "zig-out/bin/olmoe local MODEL --gpu" [--peer "..."] [--reps 3]
+  python3 tools/ref/bench_serve.py direct --results serve.json --cmd "zig-out/bin/tfswarm local MODEL --gpu" [--peer "..."] [--reps 3]
 """
 import argparse
 import http.client
@@ -73,8 +73,8 @@ def stream(base, messages, max_tokens, lead=0):
                     now = time.monotonic()
                     first = first if first is not None else now
                     last = now
-            if "tensorfold" in chunk:
-                extra = chunk["tensorfold"]
+            if "tfswarm" in chunk:
+                extra = chunk["tfswarm"]
     conn.close()
     n = len(extra["completion_ids"])
     return {
@@ -147,7 +147,7 @@ def direct(args):
                 m = pat.search(run.stderr)
                 if run.returncode != 0 or not m:
                     print(run.stderr[-2000:], file=sys.stderr)
-                    raise SystemExit(f"olmoe failed on {name}")
+                    raise SystemExit(f"tfswarm failed on {name}")
                 x = {"prompt": name, "rep": rep, "ttft_ms": float(m.group(1)) * 1000, "decode_tps": float(m.group(2))}
                 out["direct"].append(x)
                 print(f"{name:6} direct rep {rep}: {len(prompt)} prompt tokens, {n} generated; first token {x['ttft_ms']:.0f} ms, decode {x['decode_tps']:.2f} tokens/s")
@@ -158,7 +158,7 @@ def direct(args):
 
 def summarize(out):
     med = statistics.median
-    print("\n| Prompt | Prompt tokens | Generated | olmoe directly | Server, engine | Server, client | Server + viewer, engine | Server + viewer, client |")
+    print("\n| Prompt | Prompt tokens | Generated | tfswarm directly | Server, engine | Server, client | Server + viewer, engine | Server + viewer, client |")
     print("|---|---|---|---|---|---|---|---|")
     for name in PROMPTS:
         runs = [r for r in out["runs"] if r["prompt"] == name]
@@ -183,7 +183,7 @@ def main():
     s.add_argument("--lead", type=int, default=0, help="tokens each reply opens with that show no text (2 for Qwen3's <think> and newline)")
     d = sub.add_parser("direct")
     d.add_argument("--results", required=True)
-    d.add_argument("--cmd", required=True, help="olmoe and its arguments, without --context/--tokens/--generate")
+    d.add_argument("--cmd", required=True, help="tfswarm and its arguments, without --context/--tokens/--generate")
     d.add_argument("--peer", default="", help="a command that starts rank 1 for each run")
     d.add_argument("--peer-wait", type=float, default=5.0, help="seconds to let rank 1 load before starting rank 0")
     d.add_argument("--reps", type=int, default=3)

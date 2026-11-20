@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tokenizes text files into one long prompt for the long-context runs
 (TASK-12): writes the token ids as little-endian u32, the format
-`olmoe --tokens` reads. Testing only.
+`tfswarm --tokens` reads. Testing only.
 
 Usage:
   python3 tools/ref/make_tokens.py --tokenizer tokenizer.json --out long.tokens FILE...

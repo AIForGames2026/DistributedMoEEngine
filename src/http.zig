@@ -1,4 +1,4 @@
-//! Minimal HTTP/1.1 for `olmoe serve` (TASK-30): parses a request head and
+//! Minimal HTTP/1.1 for `tfswarm serve` (TASK-30): parses a request head and
 //! writes response heads. One request per connection; the server closes the
 //! connection after answering, so there is no keep-alive or pipelining, and
 //! bodies must come with a Content-Length (no chunked uploads).
@@ -112,6 +112,7 @@ pub fn reason(status: u16) []const u8 {
     return switch (status) {
         101 => "Switching Protocols",
         200 => "OK",
+        303 => "See Other",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",

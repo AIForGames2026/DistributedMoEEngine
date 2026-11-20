@@ -1,19 +1,19 @@
-# Native Windows 11 x86_64 build of the engine (olmoe.exe, TASK-40) and its
-# PoC programs (dispatch.exe, tensorfold.exe). Runs in Windows PowerShell 5.1
+# Native Windows 11 x86_64 build of the engine (tfswarm.exe, TASK-40), its tray
+# launcher (tfswarm-operator.exe, TASK-44) and its PoC programs (dispatch.exe, tfswarm-poc.exe). Runs in Windows PowerShell 5.1
 # or PowerShell 7, no admin.
 #
 #   .\build.ps1             build, run the unit tests, run the PoC checks
 #   .\build.ps1 -SkipChecks build and unit-test only
 #   .\build.ps1 -Package    also zip bin\ for GitHub Releases into dist\
-#   .\build.ps1 -Model M.gguf -Golden G.tfref   also run olmoe's golden check, local and shm
-#   .\build.ps1 -Gpu        build olmoe.exe with CUDA (needs the CUDA toolkit and Visual
+#   .\build.ps1 -Model M.gguf -Golden G.tfref   also run tfswarm's golden check, local and shm
+#   .\build.ps1 -Gpu        build tfswarm.exe with CUDA (needs the CUDA toolkit and Visual
 #                           Studio's C++ tools, whose cl.exe nvcc uses) and check its kernels
 #
 # Uses Zig from PATH if it matches .zig-version, else ~\tools\zig, and
 # installs it there (tools\setup\install-zig.ps1, SHA-256 checked) if missing.
 #
 # Windows covers the PoC check (the two-process MoE over shared memory and
-# TCP) and olmoe's local, shm, expert and router modes on the CPU. io_uring, CUDA, and RDMA steps
+# TCP) and tfswarm's local, shm, expert and router modes on the CPU. io_uring, CUDA, and RDMA steps
 # (io-test, gate) are Linux only.
 param(
     [switch]$SkipChecks,
@@ -85,9 +85,9 @@ if ($Gpu) {
     $gpuFlag = @('--gpu')
 }
 Invoke-Step 'Unit tests' { & $zig build test --summary all }
-Invoke-Step "Build ($Optimize)" { & $zig build install olmoe @buildArgs }
+Invoke-Step "Build ($Optimize)" { & $zig build install tfswarm @buildArgs }
 $dispatch = Join-Path $PSScriptRoot 'zig-out\bin\dispatch.exe'
-$olmoe = Join-Path $PSScriptRoot 'zig-out\bin\olmoe.exe'
+$tfswarm = Join-Path $PSScriptRoot 'zig-out\bin\tfswarm.exe'
 
 if (-not $SkipChecks) {
     Invoke-Step 'Dispatch check, shared memory (4,096 + 4,096 packets)' { & $dispatch shm }
@@ -95,11 +95,11 @@ if (-not $SkipChecks) {
     Invoke-TcpCheck 'Dispatch check, TCP loopback' @()
     Invoke-TcpCheck 'PoC check: two-process MoE vs PyTorch goldens, TCP loopback' @('--moe')
     if ($Model -and $Golden) {
-        Invoke-Step 'olmoe local: one process vs the transformers golden' { & $olmoe local $Model --golden $Golden @gpuFlag }
-        Invoke-Step 'olmoe shm: two processes vs the same golden' { & $olmoe shm $Model --golden $Golden --payload f32 @gpuFlag }
+        Invoke-Step 'tfswarm local: one process vs the transformers golden' { & $tfswarm local $Model --golden $Golden @gpuFlag }
+        Invoke-Step 'tfswarm shm: two processes vs the same golden' { & $tfswarm shm $Model --golden $Golden --payload f32 @gpuFlag }
     }
     if ($Gpu) {
-        Invoke-Step 'GPU kernels for every weight format vs the CPU' { & $olmoe gpu-formats }
+        Invoke-Step 'GPU kernels for every weight format vs the CPU' { & $tfswarm gpu-formats }
     }
 }
 

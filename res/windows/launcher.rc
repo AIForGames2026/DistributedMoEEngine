@@ -1,0 +1,3 @@
+// Resources for tfswarm-operator.exe, the Windows tray launcher (TASK-44).
+1 ICON "tfswarm.ico"
+1 24 "launcher.manifest"

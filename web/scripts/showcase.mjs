@@ -49,7 +49,7 @@ function checkRecording(rec, bytes) {
   const lines = text.split('\n').filter((l) => l.trim());
   const hello = JSON.parse(lines[0]);
   if (hello.t !== 'hello' || hello.schema !== 'tensorfold.live') {
-    fail(`${rec.source} does not start with a TensorFold hello line`);
+    fail(`${rec.source} does not start with a TFSwarm hello line`);
   }
   if (rec.ranks && rec.ranks.length !== hello.ranks.length) {
     fail(`${rec.id} names ${rec.ranks.length} ranks but the recording has ${hello.ranks.length}`);

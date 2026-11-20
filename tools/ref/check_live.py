@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks the live telemetry feed of `olmoe ... --serve` (TASK-16b).
+"""Checks the live telemetry feed of `tfswarm ... --serve` (TASK-16b).
 
 Runs the same greedy chat request with no viewer, with a viewer that reads
 every frame, and with a viewer that connects and never reads (a stalled
@@ -36,7 +36,7 @@ def chat(base, max_tokens, salt, prompt=PROMPT):
     req = urllib.request.Request(base + "/v1/chat/completions", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=600) as r:
         out = json.load(r)
-    return out["tensorfold"]
+    return out["tfswarm"]
 
 
 class Viewer:

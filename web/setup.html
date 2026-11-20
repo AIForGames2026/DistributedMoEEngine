@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TFSwarm Setup</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1b1f24;
+  --muted: #4d5866;
+  --line: #dde2e8;
+  --soft: #eef1f4;
+  --accent: #1d4ed8;
+  --accent-ink: #ffffff;
+  --ok: #15803d;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  --radius: 10px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216;
+    --panel: #171b21;
+    --ink: #e6e9ed;
+    --muted: #93a0b0;
+    --line: #2a313a;
+    --soft: #1f252d;
+    --accent: #6091ff;
+    --accent-ink: #0f1216;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.45; }
+header { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+section h2 { font-size: 15px; margin: 0 0 4px; font-weight: 650; }
+p { margin: 0 0 12px; }
+.muted { color: var(--muted); }
+.roles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.role { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; cursor: pointer; }
+.role:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.role input { margin-top: 3px; }
+.role b { display: block; margin-bottom: 2px; }
+.role span { color: var(--muted); font-size: 13px; }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.field > span { font-size: 13px; font-weight: 600; }
+.field small { color: var(--muted); font-size: 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row input[type=text], .row input[type=password] { flex: 1; min-width: 0; }
+input, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+input[type=number] { width: 110px; }
+label.check { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 14px; }
+label.check input { margin-top: 3px; }
+button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: default; }
+.note { font-size: 13px; margin-top: 4px; }
+.note.ok { color: var(--ok); }
+.note.warn { color: var(--warn); }
+.note.bad { color: var(--bad); }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+.ports { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 12px; }
+.ports label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.error { color: var(--bad); }
+@media (max-width: 560px) {
+  .roles { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header><h1>TFSwarm Setup</h1></header>
+<main id="form">
+  <section>
+    <h2>What should this PC do?</h2>
+    <p class="muted">You can change this later from the tray icon's "Run setup again".</p>
+    <div class="roles">
+      <label class="role"><input type="radio" name="role" value="dashboard">
+        <div><b>Host the dashboard</b><span>Run the operator dashboard here. You load models from it, and this PC holds a share of the experts.</span></div>
+      </label>
+      <label class="role"><input type="radio" name="role" value="node">
+        <div><b>Join a dashboard</b><span>Lend this PC's memory and GPU to a dashboard on another machine, as an expert node.</span></div>
+      </label>
+    </div>
+  </section>
+
+  <section id="host" hidden>
+    <h2>Host the dashboard</h2>
+    <p class="muted">Each model is a <span class="mono">.gguf</span> file with its <span class="mono">.tfsum</span> index beside it.</p>
+    <div class="field">
+      <span>Models folder</span>
+      <div class="row"><input id="h-models" type="text" placeholder="E:\models" spellcheck="false"><button id="h-check" type="button">Check</button></div>
+      <div class="note" id="h-models-note"></div>
+    </div>
+    <label class="check"><input id="h-open" type="checkbox">
+      <span>Let other machines open the dashboard page<br><small class="muted">Off: only this PC can open it. Node agents link either way. The page uses plain HTTP, so turn this on only on a private network.</small></span>
+    </label>
+    <label class="check"><input id="h-key" type="checkbox">
+      <span>Require an API key for the OpenAI-compatible endpoint<br><small class="muted">The key is made for you; copy it from the dashboard's Settings panel.</small></span>
+    </label>
+    <details>
+      <summary>Ports</summary>
+      <div class="ports">
+        <label>Dashboard page<input id="h-port" type="number" min="1024" max="65535"></label>
+        <label>Node agents<input id="h-node-port" type="number" min="1024" max="65535"></label>
+        <label>Router (this PC only)<input id="h-router-port" type="number" min="1024" max="65535"></label>
+        <label>First expert rank<input id="h-expert-port" type="number" min="1024" max="65535"></label>
+      </div>
+    </details>
+  </section>
+
+  <section id="join" hidden>
+    <h2>Join a dashboard</h2>
+    <div class="field">
+      <span>Dashboard address</span>
+      <input id="j-dashboard" type="text" placeholder="192.168.1.20" spellcheck="false">
+      <small>The IP of the machine running the dashboard. Add <span class="mono">:PORT</span> if its node port is not 47310.</small>
+    </div>
+    <div class="field">
+      <span>Node secret</span>
+      <input id="j-secret" type="password" autocomplete="off" spellcheck="false">
+      <small id="j-secret-help">On the dashboard, open Settings and press "Copy node secret", then paste it here.</small>
+    </div>
+    <div class="field">
+      <span>Models folder</span>
+      <div class="row"><input id="j-models" type="text" placeholder="E:\models" spellcheck="false"><button id="j-check" type="button">Check</button></div>
+      <small>Hold the same model files as the dashboard's machine.</small>
+      <div class="note" id="j-models-note"></div>
+    </div>
+    <details>
+      <summary>Name and address</summary>
+      <div class="field">
+        <span>Node name</span>
+        <input id="j-name" type="text" spellcheck="false">
+        <small>How the dashboard lists this PC. Letters, digits, ".", "-" and "_".</small>
+      </div>
+      <div class="field">
+        <span>Advertised address</span>
+        <input id="j-advertise" type="text" placeholder="the address the dashboard sees" spellcheck="false">
+        <small>Only if the dashboard reaches this PC at a different IP than the one it sees, such as through a VPN.</small>
+      </div>
+    </details>
+    <div class="actions"><button id="j-test" type="button">Test the link</button><span class="note" id="j-test-note"></span></div>
+  </section>
+
+  <section id="savebar" hidden>
+    <div class="actions">
+      <button id="save" class="primary" type="button">Save and start</button>
+      <span id="saveerror" class="error"></span>
+    </div>
+    <p class="muted mono" id="file" style="margin:10px 0 0"></p>
+  </section>
+</main>
+
+<main id="saved" hidden>
+  <section>
+    <h2 id="saved-title">Saved</h2>
+    <p id="saved-text"></p>
+    <p class="muted">You can close this tab.</p>
+  </section>
+</main>
+<script src="/setup.js"></script>
+</body>
+</html>

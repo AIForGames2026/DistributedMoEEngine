@@ -1,4 +1,4 @@
-//! The HTTP server behind `olmoe ... --serve [IP:]PORT` (TASK-30), on Linux and Windows (TASK-40, `sock.zig`).
+//! The HTTP server behind `tfswarm ... --serve [IP:]PORT` (TASK-30), on Linux and Windows (TASK-40, `sock.zig`).
 //!
 //! A front thread accepts connections, reads each request, and answers
 //! everything but chat completions itself. Chat requests pass through a pipe

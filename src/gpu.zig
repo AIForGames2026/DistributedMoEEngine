@@ -1,7 +1,7 @@
 //! GPU matmuls (TASK-10) and attention (TASK-12) for the forward pass:
 //! csrc/tf_gpu.c on the CUDA driver API, with the kernels from
 //! csrc/cuda/kernels.cu embedded as a fatbin. Built only with
-//! `zig build olmoe -Dgpu=true`. TF_GPU_ATTENTION=0 keeps attention on the CPU.
+//! `zig build tfswarm -Dgpu=true`. TF_GPU_ATTENTION=0 keeps attention on the CPU.
 const std = @import("std");
 const olmoe = @import("olmoe.zig");
 const quant = @import("quant.zig");

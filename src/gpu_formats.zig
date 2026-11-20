@@ -1,4 +1,4 @@
-//! `olmoe gpu-formats` (TASK-36): every weight format's GPU matmul and grouped expert path
+//! `tfswarm gpu-formats` (TASK-36): every weight format's GPU matmul and grouped expert path
 //! against the CPU, on random blocks with realistic scales. Exits with status 1 if any output
 //! is more than 1e-3 from the CPU's, the bound TF_GPU_CHECK applies.
 const std = @import("std");

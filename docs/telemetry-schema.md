@@ -73,7 +73,7 @@ Playback maps trace time to screen time so that the median layer takes about 1.5
 
 ## Live feed and recordings (`tensorfold.live` v0)
 
-Written by `src/telemetry.zig`. The live feed at `/telemetry` (TASK-16b) sends each object as a WebSocket text frame. A recording (`olmoe ... --record FILE`, TASK-16) holds the same objects, one per line, and may be gzipped. Times (`ms`) are milliseconds on the engine machine's monotonic clock, so only differences between them mean anything.
+Written by `src/telemetry.zig`. The live feed at `/telemetry` (TASK-16b) sends each object as a WebSocket text frame. A recording (`tfswarm ... --record FILE`, TASK-16) holds the same objects, one per line, and may be gzipped. Times (`ms`) are milliseconds on the engine machine's monotonic clock, so only differences between them mean anything.
 
 | Line | Fields |
 |---|---|

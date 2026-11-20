@@ -61,8 +61,8 @@ This is a one-person project built with an AI pair programmer. Luke holds all fo
 
 | Layer | Subsystem | Technology |
 |---|---|---|
-| 4 | Swarm orchestration (node registry, health, expert ownership) | TensorFold tracker (Zig), modeled on Lumabri's index-only tracker |
-| 3 | Scheduling, token batching, lookahead loop, arena allocation | TensorFold engine core (Zig) |
+| 4 | Swarm orchestration (node registry, health, expert ownership) | TFSwarm tracker (Zig), modeled on Lumabri's index-only tracker |
+| 3 | Scheduling, token batching, lookahead loop, arena allocation | TFSwarm engine core (Zig) |
 | 2 | Token transport and weight streaming | libibverbs (RoCE v2), liburing, nvCOMP |
 | 1 | Expert execution kernels | Blackwell FP4 Tensor Core kernels (CUDA / PTX) |
 

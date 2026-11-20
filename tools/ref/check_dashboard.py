@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks the operator dashboard's authentication (TASK-25) from outside.
 
-Against a running `olmoe dashboard`, it checks that:
+Against a running `tfswarm dashboard`, it checks that:
   - every control endpoint, the live page and its feed answer 401 without a
     session, with a wrong token, and with a forged or revoked session cookie;
   - a POST from a page served elsewhere is refused (403) even with the token;

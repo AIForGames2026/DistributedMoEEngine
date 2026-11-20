@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Checks `olmoe ... --serve` (TASK-30) against `olmoe` itself, in two steps.
+"""Checks `tfswarm ... --serve` (TASK-30) against `tfswarm` itself, in two steps.
 
   requests: sends each test conversation greedily through curl and the
             `openai` package, streamed and not, checks that all four give the
             same tokens and text, and saves the prompt and completion token ids.
             Run it where the server is reachable; the server needs --no-reuse
             so every request runs from an empty cache, like olmoe.
-  compare:  feeds each saved prompt to `olmoe local --context N --tokens F
+  compare:  feeds each saved prompt to `tfswarm local --context N --tokens F
             --generate M --save R` and checks that it generates the same tokens.
             Run it on the engine machine; it needs only the standard library.
 
 Usage:
   python3 tools/ref/check_serve.py requests --base http://127.0.0.1:8091/v1 --out serve.json
-  python3 tools/ref/check_serve.py compare --results serve.json --olmoe zig-out/bin/olmoe --model MODEL.gguf [--extra "--gpu"]
+  python3 tools/ref/check_serve.py compare --results serve.json --tfswarm zig-out/bin/tfswarm --model MODEL.gguf [--extra "--gpu"]
 """
 import argparse
 import json
@@ -42,7 +42,7 @@ def via_curl(base, body):
         if "error" in r:
             raise SystemExit(f"server error: {r['error']}")
         m = r["choices"][0]["message"]
-        return (m.get("reasoning_content", ""), m["content"]), r["tensorfold"], r["choices"][0]["finish_reason"]
+        return (m.get("reasoning_content", ""), m["content"]), r["tfswarm"], r["choices"][0]["finish_reason"]
     reasoning, text, extra, finish = "", "", None, None
     for line in out.split("\n"):
         if not line.startswith("data: ") or line == "data: [DONE]":
@@ -53,8 +53,8 @@ def via_curl(base, body):
             reasoning += delta.get("reasoning_content") or ""
             text += delta.get("content") or ""
             finish = chunk["choices"][0]["finish_reason"] or finish
-        if "tensorfold" in chunk:
-            extra = chunk["tensorfold"]
+        if "tfswarm" in chunk:
+            extra = chunk["tfswarm"]
     return (reasoning, text), extra, finish
 
 
@@ -64,7 +64,7 @@ def via_openai(client, body):
         r = client.chat.completions.create(model=body["model"], messages=body["messages"], temperature=0,
                                            max_tokens=body["max_tokens"], extra_body=extra_body)
         m = r.choices[0].message
-        return ((m.model_extra or {}).get("reasoning_content", ""), m.content), r.model_extra["tensorfold"], r.choices[0].finish_reason
+        return ((m.model_extra or {}).get("reasoning_content", ""), m.content), r.model_extra["tfswarm"], r.choices[0].finish_reason
     reasoning, text, extra, finish = "", "", None, None
     for chunk in client.chat.completions.create(model=body["model"], messages=body["messages"], temperature=0,
                                                 max_tokens=body["max_tokens"], stream=True,
@@ -74,8 +74,8 @@ def via_openai(client, body):
             reasoning += (delta.model_extra or {}).get("reasoning_content") or ""
             text += delta.content or ""
             finish = chunk.choices[0].finish_reason or finish
-        if chunk.model_extra and "tensorfold" in chunk.model_extra:
-            extra = chunk.model_extra["tensorfold"]
+        if chunk.model_extra and "tfswarm" in chunk.model_extra:
+            extra = chunk.model_extra["tfswarm"]
     return (reasoning, text), extra, finish
 
 
@@ -122,23 +122,23 @@ def compare(args):
             toks, rec = os.path.join(d, f"{i}.tokens"), os.path.join(d, f"{i}.rec")
             with open(toks, "wb") as f:
                 f.write(struct.pack(f"<{len(prompt)}I", *prompt))
-            cmd = [args.olmoe, "local", args.model, "--context", str(len(prompt)), "--tokens", toks,
+            cmd = [args.tfswarm, "local", args.model, "--context", str(len(prompt)), "--tokens", toks,
                    "--generate", str(len(want)), "--save", rec] + shlex.split(args.extra)
             run = subprocess.run(cmd, capture_output=True, text=True)
             if run.returncode != 0:
                 print(run.stderr, file=sys.stderr)
-                raise SystemExit(f"olmoe failed on conversation {i}")
+                raise SystemExit(f"tfswarm failed on conversation {i}")
             with open(rec, "rb") as f:
                 data = f.read()
             n = struct.unpack("<Q", data[8:16])[0]
             got = list(struct.unpack(f"<{n}I", data[16:16 + 4 * n]))
             same = got == want
             ok = ok and same
-            print(f"conversation {i}: {len(prompt)} prompt tokens, {len(want)} generated: {'same as olmoe' if same else 'DIFFERS'}")
+            print(f"conversation {i}: {len(prompt)} prompt tokens, {len(want)} generated: {'same as tfswarm' if same else 'DIFFERS'}")
             if not same:
                 at = next(j for j, (a, b) in enumerate(zip(got, want)) if a != b)
-                print(f"  first difference at token {at}: olmoe {got[at:at + 5]}, server {want[at:at + 5]}")
-    print(f"{'PASS' if ok else 'FAIL'}: the server's tokens {'match' if ok else 'differ from'} olmoe's for the same prompt tokens")
+                print(f"  first difference at token {at}: tfswarm {got[at:at + 5]}, server {want[at:at + 5]}")
+    print(f"{'PASS' if ok else 'FAIL'}: the server's tokens {'match' if ok else 'differ from'} tfswarm's for the same prompt tokens")
     sys.exit(0 if ok else 1)
 
 
@@ -151,7 +151,7 @@ def main():
     r.add_argument("--max-tokens", type=int, default=48)
     c = sub.add_parser("compare")
     c.add_argument("--results", required=True)
-    c.add_argument("--olmoe", required=True)
+    c.add_argument("--tfswarm", required=True)
     c.add_argument("--model", required=True)
     c.add_argument("--extra", default="")
     args = ap.parse_args()

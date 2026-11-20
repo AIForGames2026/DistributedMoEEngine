@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TensorFold Operator</title>
+<title>TFSwarm Operator</title>
 <style>
 :root {
   --bg: #f6f7f9;
@@ -91,6 +91,9 @@ iframe { width: 100%; height: 560px; border: 1px solid var(--line); border-radiu
 #login p { color: var(--muted); margin: 0 0 12px; }
 #login form { display: flex; gap: 8px; }
 #login input { flex: 1; }
+main.single { grid-template-columns: minmax(0, 1fr); max-width: 760px; }
+.secrets { display: flex; flex-direction: column; gap: 10px; }
+.secret { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 @media (max-width: 1000px) {
   main { grid-template-columns: minmax(0, 1fr); }
 }
@@ -98,9 +101,10 @@ iframe { width: 100%; height: 560px; border: 1px solid var(--line); border-radiu
 </head>
 <body>
 <header>
-  <h1>TensorFold Operator</h1>
+  <h1>TFSwarm Operator</h1>
   <div class="status" id="status" hidden><span class="dot" id="statusdot"></span><b id="statusstate"></b><span id="statusmsg"></span></div>
   <div class="grow"></div>
+  <button id="settingsbtn" class="small" hidden>Settings</button>
   <button id="logout" class="small" hidden>Sign out</button>
 </header>
 
@@ -126,8 +130,9 @@ iframe { width: 100%; height: 560px; border: 1px solid var(--line); border-radiu
       </div>
       <details id="addnode">
         <summary>Add a node</summary>
-        <p class="muted">On the new machine, copy the node secret file from this one, then start its agent. It appears here as pending; approve it and it can hold experts from the next load.</p>
+        <p class="muted">On a Windows PC, run <span class="mono">tfswarm-operator.exe</span>, choose "Join a dashboard", enter this machine's address and paste the node secret (Settings, "Copy node secret"). On Linux, copy the node secret file over and start the agent:</p>
         <pre class="mono" id="agentcmd"></pre>
+        <p class="muted" style="margin-top:8px">It appears here as waiting for approval; approve it and it can hold experts from the next load.</p>
       </details>
     </section>
 
@@ -194,6 +199,43 @@ iframe { width: 100%; height: 560px; border: 1px solid var(--line); border-radiu
       <iframe id="live" title="Live expert diagram" hidden></iframe>
     </section>
   </div>
+</main>
+
+<main id="settingsview" class="single" hidden>
+  <section>
+    <h2>Secrets <span class="sub">to copy to other machines and clients</span></h2>
+    <div class="secrets">
+      <div class="secret"><div><b>Admin token</b><div class="muted">Signs in to this page from another machine.</div></div><button id="copytoken" class="small">Copy admin token</button></div>
+      <div class="secret"><div><b>Node secret</b><div class="muted">Paste it into setup on a PC that joins as a node.</div></div><button id="copysecret" class="small">Copy node secret</button></div>
+      <div class="secret" id="apikeyrow" hidden><div><b>API key</b><div class="muted">The Bearer token clients send to <span class="mono">/v1</span>.</div></div><button id="copykey" class="small">Copy API key</button></div>
+    </div>
+    <p class="muted" id="copied" style="margin:10px 0 0" aria-live="polite"></p>
+  </section>
+
+  <section>
+    <h2>Settings <span class="sub mono" id="settingsfile"></span></h2>
+    <p class="muted" id="unmanaged" hidden>This dashboard was started from the command line without <span class="mono">--settings</span>, so its options come from there and are shown read-only.</p>
+    <div class="form">
+      <label class="wide">Models folder
+        <input id="s-models" type="text" spellcheck="false" placeholder="E:\models">
+      </label>
+      <label class="check wide"><input id="s-open" type="checkbox"> Let other machines open this page (plain HTTP: private networks only)</label>
+      <label class="check wide"><input id="s-key" type="checkbox"> Require an API key for <span class="mono">/v1</span></label>
+      <label>Page port<input id="s-port" type="number" min="1024" max="65535"></label>
+      <label>Node agent port<input id="s-node-port" type="number" min="1024" max="65535"></label>
+      <label>Router port<input id="s-router-port" type="number" min="1024" max="65535"></label>
+      <label>First expert port<input id="s-expert-port" type="number" min="1024" max="65535"></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="savesettings">Save</button>
+      <span id="settingserror" class="error"></span>
+    </div>
+    <div class="message" id="settingsmsg" hidden></div>
+    <div class="message" id="restartbar" hidden>
+      Changes to who can open the page and to the ports apply after a restart, which stops any loaded model.
+      <div class="row" style="margin-top:8px"><button id="restart" class="danger">Restart the dashboard</button></div>
+    </div>
+  </section>
 </main>
 <script src="/dashboard.js"></script>
 </body>

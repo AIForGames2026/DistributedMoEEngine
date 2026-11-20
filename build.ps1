@@ -6,6 +6,8 @@
 #   .\build.ps1 -SkipChecks build and unit-test only
 #   .\build.ps1 -Package    also zip bin\ for GitHub Releases into dist\
 #   .\build.ps1 -Model M.gguf -Golden G.tfref   also run olmoe's golden check, local and shm
+#   .\build.ps1 -Gpu        build olmoe.exe with CUDA (needs the CUDA toolkit and Visual
+#                           Studio's C++ tools, whose cl.exe nvcc uses) and check its kernels
 #
 # Uses Zig from PATH if it matches .zig-version, else ~\tools\zig, and
 # installs it there (tools\setup\install-zig.ps1, SHA-256 checked) if missing.
@@ -15,6 +17,7 @@
 # (io-test, gate) are Linux only.
 param(
     [switch]$SkipChecks,
+    [switch]$Gpu,
     [switch]$Package,
     [string]$Model,
     [string]$Golden,
@@ -35,6 +38,17 @@ function Find-Zig {
     Write-Host "Zig $version not found; installing it into ~\tools\zig"
     & (Join-Path $PSScriptRoot 'tools\setup\install-zig.ps1')
     return $local
+}
+
+# The newest MSVC host compiler nvcc accepts (CUDA 13.1 takes MSVC up to 19.49, toolset 14.4x).
+function Find-ClDir {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) { throw "-Gpu needs Visual Studio's C++ tools (vswhere.exe not found)" }
+    $cls = & $vswhere -all -products * -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\cl.exe' |
+        Where-Object { $_ -match '\\MSVC\\14\.(\d+)\.' -and [int]$Matches[1] -lt 50 } |
+        Sort-Object { [version](($_ -split '\\MSVC\\')[1] -split '\\')[0] } -Descending
+    if (-not $cls) { throw "-Gpu needs MSVC 14.4x or older (Visual Studio 2022's C++ tools) for nvcc" }
+    return Split-Path @($cls)[0]
 }
 
 # Native commands write progress to stderr, so only the exit code means failure.
@@ -65,6 +79,11 @@ Write-Host "Zig: $zig"
 
 # Release binaries target x86_64_v2 (SSE4.2 CRC32C), like the Linux x86_64 build.
 $buildArgs = @('-Dtarget=x86_64-windows-gnu', '-Dcpu=x86_64_v2', "-Doptimize=$Optimize")
+$gpuFlag = @()
+if ($Gpu) {
+    $buildArgs += @('-Dgpu=true', "-Dccbin=$(Find-ClDir)")
+    $gpuFlag = @('--gpu')
+}
 Invoke-Step 'Unit tests' { & $zig build test --summary all }
 Invoke-Step "Build ($Optimize)" { & $zig build install olmoe @buildArgs }
 $dispatch = Join-Path $PSScriptRoot 'zig-out\bin\dispatch.exe'
@@ -76,8 +95,11 @@ if (-not $SkipChecks) {
     Invoke-TcpCheck 'Dispatch check, TCP loopback' @()
     Invoke-TcpCheck 'PoC check: two-process MoE vs PyTorch goldens, TCP loopback' @('--moe')
     if ($Model -and $Golden) {
-        Invoke-Step 'olmoe local: one process vs the transformers golden' { & $olmoe local $Model --golden $Golden }
-        Invoke-Step 'olmoe shm: two processes vs the same golden' { & $olmoe shm $Model --golden $Golden --payload f32 }
+        Invoke-Step 'olmoe local: one process vs the transformers golden' { & $olmoe local $Model --golden $Golden @gpuFlag }
+        Invoke-Step 'olmoe shm: two processes vs the same golden' { & $olmoe shm $Model --golden $Golden --payload f32 @gpuFlag }
+    }
+    if ($Gpu) {
+        Invoke-Step 'GPU kernels for every weight format vs the CPU' { & $olmoe gpu-formats }
     }
 }
 

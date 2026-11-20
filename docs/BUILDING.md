@@ -189,19 +189,23 @@ zig build -Dtarget=aarch64-linux-gnu -Dcpu=cortex_a78
 
 ## Engine on Windows 11 (native)
 
-`dispatch.exe` and `tensorfold.exe` also build natively for Windows 11 x86_64, enough to run the PoC check without WSL2. From PowerShell (5.1 or 7) in the repo root:
+The engine (`olmoe.exe`, TASK-40), `dispatch.exe` and `tensorfold.exe` also build natively for Windows 11 x86_64. From PowerShell (5.1 or 7) in the repo root:
 
 ```powershell
 .\build.ps1
 ```
 
-It finds Zig 0.17.0 on PATH or in `~\tools\zig` (installing it there with `tools\setup\install-zig.ps1`, checksum verified, no admin, if missing), runs the unit tests, builds ReleaseFast into `zig-out\bin`, and runs the dispatch and `--moe` checks over shared memory and TCP loopback. `-SkipChecks` stops after the build; `-Package` also writes a zip and its SHA-256 to `dist\`. If PowerShell refuses to run scripts, use `powershell -ExecutionPolicy Bypass -File .\build.ps1`.
+It finds Zig 0.17.0 on PATH or in `~\tools\zig` (installing it there with `tools\setup\install-zig.ps1`, checksum verified, no admin, if missing), runs the unit tests, builds ReleaseFast into `zig-out\bin`, and runs the dispatch and `--moe` checks over shared memory and TCP loopback. `-SkipChecks` stops after the build; `-Package` also writes a zip and its SHA-256 to `dist\`. `-Model M.gguf -Golden G.tfref` also runs `olmoe local` and `olmoe shm` against a golden file. If PowerShell refuses to run scripts, use `powershell -ExecutionPolicy Bypass -File .\build.ps1`.
 
 ```powershell
 .\zig-out\bin\dispatch.exe shm --moe
 ```
 
-Windows has no `fork`, so in `shm` mode the program starts a second copy of itself for rank 1, which maps the same named shared memory. TCP mode is the same as on Linux, and Windows and Linux processes can be each other's peer. The io_uring reader, the toolchain gate, CUDA, and RDMA stay Linux only.
+Windows has no `fork`, so in `shm` mode each program starts a copy of itself for every expert rank, which maps the same named shared memory (`olmoe shm-expert`). TCP mode is the same as on Linux, and Windows and Linux processes can be each other's peer. Model files are read with unbuffered, overlapped `ReadFile` in place of io_uring.
+
+**GPU:** `.\build.ps1 -Gpu` builds `olmoe.exe` with CUDA. It needs the CUDA toolkit (13.1 checked; `CUDA_PATH` names it) and Visual Studio's C++ tools, whose `cl.exe` nvcc uses to compile the kernels. CUDA 13.1 takes MSVC up to 19.49, so the script picks the newest 14.4x toolset (Visual Studio 2022), not Visual Studio 2026's 14.5x. The engine links `nvcuda.dll` through an import library built from `csrc/cuda/nvcuda.def`, since the toolkit's `cuda.lib` asks for MSVC's runtime libraries. By hand: `zig build olmoe -Dtarget=x86_64-windows-gnu -Dgpu=true -Dccbin="<folder of cl.exe>"`.
+
+Still Linux only: RDMA, the tracker, the dashboard and node agent, `--serve` and `--record`, the NVMe KV tier and saved prefixes, and the toolchain gate.
 
 ## Lab machine access
 

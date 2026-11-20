@@ -67,7 +67,7 @@ pub fn open() !void {
         return error.GpuOpenFailed;
     }
     handle = h;
-    const off = if (std.c.getenv("TF_GPU_ATTENTION")) |v| v[0] == '0' else false;
+    const off = if (@import("plat.zig").env("TF_GPU_ATTENTION")) |v| v.len > 0 and v[0] == '0' else false;
     if (!off)
     {
         olmoe.gpu_register = register;
@@ -181,7 +181,7 @@ var attention_failed = false;
 /// routes Q8_0 matmuls there.
 pub fn map(region: []u8) !void {
     const h = handle orelse return error.GpuNotOpen;
-    if (std.c.getenv("TF_GPU_CHECK")) |v| check = v[0] == '1';
+    if (@import("plat.zig").env("TF_GPU_CHECK")) |v| check = v.len > 0 and v[0] == '1';
     var info: Info = undefined;
     tf_gpu_get_info(h, &info);
     const t0 = nowNs();
@@ -221,7 +221,7 @@ pub fn mapLive(region: []u8) !bool
     live_base = @intFromPtr(region.ptr);
     live_len = region.len;
     // A process holding only cached experts never calls `map`.
-    if (std.c.getenv("TF_GPU_CHECK")) |v| check = v[0] == '1';
+    if (@import("plat.zig").env("TF_GPU_CHECK")) |v| check = v.len > 0 and v[0] == '1';
     olmoe.gpu_matmul = matmul;
     olmoe.gpu_matmuls = matmuls;
     olmoe.gpu_experts = experts;

@@ -1,6 +1,6 @@
-# Native Windows engine: one process and split modes (2026-11-20)
+# Native Windows engine: one process, split modes and GPU (2026-11-20)
 
-TASK-40. `olmoe.exe` built and run on Windows itself, without WSL2. The first step covers model loading and the one-process mode on the CPU, and the second the split modes (`shm`, and `expert` and `router` over TCP). The GPU and the server come next.
+TASK-40. `olmoe.exe` built and run on Windows itself, without WSL2. The first step covers model loading and the one-process mode on the CPU, the second the split modes (`shm`, and `expert` and `router` over TCP), and the third the GPU. The server comes next.
 
 ## Machine
 
@@ -62,3 +62,22 @@ All runs use `olmoe_generate.tfref --generate 64 --payload f32`. fp8 and bf16 pa
 - **The Spark run:** it needed no WSL2, `--advertise` or SSH tunnel. Its speed is the link's: `tailscale ping` showed no direct path, only Tailscale's New York relay, at 31 to 33 ms per round trip. TASK-22's runs had a direct path under 1 ms one way. The expert spent 1.08 ms per call (0.52 ms on loopback), 18.5 s in all of the run's roughly 6.5 minutes.
 - **Linux:** 134 tests pass in WSL2 and on `gx10-02` (built with `-Drdma=true -Dgpu=true`), and the forked `shm` with 3 ranks still passes in WSL2.
 - **`build.ps1 -Model ... -Golden ...`** now also runs `olmoe shm` with f32 payloads. Every step passes.
+
+## GPU (third step)
+
+- **Toolchain:** CUDA 13.1 (V13.1.115), NVIDIA driver 617.42, Visual Studio 2022's MSVC 14.44 as nvcc's host compiler. CUDA 13.1 refuses MSVC 19.50 and newer, so Visual Studio 2026's 14.51 cannot be used; `build.ps1 -Gpu` picks the newest 14.4x.
+- **Linking:** the toolkit's `cuda.lib` carries `/DEFAULTLIB` entries for `LIBCMT`, `OLDNAMES` and `uuid`, MSVC's runtime, which a `x86_64-windows-gnu` link does not have. `build.zig` instead makes an import library for `nvcuda.dll` with `zig dlltool` from `csrc/cuda/nvcuda.def`, which lists the 25 driver functions `tf_gpu.c` calls. A new driver call needs a line there.
+- **Code:** `tf_gpu.c` built for Windows unchanged; `gpu.zig` reads its environment variables through `plat.zig`.
+
+| Check | Result |
+|---|---|
+| OLMoE TASK-10, `--gpu` | PASS: logits within 4.67e-5, every expert choice identical |
+| OLMoE TASK-24, `--gpu --generate 64` | PASS: 64/64 tokens on all 3 prompts, 110 to 123 tokens/s (CPU: 14) |
+| OLMoE `shm --gpu --payload f32 --generate 64` | PASS, 70 to 75 tokens/s |
+| `olmoe gpu-formats` | PASS: every weight format's GPU kernels agree with the CPU within 1e-3 |
+| Qwen3-30B-A3B Q8_0, `--cache 3000 --gpu`, from the NVMe drive | PASS: logits within 2.67e-4, every expert choice identical, 26 s |
+| The same without `--gpu` | PASS: logits within 2.65e-4, 25 s |
+| `build.ps1 -Gpu -Model ... -Golden olmoe_forward.tfref` | every step passes |
+
+- **Qwen3-30B-A3B:** 32.5 GB, copied from WSL2 to `D:\models\qwen3-30b-a3b` (WD_BLACK SN7100). 3,000 slots (15.1 GB) hold about half of its 6,144 experts. The run loaded 20.6 GB at about 3 ms per expert (5 MB each); OLMoE's 6.7 MB experts took 90 ms each from the hard drive. As on Linux, a discrete GPU leaves cached experts on the CPU (only GB10's shared memory maps them), and the run reports the unmapped calls.
+- **Linux:** on `gx10-02`, `-Drdma=true -Dgpu=true` builds `olmoe` and `attbench`, every test step succeeds, and OLMoE's GPU generate check passes (102 to 105 tokens/s). WSL2's CPU build and tests pass.

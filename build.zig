@@ -116,7 +116,8 @@ pub fn build(b: *std.Build) void {
     b.step("startup", "Time process start to first kernel (median of 20)").dependOn(&run_startup.step);
 
     const uring = b.option([]const u8, "uring", "liburing install prefix, if not in system paths");
-    const cuda = b.option([]const u8, "cuda", "CUDA toolkit root (default /usr/local/cuda)") orelse "/usr/local/cuda";
+    const cuda = b.option([]const u8, "cuda", "CUDA toolkit root (default /usr/local/cuda, or CUDA_PATH on Windows)") orelse
+        if (target.result.os.tag == .windows) (b.graph.environ_map.get("CUDA_PATH") orelse "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1") else "/usr/local/cuda";
     addIo(b, target, optimize, uring, rdma, cuda);
     addGate(b, target, optimize, uring, cuda);
 }
@@ -130,6 +131,21 @@ fn linkUring(b: *std.Build, mod: *std.Build.Module, prefix: ?[]const u8) void {
         mod.addRPath(.{ .cwd_relative = lib });
     }
     mod.linkSystemLibrary("uring", .{});
+}
+
+/// Links the CUDA driver API: the toolkit's stub on Linux, the driver loading at run time. On
+/// Windows, an import library for nvcuda.dll made from a .def, since cuda.lib wants MSVC's runtime.
+fn linkCuda(b: *std.Build, mod: *std.Build.Module, cuda: []const u8, on_windows: bool) void {
+    if (on_windows)
+    {
+        const dlltool = b.addSystemCommand(&.{ b.graph.zig_exe, "dlltool", "-m", "i386:x86-64", "-d" });
+        dlltool.addFileArg(b.path("csrc/cuda/nvcuda.def"));
+        dlltool.addArg("-l");
+        mod.addObjectFile(dlltool.addOutputFileArg("libnvcuda.a"));
+        return;
+    }
+    mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "lib64", "stubs" }) });
+    mod.linkSystemLibrary("cuda", .{});
 }
 
 /// The model reader and the shared C sources: io_uring on Linux, overlapped ReadFile on Windows (TASK-40).
@@ -221,11 +237,14 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         olmoe_mod.linkSystemLibrary("ibverbs", .{});
     }
     var fatbin_file: ?std.Build.LazyPath = null;
+    const on_windows = target.result.os.tag == .windows;
+    // Windows (TASK-40): nvcc's host compiler is MSVC's cl.exe, from this directory unless it is on PATH.
+    const ccbin = b.option([]const u8, "ccbin", "Directory holding the cl.exe nvcc should use (Windows)");
     if (gpu) {
         // Kernels for Ampere (sm_86, such as the RTX 3060 Ti and 3070), the RTX 5070 Ti (sm_120),
         // and GB10 (sm_121), plus PTX for anything newer; loaded at run time through the driver API.
         const nvcc = b.addSystemCommand(&.{
-            b.pathJoin(&.{ cuda, "bin", "nvcc" }), "-fatbin",
+            b.pathJoin(&.{ cuda, "bin", if (on_windows) "nvcc.exe" else "nvcc" }), "-fatbin",
             "-O3",                                 "-gencode",
             "arch=compute_86,code=sm_86",          "-gencode",
             "arch=compute_120,code=sm_120",        "-gencode",
@@ -233,6 +252,10 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
             "arch=compute_120,code=compute_120",   "-o",
         });
         const fatbin = nvcc.addOutputFileArg("kernels.fatbin");
+        if (ccbin) |dir|
+        {
+            nvcc.addArgs(&.{ "-ccbin", dir });
+        }
         fatbin_file = fatbin;
         nvcc.addFileArg(b.path("csrc/cuda/kernels.cu"));
         nvcc.addFileInput(b.path("csrc/cuda/blocks.cuh"));
@@ -240,9 +263,7 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         olmoe_mod.addAnonymousImport("kernels.fatbin", .{ .root_source_file = fatbin });
         olmoe_mod.addCSourceFile(.{ .file = b.path("csrc/tf_gpu.c"), .flags = &c_flags });
         olmoe_mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "include" }) });
-        // Link against the toolkit's stub; the driver's libcuda loads at run time.
-        olmoe_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "lib64", "stubs" }) });
-        olmoe_mod.linkSystemLibrary("cuda", .{});
+        linkCuda(b, olmoe_mod, cuda, on_windows);
     }
     const olmoe = b.addExecutable(.{ .name = "olmoe", .root_module = olmoe_mod });
     b.step("olmoe", "Build the OLMoE forward-pass tool (needs liburing)").dependOn(&b.addInstallArtifact(olmoe, .{}).step);
@@ -259,8 +280,7 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         bench_mod.addAnonymousImport("kernels.fatbin", .{ .root_source_file = fatbin_file.? });
         bench_mod.addCSourceFile(.{ .file = b.path("csrc/tf_gpu.c"), .flags = &c_flags });
         bench_mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "include" }) });
-        bench_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ cuda, "lib64", "stubs" }) });
-        bench_mod.linkSystemLibrary("cuda", .{});
+        linkCuda(b, bench_mod, cuda, on_windows);
         const bench = b.addExecutable(.{ .name = "attbench", .root_module = bench_mod });
         b.step("attbench", "Build the attention kernel benchmark (needs -Dgpu=true)").dependOn(&b.addInstallArtifact(bench, .{}).step);
     }

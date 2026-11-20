@@ -1,0 +1,29 @@
+; The CUDA driver functions csrc/tf_gpu.c calls, for an import library of
+; nvcuda.dll on Windows (TASK-40). The toolkit's cuda.lib wants MSVC's runtime.
+LIBRARY nvcuda.dll
+EXPORTS
+cuCtxSetCurrent
+cuDeviceGet
+cuDeviceGetAttribute
+cuDeviceGetName
+cuDevicePrimaryCtxRelease_v2
+cuDevicePrimaryCtxRetain
+cuFuncSetAttribute
+cuGetErrorString
+cuInit
+cuLaunchKernel
+cuMemAlloc_v2
+cuMemAllocHost_v2
+cuMemcpyDtoH_v2
+cuMemcpyDtoHAsync_v2
+cuMemcpyHtoD_v2
+cuMemcpyHtoDAsync_v2
+cuMemFree_v2
+cuMemFreeHost
+cuMemHostGetDevicePointer_v2
+cuMemHostRegister_v2
+cuMemHostUnregister
+cuModuleGetFunction
+cuModuleLoadData
+cuModuleUnload
+cuStreamSynchronize

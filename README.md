@@ -24,7 +24,7 @@ export PATH="$HOME/tools/zig:$PATH"
 zig build install -Doptimize=ReleaseFast
 ```
 
-**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine (`olmoe.exe`: `local`, `shm`, `expert` and `router` over TCP; `-Gpu` adds CUDA) and the two-process check; everything else runs in WSL2.
+**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine (`olmoe.exe`: `local`, `shm`, `expert` and `router` over TCP, `--serve` with the live page, and `-Gpu` for CUDA) and the two-process check. RDMA, the tracker and the dashboard run in WSL2.
 
 ```powershell
 .\build.ps1

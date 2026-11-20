@@ -1,5 +1,5 @@
 //! OLMoE-1B-7B (TASK-10), Qwen3-MoE (TASK-12), Qwen3.5-MoE (TASK-29) or Qwen3.8-Flash-Next (TASK-31) forward pass split across
-//! any number of processes (TASK-33; two by default). Linux.
+//! any number of processes (TASK-33; two by default). Linux, and Windows without RDMA, the tracker or the dashboard (TASK-40).
 //!
 //!   olmoe local MODEL --golden G.tfref                 one process, every expert
 //!   olmoe shm   MODEL --golden G.tfref [options]       --ranks N processes (default 2), shared memory
@@ -295,20 +295,17 @@ pub fn main(init: std.process.Init) !void {
             .probe = if (box) |b| .{ .ctx = b.cache, .sample = sampleCache } else .{ .ctx = &l.local, .sample = sampleLocal },
             .cache = if (box) |b| b.cache else null,
         };
-        const tel = if (is_windows) try noTelemetry(opts, "local") else try openTelemetry(gpa, l.cfg, moe, opts, "local", live);
+        const tel = try openTelemetry(gpa, l.cfg, moe, opts, "local", live);
         const run_moe = if (tel) |t| t.tap.moe() else moe;
-        const result = if (!is_windows and opts.serve != null)
+        const result = if (opts.serve != null)
             runServe(gpa, &l, run_moe, opts, "local", tel.?.bc, if (box != null) opts.max_step else null)
         else if (opts.context > 0)
             runLong(gpa, &l.weights.?, run_moe, opts, "local")
         else
             runGolden(gpa, &l.weights.?, run_moe, opts, "local");
-        if (!is_windows)
+        if (tel) |t|
         {
-            if (tel) |t|
-            {
-                t.close("local");
-            }
+            t.close("local");
         }
         if (box) |b|
         {
@@ -1065,20 +1062,17 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, eps: []const *transport.Endpoi
         .probe = .{ .ctx = &sm, .sample = SplitMoe.sample },
         .cache = sm.experts.cache,
     };
-    const tel = if (is_windows) try noTelemetry(opts, name) else try openTelemetry(gpa, cfg, moe, opts, name, live);
+    const tel = try openTelemetry(gpa, cfg, moe, opts, name, live);
     const run_moe = if (tel) |t| t.tap.moe() else moe;
-    const result = if (!is_windows and opts.serve != null)
+    const result = if (opts.serve != null)
         runServe(gpa, &l, run_moe, opts, name, tel.?.bc, opts.max_step)
     else if (opts.context > 0)
         runLong(gpa, &l.weights.?, run_moe, opts, name)
     else
         runGolden(gpa, &l.weights.?, run_moe, opts, name);
-    if (!is_windows)
+    if (tel) |t|
     {
-        if (tel) |t|
-        {
-            t.close(name);
-        }
+        t.close(name);
     }
     if (result) |_| {} else |err|
     {
@@ -1636,7 +1630,7 @@ fn runServe(gpa: std.mem.Allocator, l: *Loaded, moe: olmoe.Moe, opts: Options, n
 /// The model's file name without its directory and `.gguf`.
 fn modelId(path: []const u8) []const u8
 {
-    const base = if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| path[i + 1 ..] else path;
+    const base = std.fs.path.basename(path);
     return if (std.mem.endsWith(u8, base, ".gguf")) base[0 .. base.len - 5] else base;
 }
 
@@ -1657,17 +1651,6 @@ const Telemetry = struct {
         std.debug.print("{s}: recorded {d} steps ({d} dropped) to the trace\n", .{ name, bc.steps_written, bc.feed.dropped.load(.monotonic) });
     }
 };
-
-/// Windows has no telemetry yet (TASK-40): refuses `--serve` and `--record`.
-fn noTelemetry(opts: Options, name: []const u8) !?Telemetry
-{
-    if (opts.serve != null or opts.record != null)
-    {
-        std.debug.print("{s}: --serve and --record are not on Windows yet\n", .{name});
-        return error.Unsupported;
-    }
-    return null;
-}
 
 /// Sets up the telemetry tap when `--serve` or `--record` asks for it, else returns null.
 fn openTelemetry(gpa: std.mem.Allocator, cfg: olmoe.Config, moe: olmoe.Moe, opts: Options, name: []const u8, live: Live) !?Telemetry
@@ -2110,7 +2093,7 @@ fn fingerprint(buf: []u8, opts: Options) ![]const u8
     const size = plat.fileBytes(path) orelse return error.ModelNotFound;
     const att = plat.env("TF_ATT_KERNEL") orelse "0";
     const mm = plat.env("TF_MM_KERNEL") orelse "0";
-    const base = if (std.mem.lastIndexOfScalar(u8, opts.model, '/')) |i| opts.model[i + 1 ..] else opts.model;
+    const base = std.fs.path.basename(opts.model);
     return std.fmt.bufPrint(buf, "engine {s}; model {s} ({d} bytes); yarn {d}; gpu {}; TF_ATT_KERNEL {s}; TF_MM_KERNEL {s}; kv {t}", .{
         build_options.engine_build, base, size, yarn_factor, opts.gpu, att, mm, opts.kv_format,
     });

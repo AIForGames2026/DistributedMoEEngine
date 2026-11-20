@@ -115,6 +115,69 @@ pub fn writeFile(path: [:0]const u8, bytes: []const u8) !void
     }
 }
 
+pub fn sleepMs(ms: u32) void
+{
+    if (is_windows)
+    {
+        win32.Sleep(ms);
+        return;
+    }
+    const ts: c.timespec = .{ .sec = @intCast(ms / 1000), .nsec = @intCast(@as(u64, ms % 1000) * 1_000_000) };
+    _ = c.nanosleep(&ts, null);
+}
+
+/// A file created or replaced for writing, kept open (a recording).
+pub const OutFile = struct {
+    h: if (is_windows) win32.HANDLE else c.fd_t,
+
+    pub fn create(path: [:0]const u8) ?OutFile
+    {
+        if (is_windows)
+        {
+            return .{ .h = win32.openFile(path, win32.GENERIC_WRITE, win32.CREATE_ALWAYS) orelse return null };
+        }
+        const fd = c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(c.mode_t, 0o644));
+        return if (fd < 0) null else .{ .h = fd };
+    }
+
+    /// Writes all of `bytes`; false if the file refused some.
+    pub fn write(self: OutFile, bytes: []const u8) bool
+    {
+        var off: usize = 0;
+        while (off < bytes.len)
+        {
+            if (is_windows)
+            {
+                var n: win32.DWORD = 0;
+                const len: win32.DWORD = @intCast(@min(bytes.len - off, 1 << 30));
+                if (win32.WriteFile(self.h, bytes[off..].ptr, len, &n, null) == 0 or n == 0)
+                {
+                    return false;
+                }
+                off += n;
+                continue;
+            }
+            const n = c.write(self.h, bytes[off..].ptr, bytes.len - off);
+            if (n <= 0)
+            {
+                return false;
+            }
+            off += @intCast(n);
+        }
+        return true;
+    }
+
+    pub fn close(self: OutFile) void
+    {
+        if (is_windows)
+        {
+            _ = win32.CloseHandle(self.h);
+            return;
+        }
+        _ = c.close(self.h);
+    }
+};
+
 /// Resident memory of this process in bytes, or 0 if it cannot be read.
 pub fn rssBytes() u64
 {

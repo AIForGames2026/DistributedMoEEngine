@@ -81,6 +81,7 @@ test {
     _ = @import("openai.zig");
     _ = @import("completion.zig");
     _ = @import("telemetry.zig");
+    _ = @import("sock.zig");
     _ = @import("safetensors.zig");
     _ = @import("loader.zig");
     _ = @import("olmoe.zig");

@@ -205,7 +205,7 @@ Windows has no `fork`, so in `shm` mode each program starts a copy of itself for
 
 **GPU:** `.\build.ps1 -Gpu` builds `olmoe.exe` with CUDA. It needs the CUDA toolkit (13.1 checked; `CUDA_PATH` names it) and Visual Studio's C++ tools, whose `cl.exe` nvcc uses to compile the kernels. CUDA 13.1 takes MSVC up to 19.49, so the script picks the newest 14.4x toolset (Visual Studio 2022), not Visual Studio 2026's 14.5x. The engine links `nvcuda.dll` through an import library built from `csrc/cuda/nvcuda.def`, since the toolkit's `cuda.lib` asks for MSVC's runtime libraries. By hand: `zig build olmoe -Dtarget=x86_64-windows-gnu -Dgpu=true -Dccbin="<folder of cl.exe>"`.
 
-Still Linux only: RDMA, the tracker, the dashboard and node agent, `--serve` and `--record`, the NVMe KV tier and saved prefixes, and the toolchain gate.
+`--serve` (with the built-in page and its live feed) and `--record` work as on Linux. Still Linux only: RDMA, the tracker, the dashboard and node agent, the NVMe KV tier and saved prefixes, and the toolchain gate.
 
 ## Lab machine access
 

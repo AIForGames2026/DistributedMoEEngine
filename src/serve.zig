@@ -1,4 +1,4 @@
-//! The HTTP server behind `olmoe ... --serve [IP:]PORT` (TASK-30). Linux.
+//! The HTTP server behind `olmoe ... --serve [IP:]PORT` (TASK-30), on Linux and Windows (TASK-40, `sock.zig`).
 //!
 //! A front thread accepts connections, reads each request, and answers
 //! everything but chat completions itself. Chat requests pass through a pipe
@@ -13,7 +13,8 @@
 //!   GET  /                      the built-in chat page with the live diagram
 //!   GET  /telemetry             its WebSocket feed (TASK-16b)
 const std = @import("std");
-const c = std.c;
+const sock = @import("sock.zig");
+const plat = @import("plat.zig");
 const http = @import("http.zig");
 const openai = @import("openai.zig");
 const chat = @import("chat.zig");
@@ -44,29 +45,25 @@ const max_body = 8 << 20;
 
 /// A chat request handed from the front thread to the engine thread.
 const Job = struct {
-    fd: c.fd_t,
+    fd: sock.Fd,
     arena: std.heap.ArenaAllocator,
     req: openai.Request,
 };
 
 const Shared = struct {
     opts: Options,
-    listen_fd: c.fd_t,
-    pipe_w: c.fd_t,
+    listen_fd: sock.Fd,
+    pipe: sock.Pipe,
     waiting: std.atomic.Value(usize) = .init(0),
 };
 
 /// Serves until the process is stopped or the engine fails.
 pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokenizer.Tokenizer, prompts: *const chat.Chat, opts: Options) !void {
-    const lfd = try listenOn(opts.addr, opts.port);
-    defer _ = c.close(lfd);
-    var fds: [2]c.fd_t = undefined;
-    if (c.pipe(&fds) != 0)
-    {
-        return error.SystemResources;
-    }
-    defer _ = c.close(fds[0]);
-    var shared: Shared = .{ .opts = opts, .listen_fd = lfd, .pipe_w = fds[1] };
+    const lfd = try sock.listenTcp(opts.addr, opts.port, 16);
+    defer sock.close(lfd);
+    const pipe = try sock.Pipe.open();
+    defer sock.close(pipe.read_end);
+    var shared: Shared = .{ .opts = opts, .listen_fd = lfd, .pipe = pipe };
     if (opts.live) |b|
     {
         try b.start();
@@ -88,15 +85,14 @@ pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokeni
     while (true)
     {
         var ptr: usize = 0;
-        const n = c.read(fds[0], @ptrCast(&ptr), @sizeOf(usize));
-        if (n != @sizeOf(usize))
+        if (!pipe.take(std.mem.asBytes(&ptr)))
         {
             return error.FrontStopped;
         }
         const job: *Job = @ptrFromInt(ptr);
         count += 1;
         const result = answer(gpa, engine, &session, tok, prompts, &shared, job, count);
-        _ = c.close(job.fd);
+        sock.close(job.fd);
         job.arena.deinit();
         std.heap.c_allocator.destroy(job);
         _ = shared.waiting.fetchSub(1, .acq_rel);
@@ -111,50 +107,22 @@ pub fn run(gpa: std.mem.Allocator, engine: completion.Engine, tok: *const tokeni
     }
 }
 
-fn listenOn(addr: u32, port: u16) !c.fd_t {
-    const fd = c.socket(c.AF.INET, c.SOCK.STREAM | c.SOCK.CLOEXEC, 0);
-    if (fd < 0)
-    {
-        return error.SystemResources;
-    }
-    errdefer _ = c.close(fd);
-    const one: c_int = 1;
-    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &one, @sizeOf(c_int));
-    var sa: c.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = addr };
-    if (c.bind(fd, @ptrCast(&sa), @sizeOf(c.sockaddr.in)) != 0)
-    {
-        return error.AddressInUse;
-    }
-    if (c.listen(fd, 16) != 0)
-    {
-        return error.SystemResources;
-    }
-    return fd;
-}
-
 fn frontLoop(shared: *Shared) void {
     while (true)
     {
-        const fd = c.accept(shared.listen_fd, null, null);
-        if (fd < 0)
-        {
-            continue;
-        }
+        const fd = sock.accept(shared.listen_fd) orelse continue;
         // A slow or silent client gives up its turn instead of holding the server.
-        const rcv: c.timeval = .{ .sec = 10, .usec = 0 };
-        const snd: c.timeval = .{ .sec = 30, .usec = 0 };
-        _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.RCVTIMEO, std.mem.asBytes(&rcv), @sizeOf(c.timeval));
-        _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.SNDTIMEO, std.mem.asBytes(&snd), @sizeOf(c.timeval));
+        sock.setTimeouts(fd, 10, 30);
         const handed = route(shared, fd) catch false;
         if (!handed)
         {
-            _ = c.close(fd);
+            sock.close(fd);
         }
     }
 }
 
 /// Reads and answers one request; true if it went to the engine thread, which then owns `fd`.
-fn route(shared: *Shared, fd: c.fd_t) !bool {
+fn route(shared: *Shared, fd: sock.Fd) !bool {
     const gpa = std.heap.c_allocator;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     var handed = false;
@@ -201,7 +169,7 @@ fn route(shared: *Shared, fd: c.fd_t) !bool {
             },
         }
         try buf.ensureUnusedCapacity(a, 64 << 10);
-        const n = c.recv(fd, buf.unusedCapacitySlice().ptr, buf.unusedCapacitySlice().len, 0);
+        const n = sock.recv(fd, buf.unusedCapacitySlice());
         if (n <= 0)
         {
             return false;
@@ -266,7 +234,7 @@ fn route(shared: *Shared, fd: c.fd_t) !bool {
     job.* = .{ .fd = fd, .arena = arena, .req = req };
     handed = true;
     const ptr: usize = @intFromPtr(job);
-    if (c.write(shared.pipe_w, @ptrCast(&ptr), @sizeOf(usize)) != @sizeOf(usize))
+    if (!shared.pipe.put(std.mem.asBytes(&ptr)))
     {
         return error.EngineStopped;
     }
@@ -274,7 +242,7 @@ fn route(shared: *Shared, fd: c.fd_t) !bool {
 }
 
 /// Finishes the WebSocket handshake and gives the socket to the broadcaster.
-fn upgrade(fd: c.fd_t, head: http.Head, live: *telemetry.Broadcaster) !bool {
+fn upgrade(fd: sock.Fd, head: http.Head, live: *telemetry.Broadcaster) !bool {
     const key = head.websocket_key orelse {
         try sendError(fd, 400, "Connect with a WebSocket.", "invalid_request_error", null);
         return false;
@@ -425,7 +393,7 @@ fn answer(gpa: std.mem.Allocator, engine: completion.Engine, session: *completio
 
 /// Where reply text goes: straight to the socket as events when streaming, else collected.
 const Out = struct {
-    fd: c.fd_t,
+    fd: sock.Fd,
     a: std.mem.Allocator,
     ids: openai.Ids,
     stream: bool,
@@ -464,25 +432,14 @@ const Out = struct {
 };
 
 fn unixTime() i64 {
-    var ts: c.timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK.REALTIME, &ts);
-    return @intCast(ts.sec);
+    return plat.unixNow();
 }
 
-fn sendAll(fd: c.fd_t, bytes: []const u8) !void {
-    var off: usize = 0;
-    while (off < bytes.len)
-    {
-        const n = c.send(fd, bytes[off..].ptr, bytes.len - off, c.MSG.NOSIGNAL);
-        if (n <= 0)
-        {
-            return error.ClientGone;
-        }
-        off += @intCast(n);
-    }
+fn sendAll(fd: sock.Fd, bytes: []const u8) !void {
+    return sock.sendAll(fd, bytes);
 }
 
-fn sendBody(fd: c.fd_t, status: u16, content_type: []const u8, body: []const u8) !void {
+fn sendBody(fd: sock.Fd, status: u16, content_type: []const u8, body: []const u8) !void {
     const gpa = std.heap.c_allocator;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
@@ -491,7 +448,7 @@ fn sendBody(fd: c.fd_t, status: u16, content_type: []const u8, body: []const u8)
     try sendAll(fd, out.items);
 }
 
-fn sendError(fd: c.fd_t, status: u16, message: []const u8, kind: []const u8, param: ?[]const u8) !void {
+fn sendError(fd: sock.Fd, status: u16, message: []const u8, kind: []const u8, param: ?[]const u8) !void {
     const gpa = std.heap.c_allocator;
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(gpa);

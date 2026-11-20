@@ -1,6 +1,6 @@
-# Native Windows engine: one process, split modes and GPU (2026-11-20)
+# Native Windows engine (2026-11-20)
 
-TASK-40. `olmoe.exe` built and run on Windows itself, without WSL2. The first step covers model loading and the one-process mode on the CPU, the second the split modes (`shm`, and `expert` and `router` over TCP), and the third the GPU. The server comes next.
+TASK-40. `olmoe.exe` built and run on Windows itself, without WSL2. Four steps, each below: model loading and the one-process mode on the CPU, the split modes (`shm`, and `expert` and `router` over TCP), the GPU, and the server with its live feed. Together they meet the task's acceptance criteria.
 
 ## Machine
 
@@ -13,7 +13,7 @@ TASK-40. `olmoe.exe` built and run on Windows itself, without WSL2. The first st
 - **Reader:** `csrc/io/win_reader.c` implements `tf_io.h` with `FILE_FLAG_NO_BUFFERING` and up to 16 overlapped `ReadFile` calls in flight. The alignment is the volume's sector size, at least 4096. `build.zig` uses it in place of the io_uring reader on Windows, for `olmoe` and `tfload`.
 - **Files and process calls:** `model_file.zig` opens and reads files with Win32. `src/plat.zig` holds what `olmoe_run.zig` called through libc: environment variables, the clock, the host name, file writes, and resident memory.
 - **Threads:** the CPU thread pool (`pool.zig`) only had pthreads, so on Windows every matmul ran on one thread. It now uses SRW locks and condition variables there.
-- **Not on Windows yet:** `--serve` and `--record`, `rdma` and the tracker, `dashboard` and `node`, `--kv-offload` and `--prefix-cache`. Each stops with a message.
+- **Not on Windows:** `rdma` and the tracker, `dashboard` and `node`, `--kv-offload` and `--prefix-cache`. Each stops with a message.
 
 ## Results
 
@@ -81,3 +81,20 @@ All runs use `olmoe_generate.tfref --generate 64 --payload f32`. fp8 and bf16 pa
 
 - **Qwen3-30B-A3B:** 32.5 GB, copied from WSL2 to `D:\models\qwen3-30b-a3b` (WD_BLACK SN7100). 3,000 slots (15.1 GB) hold about half of its 6,144 experts. The run loaded 20.6 GB at about 3 ms per expert (5 MB each); OLMoE's 6.7 MB experts took 90 ms each from the hard drive. As on Linux, a discrete GPU leaves cached experts on the CPU (only GB10's shared memory maps them), and the run reports the unmapped calls.
 - **Linux:** on `gx10-02`, `-Drdma=true -Dgpu=true` builds `olmoe` and `attbench`, every test step succeeds, and OLMoE's GPU generate check passes (102 to 105 tokens/s). WSL2's CPU build and tests pass.
+
+## Server (fourth step)
+
+- **Sockets:** `src/sock.zig` is the one socket layer for `serve.zig` and the broadcaster in `telemetry.zig`. On Linux it makes the calls those files made before. On Windows it uses Winsock:
+  - a loopback socket pair replaces each pipe between threads, because `WSAPoll` waits on sockets only;
+  - viewers' sockets are switched to non-blocking, because Winsock has no `MSG_DONTWAIT`;
+  - timeouts are given in milliseconds, and `SO_REUSEADDR` is left off, since on Windows it lets another socket take the port.
+- **Recording:** written through `plat.OutFile`.
+- **Model id:** the hello and saved-prefix fingerprint now take the file name with `std.fs.path.basename`, so a Windows path loses its folders too.
+
+| Check | Windows (native, `--gpu`) | Linux (WSL2, CPU) |
+|---|---|---|
+| `check_serve.py requests` | PASS: 4 conversations agree over curl and `openai`, streamed and not; about 110 tokens/s | PASS (16 tokens each) |
+| `check_serve.py compare` | PASS: all 4 match `olmoe local --context --tokens --save` | not run |
+| Built-in page, one chat | the reply streams and both diagrams run: 122 frames, 0 dropped, no console errors | 40 frames, 0 dropped, call count matches the engine's |
+| `--record`, `olmoe_generate.tfref --generate 16` | 51 steps, 0 dropped; every line parses (hello, 51 steps, end) | `gx10-02`: 51 steps, 0 dropped |
+| Unit tests | 118 pass, none skipped (the broadcaster test and a new `sock.zig` test now run here) | 135 pass (WSL2 and `gx10-02` with RDMA and GPU) |

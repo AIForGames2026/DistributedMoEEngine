@@ -21,6 +21,8 @@
 //! server (`chat`, `text`, `done`), each with `after`, the seq of the step
 //! before it, and a closing {"t":"end", after, steps, dropped, ms}.
 const std = @import("std");
+const sock = @import("sock.zig");
+const plat = @import("plat.zig");
 const olmoe = @import("olmoe.zig");
 
 /// The most processes a run has (TASK-33), as the transport's 6-bit rank allows.
@@ -523,7 +525,7 @@ fn us(ns: u64) f64
 }
 
 /// Sends the feed to every connected viewer, and to the recording if there
-/// is one, from its own thread. Linux.
+/// is one, from its own thread. Linux and Windows (`sock.zig`).
 pub const Broadcaster = struct {
     gpa: std.mem.Allocator,
     feed: *Feed,
@@ -531,13 +533,13 @@ pub const Broadcaster = struct {
     top_k: usize,
     clock: *const fn () u64,
     /// The front thread writes each new viewer's socket here.
-    pipe: [2]std.c.fd_t = .{ -1, -1 },
+    pipe: ?sock.Pipe = null,
     viewers: std.ArrayList(Viewer) = .empty,
     json: std.ArrayList(u8) = .empty,
     frame: std.ArrayList(u8) = .empty,
     /// Set by `record`; the recording counts as a viewer that never falls behind.
     recording: bool = false,
-    rec_fd: std.c.fd_t = -1,
+    rec_file: ?plat.OutFile = null,
     rec: std.ArrayList(u8) = .empty,
     /// Notes from the engine thread, then held until the steps before them are written.
     notes: std.ArrayList(Note) = .empty,
@@ -561,7 +563,7 @@ pub const Broadcaster = struct {
     const kernel_buffer: c_int = 128 << 10;
 
     const Viewer = struct {
-        fd: std.c.fd_t,
+        fd: sock.Fd,
         out: std.ArrayList(u8) = .empty,
         sent: usize = 0,
         in: std.ArrayList(u8) = .empty,
@@ -572,14 +574,11 @@ pub const Broadcaster = struct {
 
     pub fn start(self: *Broadcaster) !void
     {
-        if (self.pipe[0] >= 0)
+        if (self.pipe != null)
         {
             return;
         }
-        if (std.c.pipe(&self.pipe) != 0)
-        {
-            return error.SystemResources;
-        }
+        self.pipe = try sock.Pipe.open();
         const t = try std.Thread.spawn(.{}, loop, .{self});
         t.detach();
     }
@@ -587,12 +586,7 @@ pub const Broadcaster = struct {
     /// Writes every step to `path` from now on, starting with the hello. Call before `start`.
     pub fn record(self: *Broadcaster, path: [:0]const u8, unix: i64) !void
     {
-        const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
-        if (fd < 0)
-        {
-            return error.CannotRecord;
-        }
-        self.rec_fd = fd;
+        self.rec_file = plat.OutFile.create(path) orelse return error.CannotRecord;
         try writeHello(self.gpa, &self.rec, self.topo, self.feed.layers, self.feed.experts, self.top_k, self.clock(), unix);
         try self.rec.append(self.gpa, '\n');
         self.recording = true;
@@ -623,8 +617,7 @@ pub const Broadcaster = struct {
         self.stopping.store(true, .release);
         while (!self.stopped.load(.acquire))
         {
-            const ts: std.c.timespec = .{ .sec = 0, .nsec = 1_000_000 };
-            _ = std.c.nanosleep(&ts, null);
+            plat.sleepMs(1);
         }
     }
 
@@ -642,37 +635,38 @@ pub const Broadcaster = struct {
     }
 
     /// Hands over a socket that has finished the WebSocket handshake.
-    pub fn add(self: *Broadcaster, fd: std.c.fd_t) bool
+    pub fn add(self: *Broadcaster, fd: sock.Fd) bool
     {
-        return std.c.write(self.pipe[1], std.mem.asBytes(&fd), @sizeOf(std.c.fd_t)) == @sizeOf(std.c.fd_t);
+        return self.pipe.?.put(std.mem.asBytes(&fd));
     }
 
     fn loop(self: *Broadcaster) void
     {
-        var fds: std.ArrayList(std.c.pollfd) = .empty;
+        var fds: std.ArrayList(sock.PollFd) = .empty;
+        const pipe = self.pipe.?;
         while (true)
         {
             fds.clearRetainingCapacity();
-            fds.append(self.gpa, .{ .fd = self.pipe[0], .events = std.c.POLL.IN, .revents = 0 }) catch return;
+            fds.append(self.gpa, .{ .fd = pipe.read_end, .events = sock.POLL_IN, .revents = 0 }) catch return;
             for (self.viewers.items) |*v|
             {
-                const want_out: i16 = if (v.out.items.len > v.sent) std.c.POLL.OUT else 0;
-                fds.append(self.gpa, .{ .fd = v.fd, .events = std.c.POLL.IN | want_out, .revents = 0 }) catch return;
+                const want_out: i16 = if (v.out.items.len > v.sent) sock.POLL_OUT else 0;
+                fds.append(self.gpa, .{ .fd = v.fd, .events = sock.POLL_IN | want_out, .revents = 0 }) catch return;
             }
-            _ = std.c.poll(fds.items.ptr, @intCast(fds.items.len), 10);
+            _ = sock.poll(fds.items, 10);
             // Read before draining, so every step the engine published before stopping is written.
             const stop = self.recording and self.stopping.load(.acquire);
             for (fds.items[1..], self.viewers.items) |p, *v|
             {
-                if (p.revents & (std.c.POLL.IN | std.c.POLL.HUP | std.c.POLL.ERR) != 0)
+                if (p.revents & (sock.POLL_IN | sock.POLL_HUP | sock.POLL_ERR) != 0)
                 {
                     self.readFrom(v);
                 }
             }
-            if (fds.items[0].revents & std.c.POLL.IN != 0)
+            if (fds.items[0].revents & sock.POLL_IN != 0)
             {
-                var fd: std.c.fd_t = -1;
-                if (std.c.read(self.pipe[0], std.mem.asBytes(&fd), @sizeOf(std.c.fd_t)) == @sizeOf(std.c.fd_t))
+                var fd: sock.Fd = sock.invalid;
+                if (pipe.take(std.mem.asBytes(&fd)))
                 {
                     self.welcome(fd);
                 }
@@ -701,7 +695,7 @@ pub const Broadcaster = struct {
                     i += 1;
                     continue;
                 }
-                _ = std.c.close(v.fd);
+                sock.close(v.fd);
                 v.out.deinit(self.gpa);
                 v.in.deinit(self.gpa);
                 _ = self.viewers.swapRemove(i);
@@ -710,16 +704,17 @@ pub const Broadcaster = struct {
         }
     }
 
-    fn welcome(self: *Broadcaster, fd: std.c.fd_t) void
+    fn welcome(self: *Broadcaster, fd: sock.Fd) void
     {
         self.json.clearRetainingCapacity();
         var v: Viewer = .{ .fd = fd };
-        _ = std.c.setsockopt(fd, std.c.SOL.SOCKET, std.c.SO.SNDBUF, std.mem.asBytes(&kernel_buffer), @sizeOf(c_int));
+        sock.setSendBuffer(fd, kernel_buffer);
+        sock.setNonBlocking(fd);
         writeHello(self.gpa, &self.json, self.topo, self.feed.layers, self.feed.experts, self.top_k, self.clock(), null) catch return;
         appendFrame(self.gpa, &v.out, 0x1, self.json.items) catch return;
         self.viewers.append(self.gpa, v) catch
         {
-            _ = std.c.close(fd);
+            sock.close(fd);
             return;
         };
         _ = self.feed.viewers.fetchAdd(1, .monotonic);
@@ -808,18 +803,14 @@ pub const Broadcaster = struct {
 
     fn writeRecording(self: *Broadcaster) void
     {
-        var off: usize = 0;
-        while (off < self.rec.items.len and self.rec_fd >= 0)
+        if (self.rec_file) |f|
         {
-            const n = std.c.write(self.rec_fd, self.rec.items[off..].ptr, self.rec.items.len - off);
-            if (n <= 0)
+            if (!f.write(self.rec.items))
             {
                 std.debug.print("telemetry: writing the recording failed; it stops here\n", .{});
-                _ = std.c.close(self.rec_fd);
-                self.rec_fd = -1;
-                break;
+                f.close();
+                self.rec_file = null;
             }
-            off += @intCast(n);
         }
         self.rec.clearRetainingCapacity();
     }
@@ -831,10 +822,10 @@ pub const Broadcaster = struct {
             self.last_seq, self.steps_written, self.feed.dropped.load(.monotonic), ms(self.clock()),
         }) catch {};
         self.writeRecording();
-        if (self.rec_fd >= 0)
+        if (self.rec_file) |f|
         {
-            _ = std.c.close(self.rec_fd);
-            self.rec_fd = -1;
+            f.close();
+            self.rec_file = null;
         }
         self.recording = false;
     }
@@ -844,19 +835,15 @@ pub const Broadcaster = struct {
         _ = self;
         while (v.sent < v.out.items.len)
         {
-            const rest = v.out.items[v.sent..];
-            const n = std.c.send(v.fd, rest.ptr, rest.len, std.c.MSG.DONTWAIT | std.c.MSG.NOSIGNAL);
-            if (n > 0)
+            switch (sock.sendNow(v.fd, v.out.items[v.sent..]))
             {
-                v.sent += @intCast(n);
-                continue;
+                .done => |n| v.sent += n,
+                .would_block => break,
+                .failed => {
+                    v.closed = true;
+                    return;
+                },
             }
-            if (n < 0 and std.c._errno().* == @intFromEnum(std.c.E.AGAIN))
-            {
-                break;
-            }
-            v.closed = true;
-            return;
         }
         if (v.sent == v.out.items.len)
         {
@@ -869,17 +856,18 @@ pub const Broadcaster = struct {
     fn readFrom(self: *Broadcaster, v: *Viewer) void
     {
         var buf: [4096]u8 = undefined;
-        const n = std.c.recv(v.fd, &buf, buf.len, std.c.MSG.DONTWAIT);
-        if (n == 0 or (n < 0 and std.c._errno().* != @intFromEnum(std.c.E.AGAIN)))
+        const n = switch (sock.recvNow(v.fd, &buf))
+        {
+            .done => |n| n,
+            .would_block => return,
+            .failed => 0,
+        };
+        if (n == 0)
         {
             v.closed = true;
             return;
         }
-        if (n < 0)
-        {
-            return;
-        }
-        v.in.appendSlice(self.gpa, buf[0..@intCast(n)]) catch
+        v.in.appendSlice(self.gpa, buf[0..n]) catch
         {
             v.closed = true;
             return;
@@ -1058,11 +1046,6 @@ test "the tap records cache statuses and hints only while someone watches" {
 }
 
 test "a recording places each note after the steps published before it" {
-    // The broadcaster is Linux only.
-    if (comptime @import("builtin").os.tag == .windows)
-    {
-        return error.SkipZigTest;
-    }
     const gpa = std.testing.allocator;
     const Fake = struct {
         fn run(_: *anyopaque, _: usize, _: []const f32, _: usize, _: []const u32, _: []const f32, _: []f32) anyerror!void

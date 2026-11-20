@@ -161,7 +161,7 @@ main.single { grid-template-columns: minmax(0, 1fr); max-width: 760px; }
         <label>Expert cache slots
           <input id="cache" type="number" min="0" value="0" title="0 loads every expert; more streams experts from the drive into this many slots">
         </label>
-        <label class="check"><input id="gpu" type="checkbox"> GPU (CUDA build)</label>
+        <label class="check" id="gpulabel"><input id="gpu" type="checkbox"> GPU (CUDA)</label>
         <label class="check"><input id="reuse" type="checkbox" checked> Reuse prompt prefixes</label>
       </div>
       <div class="row">
@@ -221,6 +221,7 @@ main.single { grid-template-columns: minmax(0, 1fr); max-width: 760px; }
       </label>
       <label class="check wide"><input id="s-open" type="checkbox"> Let other machines open this page (plain HTTP: private networks only)</label>
       <label class="check wide"><input id="s-key" type="checkbox"> Require an API key for <span class="mono">/v1</span></label>
+      <label class="check wide" id="gpurow"><input id="s-gpu" type="checkbox"> Load models on the GPU by default (CUDA engine)</label>
       <label>Page port<input id="s-port" type="number" min="1024" max="65535"></label>
       <label>Node agent port<input id="s-node-port" type="number" min="1024" max="65535"></label>
       <label>Router port<input id="s-router-port" type="number" min="1024" max="65535"></label>

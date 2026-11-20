@@ -280,6 +280,12 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
             .optimize = optimize,
         });
         launcher_mod.addWin32ResourceFile(.{ .file = b.path("res/windows/launcher.rc") });
+        // The release it compares with GitHub's newest (TASK-45); git's latest v tag, unless given.
+        const version = b.option([]const u8, "version", "Release version for the launcher's update check (default: git describe of the latest v tag)") orelse
+            std.mem.trimStart(u8, std.mem.trim(u8, b.runAllowFail(&.{ "git", "describe", "--tags", "--match", "v[0-9]*" }, &git_code, .ignore) catch "0.0.0", " \r\n"), "v");
+        const launcher_options = b.addOptions();
+        launcher_options.addOption([]const u8, "version", version);
+        launcher_mod.addOptions("build_options", launcher_options);
         const launcher = b.addExecutable(.{ .name = "tfswarm-operator", .root_module = launcher_mod });
         launcher.subsystem = .windows;
         olmoe_step.dependOn(&b.addInstallArtifact(launcher, .{}).step);

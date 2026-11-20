@@ -20,9 +20,9 @@ Run AI models too big for one machine across a small cluster of NVIDIA DGX Spark
 3. Install Zig 0.17.0 (no sudo): `bash tools/setup/install-zig.sh && export PATH="$HOME/tools/zig:$PATH"`
 4. Build: `zig build install -Doptimize=ReleaseFast`
 
-**Windows 11:** in PowerShell at the repo root, run `.\build.ps1` (it installs Zig if needed; add `-Gpu` for CUDA).
+**Windows 11:** in PowerShell at the repo root, run `.\build.ps1` (it installs Zig if needed; add `-Gpu` for CUDA, or `-Installer` for the installer).
 
-Prefer not to build? [Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) has binaries, each with a SHA-256 checksum.
+Prefer not to build? [Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases) has binaries, each with a SHA-256 checksum, and the Windows installer.
 
 ## Run
 
@@ -37,12 +37,12 @@ Run a model across several machines from one page.
 
 **Windows:**
 
-1. Double-click `tfswarm-operator.exe` (next to `tfswarm.exe`).
+1. Run `TFSwarm-Setup-<version>.exe` from [Releases](https://github.com/AIForGames2026/DistributedMoEEngine/releases), pick CUDA or CPU, and start TFSwarm.
 2. On the setup page, choose "Host the dashboard" or "Join a dashboard" and pick your models folder.
 3. To join, paste the node secret from the dashboard's Settings ("Copy node secret").
 4. On the dashboard, approve each joined PC, tick it under Model, and press Load.
 
-Click the tray icon to reopen the dashboard; its menu has Settings, the admin token, logs and Quit.
+Click the tray icon to reopen the dashboard; its menu has Settings, the admin token, logs, updates and Quit. Uninstall from Windows Settings, Apps. From a build, double-click `zig-out\bin\tfswarm-operator.exe` instead of step 1.
 
 **Linux:**
 

@@ -116,6 +116,8 @@ function fillSettings(s) {
   $("s-node-port").value = d.node_port;
   $("s-router-port").value = d.router_port;
   $("s-expert-port").value = d.expert_port;
+  $("s-gpu").checked = s.gpu_build && d.gpu !== false;
+  $("gpurow").title = s.gpu_build ? "" : "This PC has the CPU engine; reinstall TFSwarm with the CUDA engine to use the GPU.";
   $("apikeyrow").hidden = !s.api_key;
   $("settingsfile").textContent = s.file || "";
   const managed = s.file != null;
@@ -123,6 +125,7 @@ function fillSettings(s) {
   for (const e of document.querySelectorAll("#settingsview .form input, #savesettings")) {
     e.disabled = !managed;
   }
+  $("s-gpu").disabled = !managed || !s.gpu_build;
   $("restartbar").hidden = !(managed && s.restart_needed);
 }
 
@@ -166,6 +169,7 @@ $("savesettings").addEventListener("click", async () => {
       node_port: Number($("s-node-port").value),
       router_port: Number($("s-router-port").value),
       expert_port: Number($("s-expert-port").value),
+      gpu: $("s-gpu").checked,
     });
     fillSettings(s);
     $("settingsmsg").textContent = "Saved. The models folder and the API key apply now.";
@@ -338,8 +342,15 @@ function renderModelForm(s) {
     $("cache").value = st.cache;
     $("gpu").checked = st.gpu;
     $("reuse").checked = st.reuse;
+  } else if (!$("ctx").dataset.init) {
+    $("gpu").checked = s.gpu_default;
   }
   $("ctx").dataset.init = "1";
+  $("gpu").disabled = !s.gpu_build;
+  if (!s.gpu_build) {
+    $("gpu").checked = false;
+  }
+  $("gpulabel").title = s.gpu_build ? "" : "This PC has the CPU engine; reinstall TFSwarm with the CUDA engine to use the GPU.";
 }
 
 function renderPicks(usable, checked) {

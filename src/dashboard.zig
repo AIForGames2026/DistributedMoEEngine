@@ -46,6 +46,7 @@ const proc = @import("proc.zig");
 const tcp = @import("transport/tcp.zig");
 const node_agent = @import("node_agent.zig");
 const settings_file = @import("settings.zig");
+const build_options = @import("build_options");
 
 const page_html = @embedFile("dashboard.html");
 const page_js = @embedFile("dashboard.js");
@@ -72,6 +73,8 @@ const Options = struct {
     expert_port: u16 = 47401,
     log_dir: []const u8 = "dashboard-logs",
     settings_path: ?[]const u8 = null,
+    /// Whether the Load form starts with the GPU ticked; null follows the engine build.
+    gpu: ?bool = null,
 };
 
 const loopback: u32 = @bitCast([4]u8{ 127, 0, 0, 1 });
@@ -368,6 +371,7 @@ fn applySettings(gpa: std.mem.Allocator, opts: *Options, path: []const u8) !void
     opts.nodes_file = try settings_file.beside(gpa, path, "dashboard.nodes");
     opts.log_dir = try settings_file.beside(gpa, path, "dashboard-logs");
     opts.api_key_file = if (d.api_key) try settings_file.beside(gpa, path, "api.key") else null;
+    opts.gpu = d.gpu;
 }
 
 fn listenOn(addr: u32, port: u16) !sock.Fd
@@ -861,6 +865,7 @@ fn settingsJson(a: std.mem.Allocator) ![]const u8
         .router_port = live.router_port,
         .expert_port = live.expert_port,
         .api_key = key != null,
+        .gpu = live.gpu,
     };
     if (live.settings_path) |p|
     {
@@ -882,7 +887,7 @@ fn settingsJson(a: std.mem.Allocator) ![]const u8
     {
         try out.appendSlice(a, "null");
     }
-    try out.print(a, ",\"restart_needed\":{},\"dashboard\":{f},\"admin_token\":", .{ restart, std.json.fmt(d, .{}) });
+    try out.print(a, ",\"restart_needed\":{},\"gpu_build\":{},\"dashboard\":{f},\"admin_token\":", .{ restart, build_options.gpu, std.json.fmt(d, .{}) });
     try proc.jsonString(a, &out, admin_token);
     try out.appendSlice(a, ",\"node_secret\":");
     try proc.jsonString(a, &out, node_secret);
@@ -948,6 +953,7 @@ fn saveSettings(a: std.mem.Allocator, fd: sock.Fd, body: []const u8) !void
     }
     state.lock();
     opts_global.models = models;
+    opts_global.gpu = d.gpu;
     api_key = key;
     state.unlock();
     std.debug.print("dashboard: settings saved to {s}\n", .{path});
@@ -1293,6 +1299,7 @@ fn stateJson(a: std.mem.Allocator) ![]const u8
     state.lock();
     const models_dir = opts_global.models;
     const keyed = api_key != null;
+    const gpu_default = build_options.gpu and (opts_global.gpu orelse true);
     state.unlock();
     try out.appendSlice(a, "{\"local\":{\"name\":");
     try proc.jsonString(a, &out, proc.hostName(&host_buf));
@@ -1322,7 +1329,7 @@ fn stateJson(a: std.mem.Allocator) ![]const u8
     }
     try out.appendSlice(a, "],\"models_dir\":");
     try proc.jsonString(a, &out, models_dir);
-    try out.print(a, "}},\"managed\":{},\"api_key\":{},\"node_port\":{d},\"nodes\":[", .{ opts_global.settings_path != null, keyed, opts_global.node_port });
+    try out.print(a, "}},\"managed\":{},\"api_key\":{},\"gpu_build\":{},\"gpu_default\":{},\"node_port\":{d},\"nodes\":[", .{ opts_global.settings_path != null, keyed, build_options.gpu, gpu_default, opts_global.node_port });
     const router_log = try std.fmt.allocPrint(a, "{s}/router.log", .{opts_global.log_dir});
     state.lock();
     {

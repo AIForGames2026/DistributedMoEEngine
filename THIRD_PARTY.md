@@ -37,3 +37,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Inno Setup, Inno Setup License
+
+The Windows installer, `TFSwarm-Setup-VERSION.exe` (TASK-45), is built with [Inno Setup](https://jrsoftware.org/isinfo.php) from `installer/tfswarm.iss`. Its setup and uninstall programs are Inno Setup's, copyright Jordan Russell and Martijn Laan, under the [Inno Setup License](https://jrsoftware.org/files/is/license.txt). They are separate programs from the engine and launcher they install.

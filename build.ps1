@@ -5,6 +5,9 @@
 #   .\build.ps1             build, run the unit tests, run the PoC checks
 #   .\build.ps1 -SkipChecks build and unit-test only
 #   .\build.ps1 -Package    also zip bin\ for GitHub Releases into dist\
+#   .\build.ps1 -Installer  also build dist\TFSwarm-Setup-VERSION.exe (TASK-45) with a CPU and a
+#                           CUDA engine; needs Inno Setup 6 or 7, and what -Gpu needs.
+#                           -AppVersion 1.2.3 names the release (default: git describe)
 #   .\build.ps1 -Model M.gguf -Golden G.tfref   also run tfswarm's golden check, local and shm
 #   .\build.ps1 -Gpu        build tfswarm.exe with CUDA (needs the CUDA toolkit and Visual
 #                           Studio's C++ tools, whose cl.exe nvcc uses) and check its kernels
@@ -19,6 +22,8 @@ param(
     [switch]$SkipChecks,
     [switch]$Gpu,
     [switch]$Package,
+    [switch]$Installer,
+    [string]$AppVersion,
     [string]$Model,
     [string]$Golden,
     [ValidateSet('Debug', 'ReleaseSafe', 'ReleaseFast', 'ReleaseSmall')]
@@ -49,6 +54,17 @@ function Find-ClDir {
         Sort-Object { [version](($_ -split '\\MSVC\\')[1] -split '\\')[0] } -Descending
     if (-not $cls) { throw "-Gpu needs MSVC 14.4x or older (Visual Studio 2022's C++ tools) for nvcc" }
     return Split-Path @($cls)[0]
+}
+
+# Inno Setup's compiler, installed for this user or for everyone.
+function Find-Iscc {
+    $onPath = Get-Command iscc -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    foreach ($dir in "$env:LOCALAPPDATA\Programs\Inno Setup 7", "$env:LOCALAPPDATA\Programs\Inno Setup 6", "$env:ProgramFiles\Inno Setup 7", "${env:ProgramFiles(x86)}\Inno Setup 6") {
+        $exe = Join-Path $dir 'ISCC.exe'
+        if (Test-Path $exe) { return $exe }
+    }
+    throw "-Installer needs Inno Setup (ISCC.exe not found)"
 }
 
 # Native commands write progress to stderr, so only the exit code means failure.
@@ -120,6 +136,24 @@ if ($Package) {
     Write-Host ""
     Write-Host "Packaged $zip"
     Write-Host "SHA-256  $hash"
+}
+
+if ($Installer) {
+    $iscc = Find-Iscc
+    $ver = if ($AppVersion) { $AppVersion } else { (git describe --tags --match 'v[0-9]*') }
+    $ver = "$ver".Trim() -replace '^v', ''
+    $num = if ($ver -match '^(\d+)\.(\d+)\.(\d+)') { "$($Matches[1]).$($Matches[2]).$($Matches[3]).0" } else { '0.0.0.0' }
+    $common = @('-Dtarget=x86_64-windows-gnu', '-Dcpu=x86_64_v2', "-Doptimize=$Optimize", "-Dversion=$ver")
+    $clDir = Find-ClDir
+    Invoke-Step "Installer: CPU engine $ver" { & $zig build tfswarm @common --prefix zig-out\cpu }
+    Invoke-Step "Installer: CUDA engine $ver" { & $zig build tfswarm @common '-Dgpu=true' "-Dccbin=$clDir" --prefix zig-out\cuda }
+    Invoke-Step 'Installer: Inno Setup' {
+        & $iscc /Qp "/DAppVersion=$ver" "/DNumericVersion=$num" "/DCpuBin=$PSScriptRoot\zig-out\cpu\bin" "/DCudaBin=$PSScriptRoot\zig-out\cuda\bin" installer\tfswarm.iss
+    }
+    $setup = Join-Path $PSScriptRoot "dist\TFSwarm-Setup-$ver.exe"
+    Write-Host ""
+    Write-Host "Installer $setup"
+    Write-Host "SHA-256  $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLower())"
 }
 
 Write-Host ""

@@ -1,0 +1,54 @@
+name: Release
+
+# A v* tag builds the Windows installer (TASK-45) and attaches it to that tag's
+# GitHub release, where the tray launcher's update check finds it. Running it
+# by hand builds the installer as an artifact only.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: CUDA toolkit (nvcc, for the CUDA engine)
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: '13.1.0'
+          method: network
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Unit tests, both engines, and the installer
+        shell: powershell
+        run: .\build.ps1 -SkipChecks -Installer -AppVersion "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TFSwarm-Setup
+          path: dist/TFSwarm-Setup-*.exe
+      - name: Attach the installer to the release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $exe = (Get-ChildItem dist\TFSwarm-Setup-*.exe).FullName
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG $exe --clobber
+          } else {
+            gh release create $env:TAG $exe --title "TFSwarm $($env:TAG.TrimStart('v'))" --generate-notes
+          }

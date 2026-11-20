@@ -90,6 +90,7 @@ test {
     _ = @import("auth.zig");
     _ = @import("proc.zig");
     _ = @import("settings.zig");
+    _ = @import("update.zig");
     if (@import("builtin").os.tag == .windows)
     {
         _ = @import("win_child.zig");

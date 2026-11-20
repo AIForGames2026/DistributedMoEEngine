@@ -177,7 +177,7 @@ const Options = struct {
 var proc_heap: budget.Heap = undefined;
 /// The process's start-up state, for starting expert ranks on Windows (TASK-40).
 var proc_init: *const std.process.Init = undefined;
-var heap_label: []const u8 = "olmoe";
+var heap_label: []const u8 = "tfswarm";
 var memory: ?budget.Memory = null;
 
 /// A router's view of the swarm (TASK-09, TASK-33): its tracker link, watching
@@ -318,7 +318,7 @@ pub fn main(init: std.process.Init) !void {
     const is_rdma = std.mem.startsWith(u8, mode, "rdma");
     if (is_windows and (is_rdma or opts.tracker != null))
     {
-        std.debug.print("olmoe {s}: RDMA and the tracker are Linux only; Windows runs local, shm, expert and router over TCP\n", .{mode});
+        std.debug.print("tfswarm {s}: RDMA and the tracker are Linux only; Windows runs local, shm, expert and router over TCP\n", .{mode});
         std.process.exit(2);
     }
     if (is_rdma and !build_options.rdma) {

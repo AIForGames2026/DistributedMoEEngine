@@ -18,6 +18,8 @@ pub const Dashboard = struct {
     expert_port: u16 = 47401,
     /// Whether `/v1` needs the API key in `api.key`.
     api_key: bool = false,
+    /// Whether the Load form starts with the GPU ticked; null follows the engine (on for the CUDA build).
+    gpu: ?bool = null,
 };
 
 pub const Node = struct {
@@ -35,6 +37,8 @@ pub const Settings = struct {
     role: []const u8 = "",
     dashboard: Dashboard = .{},
     node: Node = .{},
+    /// Whether the tray launcher looks for a newer release on GitHub once a day (TASK-45).
+    check_updates: bool = true,
 };
 
 /// Reads `path`; null if it is missing or unreadable as settings.

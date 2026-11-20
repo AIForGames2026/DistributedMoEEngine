@@ -167,11 +167,15 @@ const Options = struct {
     ranks: ?usize = null,
     rank: u8 = 1,
     peers: []const PeerAddr = &.{},
+    /// Windows `shm-expert` (TASK-40): the shared region rank 0 made for this rank.
+    shm_name: ?[]const u8 = null,
 };
 
 /// Every allocation of this process goes through `proc_heap` (TASK-17), which
 /// counts what is live and enforces `--memory-budget` once it is armed.
 var proc_heap: budget.Heap = undefined;
+/// The process's start-up state, for starting expert ranks on Windows (TASK-40).
+var proc_init: *const std.process.Init = undefined;
 var heap_label: []const u8 = "olmoe";
 var memory: ?budget.Memory = null;
 
@@ -194,6 +198,7 @@ const PeerAddr = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    proc_init = &init;
     proc_heap = .init(init.gpa);
     defer reportHeap();
     const gpa = proc_heap.allocator();
@@ -312,22 +317,37 @@ pub fn main(init: std.process.Init) !void {
         reportGuards(opts, "local", moe.capacity, null);
         return result;
     }
-    if (is_windows)
+    const is_rdma = std.mem.startsWith(u8, mode, "rdma");
+    if (is_windows and (is_rdma or opts.tracker != null))
     {
-        std.debug.print("olmoe {s}: not on Windows yet; Windows runs local\n", .{mode});
+        std.debug.print("olmoe {s}: RDMA and the tracker are Linux only; Windows runs local, shm, expert and router over TCP\n", .{mode});
         std.process.exit(2);
     }
-    const is_rdma = std.mem.startsWith(u8, mode, "rdma");
     if (is_rdma and !build_options.rdma) {
         std.debug.print("this build has no RDMA support; rebuild with -Drdma=true\n", .{});
         std.process.exit(2);
     }
     const slots = opts.slots orelse if (is_rdma) @as(u16, 256) else 64;
-    if (std.mem.eql(u8, mode, "shm") or std.mem.eql(u8, mode, "rdma")) return runForked(gpa, opts, slots, is_rdma);
+    if (is_windows and std.mem.eql(u8, mode, "shm"))
+    {
+        return runSpawned(gpa, opts, slots);
+    }
+    if (is_windows and std.mem.eql(u8, mode, "shm-expert"))
+    {
+        var pair = try transport.shm.Pair.open(opts.shm_name orelse return error.Usage, slots);
+        defer pair.deinit();
+        var link: Link = undefined;
+        link.initShm(pair.side(1), @intCast(opts.rank), slots);
+        return runLinks(gpa, opts, (&link)[0..1], opts.rank, "shm", &.{});
+    }
+    if (!is_windows and (std.mem.eql(u8, mode, "shm") or std.mem.eql(u8, mode, "rdma")))
+    {
+        return runForked(gpa, opts, slots, is_rdma);
+    }
     if (std.mem.eql(u8, mode, "expert") or std.mem.eql(u8, mode, "rdma-expert")) {
         const l = try transport.tcp.listen(opts.port);
         std.debug.print("expert: listening on port {d}\n", .{l.port});
-        const client = if (opts.tracker) |t| try joinAsExpert(gpa, opts, t, l.port) else null;
+        const client = if (is_windows) null else if (opts.tracker) |t| try joinAsExpert(gpa, opts, t, l.port) else null;
         defer if (client) |cl| cl.close(gpa, false);
         const fd = try transport.tcp.acceptOn(l.fd);
         transport.tcp.closeSocket(l.fd);
@@ -336,14 +356,17 @@ pub fn main(init: std.process.Init) !void {
         return runLinks(gpa, opts, (&link)[0..1], opts.rank, if (is_rdma) "rdma" else "tcp", &.{});
     }
     if (std.mem.eql(u8, mode, "router") or std.mem.eql(u8, mode, "rdma-router")) {
-        if (opts.tracker) |t|
+        if (!is_windows)
         {
-            if (opts.peers.len > 0)
+            if (opts.tracker) |t|
             {
-                std.debug.print("router: give the tracker or --peer addresses, not both\n", .{});
-                std.process.exit(2);
+                if (opts.peers.len > 0)
+                {
+                    std.debug.print("router: give the tracker or --peer addresses, not both\n", .{});
+                    std.process.exit(2);
+                }
+                return runTrackedRouter(gpa, opts, is_rdma, t);
             }
-            return runTrackedRouter(gpa, opts, is_rdma, t);
         }
         const one = [_]PeerAddr{.{ .host = opts.host, .port = opts.port, .rdma = is_rdma }};
         const addrs = if (opts.peers.len > 0) opts.peers else &one;
@@ -489,6 +512,8 @@ fn parseArgs(init: std.process.Init) !Options {
                 return error.Usage;
             }
             opts.ranks = n;
+        } else if (std.mem.eql(u8, arg, "--shm-name")) {
+            opts.shm_name = value;
         } else if (std.mem.eql(u8, arg, "--rank")) {
             opts.rank = try std.fmt.parseInt(u8, value, 10);
             if (opts.rank == 0 or opts.rank >= split.max_ranks)
@@ -1040,21 +1065,24 @@ fn runRank(gpa: std.mem.Allocator, opts: Options, eps: []const *transport.Endpoi
         .probe = .{ .ctx = &sm, .sample = SplitMoe.sample },
         .cache = sm.experts.cache,
     };
-    const tel = try openTelemetry(gpa, cfg, moe, opts, name, live);
+    const tel = if (is_windows) try noTelemetry(opts, name) else try openTelemetry(gpa, cfg, moe, opts, name, live);
     const run_moe = if (tel) |t| t.tap.moe() else moe;
-    const result = if (opts.serve != null)
+    const result = if (!is_windows and opts.serve != null)
         runServe(gpa, &l, run_moe, opts, name, tel.?.bc, opts.max_step)
     else if (opts.context > 0)
         runLong(gpa, &l.weights.?, run_moe, opts, name)
     else
         runGolden(gpa, &l.weights.?, run_moe, opts, name);
-    if (tel) |t|
+    if (!is_windows)
     {
-        t.close(name);
+        if (tel) |t|
+        {
+            t.close(name);
+        }
     }
     if (result) |_| {} else |err|
     {
-        if (err == error.PeerUnhealthy)
+        if (!is_windows and err == error.PeerUnhealthy)
         {
             reportRefusal(name, opts.swarm.?, &sm);
             return err;
@@ -1415,6 +1443,92 @@ fn runForked(gpa: std.mem.Allocator, opts: Options, slots: u16, is_rdma: bool) !
         l.initShm(p.side(0), 0, slots);
     }
     return waitChildren(pids[0..forked], runLinks(gpa, opts, links, 0, name, names[0..peers]));
+}
+
+/// Windows `shm` (TASK-40): with no fork, rank 0 makes a named shared region for
+/// each expert rank and starts it as `olmoe shm-expert` with this run's options.
+fn runSpawned(gpa: std.mem.Allocator, opts: Options, slots: u16) !void
+{
+    const io = proc_init.io;
+    const peers = (try ranksOf(gpa, opts)) - 1;
+    var pair_space: [split.max_ranks - 1]transport.shm.Pair = undefined;
+    const pairs = pair_space[0..peers];
+    var made: usize = 0;
+    defer for (pairs[0..made]) |*p|
+    {
+        p.deinit();
+    };
+    for (pairs) |*p|
+    {
+        p.* = try transport.shm.Pair.create(slots);
+        made += 1;
+    }
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var given: std.ArrayList([]const u8) = .empty;
+    var it = try proc_init.minimal.args.iterateAllocator(a);
+    while (it.next()) |arg|
+    {
+        try given.append(a, arg);
+    }
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe = exe_buf[0..try std.process.executablePath(io, &exe_buf)];
+    var children: [split.max_ranks - 1]std.process.Child = undefined;
+    var started: usize = 0;
+    var result: anyerror!void = {};
+    for (0..peers) |i|
+    {
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.appendSlice(a, &.{ exe, "shm-expert" });
+        try argv.appendSlice(a, given.items[2..]); // MODEL and the options, as given
+        try argv.appendSlice(a, &.{ "--shm-name", pairs[i].mappingName(), "--rank", try std.fmt.allocPrint(a, "{d}", .{i + 1}) });
+        children[i] = std.process.spawn(io, .{ .argv = argv.items }) catch |err|
+        {
+            result = err;
+            break;
+        };
+        started += 1;
+    }
+    if (result) |_|
+    {
+        var host_buf: [64]u8 = undefined;
+        const host = hostName(&host_buf);
+        var names: [split.max_ranks][]const u8 = undefined;
+        @memset(names[0..peers], host);
+        var link_space: [split.max_ranks - 1]Link = undefined;
+        const links = link_space[0..peers];
+        for (links, pairs) |*l, *p|
+        {
+            l.initShm(p.side(0), 0, slots);
+        }
+        result = runLinks(gpa, opts, links, 0, "shm", names[0..peers]);
+    }
+    else |_|
+    {}
+    var failed = false;
+    for (children[0..started]) |*child|
+    {
+        if (result) |_|
+        {
+            const term = child.wait(io) catch
+            {
+                failed = true;
+                continue;
+            };
+            failed = failed or !term.success();
+        }
+        else |_|
+        {
+            // A failed rank 0 leaves its experts waiting for packets that never come.
+            child.kill(io);
+        }
+    }
+    try result;
+    if (failed)
+    {
+        return error.ExpertFailed;
+    }
 }
 
 /// Waits for every forked rank, stopping them first if rank 0 failed.

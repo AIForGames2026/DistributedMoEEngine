@@ -25,10 +25,25 @@ const Frame = extern struct {
 pub const Link = struct {
     fd: Socket,
     ring: []wire.Packet,
+    /// Windows (TASK-40): bytes received ahead of the frames read so far, since
+    /// each Winsock call costs far more than a Linux one.
+    rx: if (is_windows) *RxBuffer else void,
+
+    const RxBuffer = struct {
+        bytes: [256 * 1024]u8 = undefined,
+        start: usize = 0,
+        end: usize = 0,
+    };
 
     /// `ring` is the local receive ring, normally carved from an `Arena`.
     pub fn init(fd: Socket, ring: []wire.Packet) Link {
-        return .{ .fd = fd, .ring = ring };
+        if (is_windows)
+        {
+            const rx = std.heap.page_allocator.create(RxBuffer) catch @panic("out of memory for a TCP receive buffer");
+            rx.* = .{};
+            return .{ .fd = fd, .ring = ring, .rx = rx };
+        }
+        return .{ .fd = fd, .ring = ring, .rx = {} };
     }
 
     /// Graceful close: stop sending, then discard incoming bytes until the peer
@@ -49,6 +64,10 @@ pub const Link = struct {
     fn drainAndClose(self: *Link) void {
         drainAndCloseSocket(self.fd);
         self.fd = undefined;
+        if (is_windows)
+        {
+            std.heap.page_allocator.destroy(self.rx);
+        }
     }
 
     /// Tells the peer we will send nothing more.
@@ -72,13 +91,47 @@ pub const Link = struct {
     }
 
     fn recvAll(self: *Link, bytes: []u8) transport.Error!void {
-        return recvAllSocket(self.fd, bytes);
+        if (!is_windows)
+        {
+            return recvAllSocket(self.fd, bytes);
+        }
+        var off: usize = 0;
+        while (off < bytes.len)
+        {
+            const rx = self.rx;
+            if (rx.start == rx.end)
+            {
+                // Blocks only until some bytes arrive, then takes all there are.
+                rx.start = 0;
+                rx.end = sock.recv(self.fd, &rx.bytes) catch |err| {
+                    std.log.err("tcp recv: {t}", .{err});
+                    return error.ConnectionClosed;
+                };
+                if (rx.end == 0)
+                {
+                    std.log.err("tcp recv: peer closed with {d} of {d} bytes read", .{ off, bytes.len });
+                    return error.ConnectionClosed;
+                }
+            }
+            const n = @min(bytes.len - off, rx.end - rx.start);
+            @memcpy(bytes[off..][0..n], rx.bytes[rx.start..][0..n]);
+            rx.start += n;
+            off += n;
+        }
     }
 
     fn postWriteImm(ptr: *anyopaque, i: u16, pkt: *const wire.Packet, imm: u32) transport.Error!void {
         const self: *Link = @ptrCast(@alignCast(ptr));
         _ = i; // the receiver takes the slot from the immediate
         const frame: Frame = .{ .imm = imm, .len = wire.packet_bytes };
+        if (is_windows)
+        {
+            // One send per packet: Winsock has no MSG_MORE to join the two.
+            var buf: [@sizeOf(Frame) + wire.packet_bytes]u8 = undefined;
+            @memcpy(buf[0..@sizeOf(Frame)], std.mem.asBytes(&frame));
+            @memcpy(buf[@sizeOf(Frame)..], std.mem.asBytes(pkt));
+            return self.sendAll(&buf, false);
+        }
         try self.sendAll(std.mem.asBytes(&frame), true);
         try self.sendAll(std.mem.asBytes(pkt), false);
     }
@@ -90,6 +143,10 @@ pub const Link = struct {
     }
 
     fn readable(self: *Link) transport.Error!bool {
+        if (is_windows and self.rx.start < self.rx.end)
+        {
+            return true;
+        }
         return sock.waitReadable(self.fd, 0) catch error.Unexpected;
     }
 

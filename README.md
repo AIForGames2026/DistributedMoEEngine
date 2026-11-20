@@ -24,7 +24,7 @@ export PATH="$HOME/tools/zig:$PATH"
 zig build install -Doptimize=ReleaseFast
 ```
 
-**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine's one-process mode (`olmoe.exe local`, CPU only) and the two-process check; everything else runs in WSL2.
+**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine (`olmoe.exe`: `local`, `shm`, `expert` and `router` over TCP, CPU only) and the two-process check; everything else runs in WSL2.
 
 ```powershell
 .\build.ps1
@@ -74,7 +74,7 @@ zig-out/bin/olmoe node --dashboard <dashboard IP> --models ~/models --secret-fil
 
 Approve the machine on the page, tick it under Model, and press Load. Chat on the page, or point any OpenAI-compatible client at `http://<dashboard>:8080/v1`. The dashboard speaks plain HTTP and listens only on 127.0.0.1 unless you pass `--listen`, so keep it on a private network or behind a TLS proxy. Every option is in [Building and running everything](docs/BUILDING.md).
 
-**On Windows**, the dashboard and the agent run in WSL2 (the native `olmoe.exe` runs `local` only). Build in Ubuntu as above, and keep `dashboard.token` and `node.secret` in your WSL home directory: under `/mnt/c` every file looks readable by everyone, so they are refused. A dashboard in WSL opens in your Windows browser at `http://127.0.0.1:8080/`.
+**On Windows**, the dashboard and the agent run in WSL2 (the native `olmoe.exe` has no dashboard, agent or tracker yet). Build in Ubuntu as above, and keep `dashboard.token` and `node.secret` in your WSL home directory: under `/mnt/c` every file looks readable by everyone, so they are refused. A dashboard in WSL opens in your Windows browser at `http://127.0.0.1:8080/`.
 
 To make a Windows PC an expert node, start the agent in WSL with `--advertise 127.0.0.1`, since WSL's network address is hidden behind Windows:
 
@@ -86,6 +86,16 @@ Then, in PowerShell, open a tunnel that carries the dashboard machine's port for
 
 ```powershell
 ssh -N -R 47401:127.0.0.1:47401 <user>@<dashboard machine>
+```
+
+Without the dashboard, a native Windows expert needs no WSL2 or tunnel: start it in PowerShell, then point the router at the PC's address (Windows asks once whether `olmoe.exe` may accept connections):
+
+```powershell
+.\zig-out\bin\olmoe.exe expert MODEL.gguf --port 7480 --payload f32
+```
+
+```bash
+zig-out/bin/olmoe router MODEL.gguf --host <PC address> --port 7480 --golden G.tfref --payload f32
 ```
 
 ## Documentation

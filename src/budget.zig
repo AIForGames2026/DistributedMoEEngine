@@ -113,9 +113,13 @@ pub const Heap = struct {
     }
 };
 
-/// This process's resident memory, in bytes (Linux; 0 elsewhere).
+/// This process's resident memory, in bytes (Linux and Windows; 0 elsewhere).
 pub fn residentBytes() u64
 {
+    if (builtin.os.tag == .windows)
+    {
+        return @import("plat.zig").rssBytes();
+    }
     return statmField(1);
 }
 

@@ -5,13 +5,13 @@
 #   .\build.ps1             build, run the unit tests, run the PoC checks
 #   .\build.ps1 -SkipChecks build and unit-test only
 #   .\build.ps1 -Package    also zip bin\ for GitHub Releases into dist\
-#   .\build.ps1 -Model M.gguf -Golden G.tfref   also run olmoe local's golden check
+#   .\build.ps1 -Model M.gguf -Golden G.tfref   also run olmoe's golden check, local and shm
 #
 # Uses Zig from PATH if it matches .zig-version, else ~\tools\zig, and
 # installs it there (tools\setup\install-zig.ps1, SHA-256 checked) if missing.
 #
 # Windows covers the PoC check (the two-process MoE over shared memory and
-# TCP) and olmoe's one-process mode on the CPU. io_uring, CUDA, and RDMA steps
+# TCP) and olmoe's local, shm, expert and router modes on the CPU. io_uring, CUDA, and RDMA steps
 # (io-test, gate) are Linux only.
 param(
     [switch]$SkipChecks,
@@ -77,6 +77,7 @@ if (-not $SkipChecks) {
     Invoke-TcpCheck 'PoC check: two-process MoE vs PyTorch goldens, TCP loopback' @('--moe')
     if ($Model -and $Golden) {
         Invoke-Step 'olmoe local: one process vs the transformers golden' { & $olmoe local $Model --golden $Golden }
+        Invoke-Step 'olmoe shm: two processes vs the same golden' { & $olmoe shm $Model --golden $Golden --payload f32 }
     }
 }
 

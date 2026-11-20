@@ -355,7 +355,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-25] Operator Dashboard
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 17)
+- **Status**: Done (built Nov 17, closed Nov 20)
 - **Priority**: `could` | **Area**: `webgl`
 - **Description**: Added Nov 5 from the project owner's direction: the web page grows into a dashboard where an operator manages nodes, the router, and models, and the API endpoint at the router that harnesses call. The inspector becomes one feature of it. This needs what v1 does not ship: the tracker (TASK-09), live telemetry (TASK-16b), and an authenticated control channel on top of TASK-30's server. Testing Session 1's question 5 asks which control to build first. Until this task starts, the public site stays simulated and recorded data only.
   - **Design (project owner's choices, Nov 17):** a supervisor plus node agents. `olmoe dashboard` runs on rank 0's machine, serves the page and the API, starts the router as its own child, and passes `/v1` through to it; each other machine runs `olmoe node`, an agent that starts and stops one expert rank on the dashboard's command, so no engine internals change. A machine that joins is used from the next load; moving experts onto it while a model runs stays out. Operators sign in with an admin token kept in a file and get a session cookie; agents prove a separate shared secret. The agents link to the dashboard directly instead of through TASK-09's tracker, which has no authentication.
@@ -392,7 +392,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-29] Qwen3.6-35B-A3B (Hybrid Linear Attention)
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 16, ahead of v1)
+- **Status**: Done (built Nov 16, ahead of v1, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 11, when choosing a long-context model for TASK-12. Qwen3.6-35B-A3B (April 2026, 35B total, 3B active, 262,144-token native context) fits the lab: its Q8_0 GGUF is 36.9 GB and its BF16 checkpoint 72 GB. But it is a hybrid. Of its 40 layers, 30 are Gated DeltaNet (linear attention with a fixed-size recurrent state) and 10 are full attention with an output gate, 2 KV heads of 256 dims, and partial RoPE (64 of 256 dims). It has 256 experts, 8 routed plus 1 shared per token. Supporting it means a Gated DeltaNet layer (CPU and a CUDA kernel for long prefill), gated attention, partial RoPE, and shared experts on top of TASK-12's Qwen3-MoE work. The MTP head and vision encoder stay out. TASK-12 used Qwen3-30B-A3B instead, because this model's KV cache is small (about 5 GB at 128k tokens in f32) and would not exercise NVMe offload.
 - **Acceptance Criteria**: Written when scheduled (Nov 16), on ggml-org's Q8_0 GGUF against transformers' `Qwen3_5MoeForCausalLM` (float32, on the GGUF's dequantized weights): the TASK-10 checks (logits within 1e-2, top-1 identical, every routing choice identical) and TASK-24's greedy generation check, in one process and split across two (experts on rank 1). A tiny random model with the same layer mix checks the same in `zig build test`. The Gated DeltaNet layers and the 256-dim gated attention run on the GPU, so 32k and 128k prompts complete on `gx10-02`, with time to first token and decode speed recorded in `bench/`. Saving the recurrent state with `--prefix-cache` is left for later.
@@ -407,7 +407,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-31] Qwen3.8-Flash-Next (Hybrid Attention, Expert Streaming at Scale)
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 16 to 17, ahead of v1)
+- **Status**: Done (built Nov 16 to 17, ahead of v1, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 15, second step of the hybrid track. As reported in summaries of its paper (to be checked against its `config.json` before scheduling): 125B parameters with 6B active per token, plus 51B of n-gram embedding tables kept off the GPU and a 4B multi-token prediction module; 512 experts, 10 routed plus 1 shared per token; 48 layers, three Gated DeltaNet layers to every Qwen Sparse Attention (QSA) layer, which attends to selected blocks of tokens. At 4 bits the 125B core is roughly 65 to 70 GB, so it fits on two Sparks, or on one with experts streamed from NVMe (`--cache`). Its small experts (roughly 2 to 3 MB at 4 bits) stress the expert cache and lookahead (TASK-11, TASK-14) harder than any model so far, and its n-gram tables are a per-token lookup that could also stream from NVMe. New work on top of TASK-29: QSA, the n-gram tables, and whichever weight format its releases use (K-quant GGUFs need a new loader path; NVFP4 or Q8_0 would not). The MTP module stays out.
 - **Checked against the release (Nov 16)**: `config.json` (`qwen4_exp`), ggml-org's GGUF (`qwen4exp`, Q8_0, 163 GB in two parts) and transformers 5.23's `modeling_qwen4_exp.py`.
@@ -481,7 +481,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-33] Any Number of Expert Nodes
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 16)
+- **Status**: Done (built Nov 16, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 16, before TASK-31. Rank 0 has always talked to exactly one expert process, so a model larger than two machines' free memory could not run in memory. TASK-31's Q8_0 GGUF (163 GB) needs about 115 GB on `gx10-02` plus more elsewhere: the desktop's free RAM, and whatever `gx10-01` and `gx10-03` have left once their owners agree. This task lets rank 0 route to any number of expert processes:
   - Each peer is reached over TCP or RDMA, chosen per peer, and gets its own flow control, health check, capacity grant (TASK-17) and prefetch hints (TASK-11).
@@ -532,7 +532,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-36] Every GGUF Quant Format on the CPU and GPU
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 18)
+- **Status**: Done (built Nov 18, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 17. The engine reads 8 weight formats (f32, f16, bf16, Q8_0, Q4_0, Q4_K, MXFP4, NVFP4), and the GPU runs only f32 and Q8_0 matmuls plus Q8_0 and Q4_K experts; everything else runs on the CPU, which TASK-32 measured at about 12 times slower. Most published GGUFs use other K-quants (a Q4_K_M file mixes Q4_K and Q6_K) or the IQ formats.
   - **CPU:** ggml's reference dequantization (llama.cpp, MIT) for the remaining formats: Q2_K, Q3_K, Q5_K, Q6_K, Q4_1, Q5_0, Q5_1, and IQ1 to IQ4 with their lookup tables, vendored as C or ported to `quant.zig`. Borrowed code keeps its MIT notice and is listed in `THIRD_PARTY.md`.
@@ -551,7 +551,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-37] SentencePiece Tokenizer and More Pre-Tokenizers
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 18)
+- **Status**: Done (built Nov 18, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 17. The tokenizer handles byte-level BPE with 4 pre-tokenizer patterns (`gpt2`, `qwen2`, `qwen35`, `glm4`), each added by hand with a model. Models such as Mixtral use SentencePiece, and most other families need their own pattern. llama.cpp's vocabulary code (MIT) has a SentencePiece tokenizer and the patterns for dozens of model families, keyed by the GGUF's `tokenizer.ggml.pre` value, plus vocab files with expected outputs for testing.
   - SentencePiece (BPE with byte fallback, as Llama 2 era and Mixtral models use it).
@@ -565,7 +565,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-38] Chat Templates Read from the GGUF
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 18)
+- **Status**: Done (built Nov 18, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 17. Each model's chat template is ported by hand into `src/chat.zig` (5 formats so far), so a new model cannot chat until someone writes its format. GGUFs carry the original Jinja template. llama.cpp renders them with minja, a small Jinja interpreter (MIT, C++).
   - A Jinja interpreter for the subset chat templates use (variables, loops, conditionals, filters such as `trim` and `capitalize`, string methods, `raise_exception`), as a Zig port or a vendored minja; the C++ dependency is weighed against porting.
@@ -582,7 +582,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-39] Mixtral, DeepSeek V3 and gpt-oss from llama.cpp's Specs
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 18)
+- **Status**: Done (built Nov 18, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 17. Each architecture is written by hand (5 so far), at 1 to 3 days each plus a transformers reference. The engine loads GGUFs made by llama.cpp's converter, so llama.cpp's per-architecture code (MIT) is the most exact record of each model's tensor names, shapes, converter transformations and forward pass; reading it replaces working out the GGUF layout by hand, as TASK-32's reference script had to. The reference is still transformers, not llama.cpp. Three popular families, each needing something new:
   - **Mixtral:** grouped-query attention with a softmax router and no shared expert; mostly a check that the existing blocks generalize, plus SentencePiece (TASK-37).
@@ -633,7 +633,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-41] Prefetch and Cache Misses in the Live View
 - **Milestone**: None (after v1)
-- **Status**: Review (built Nov 18)
+- **Status**: Done (built Nov 18, closed Nov 20)
 - **Priority**: `could` | **Area**: `webgl`
 - **Description**: Added Nov 17, after the "One token" view in `web/live.html` began showing each token's trip through the layers and its experts on each machine. It cannot show prefetching yet: each step frame carries only running cache totals (`cache: {resident, hinted, late, missed, loads}`), not which expert was a hit, a prefetch or a miss, and the one cached recording (Qwen3.8-Flash-Next, TASK-31) ran without `--lookahead`, so its `hinted` count is 0 throughout.
   - **Engine, rank 0:** `ExpertCache.poll` already decides each call's status. While a viewer is connected, it writes that status into a per-step array (one byte per layer and expert, on the engine thread), and the telemetry tap, which already wraps `Moe.prefetch`, records each hint as (layer it is for, expert, layer it was sent during). Step frames gain `c: [layer, expert, status, ...]` and `h: [for layer, expert, sent during, ...]`, and the hello says which ranks have a cache. These are added fields, so the schema stays version 0 and older recordings still replay.
@@ -703,8 +703,8 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-40 (native Windows engine), TASK-42 (model families built from shared parts) |
 | **To Do** | (none) |
 | **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
-| **Review** | TASK-39 (Mixtral, DeepSeek V3 as Moonlight-16B, and gpt-oss, Nov 18; `bench/olmoe/2026-11-18-families.md`), TASK-38 (chat templates read from the GGUF, Nov 18; `bench/olmoe/2026-11-18-chat-templates.md`), TASK-37 (SentencePiece and more pre-tokenizers, Nov 18; `bench/olmoe/2026-11-18-tokenizers.md`), TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`) |
-| **Done** | TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
+| **Review** | (none) |
+| **Done** | TASK-39 (Mixtral, DeepSeek V3 as Moonlight-16B, and gpt-oss, Nov 18; `bench/olmoe/2026-11-18-families.md`), TASK-38 (chat templates read from the GGUF, Nov 18; `bench/olmoe/2026-11-18-chat-templates.md`), TASK-37 (SentencePiece and more pre-tokenizers, Nov 18; `bench/olmoe/2026-11-18-tokenizers.md`), TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`), TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|

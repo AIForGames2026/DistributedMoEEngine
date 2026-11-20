@@ -4481,7 +4481,11 @@ fn checkTiny(comptime stem: []const u8, arch: Arch) !void
 {
     const tfref = @import("tfref.zig");
     const gpa = std.testing.allocator;
-    const file = @embedFile(stem ++ ".gguf");
+    const embedded = @embedFile(stem ++ ".gguf");
+    // An embedded file is only byte aligned, and expert biases are read in place as floats.
+    const file = try gpa.alignedAlloc(u8, .fromByteUnits(64), embedded.len);
+    defer gpa.free(file);
+    @memcpy(file, embedded);
     var h = try gguf.parse(gpa, file, file.len);
     defer h.deinit(gpa);
     const cfg = try Config.fromGguf(h);

@@ -134,6 +134,15 @@ a.ghost { border-radius: 8px; font-size: 13px; text-decoration: none; }
 #player select { padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
 #clock { font-variant-numeric: tabular-nums; min-width: 120px; text-align: right; }
 .msg.note { color: var(--muted); font-size: 13px; }
+.msg.status { align-self: flex-start; background: var(--think); color: var(--muted); font-size: 13px; padding: 8px 12px; border-radius: var(--radius); min-width: min(260px, 100%); }
+.msg.status .dots { display: inline-flex; gap: 3px; margin-right: 8px; vertical-align: middle; }
+.msg.status .dots i { width: 5px; height: 5px; border-radius: 50%; background: rgb(var(--now)); animation: blink 1.2s infinite ease-in-out; }
+.msg.status .dots i:nth-child(2) { animation-delay: 0.2s; }
+.msg.status .dots i:nth-child(3) { animation-delay: 0.4s; }
+.msg.status .bar { height: 3px; margin-top: 6px; background: var(--cell); border-radius: 2px; overflow: hidden; }
+.msg.status .bar > div { height: 100%; width: 0; background: rgb(var(--now)); }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .msg.status .dots i { animation: none; opacity: 0.6; } }
 body.dragging main { outline: 3px dashed rgb(var(--rank0)); outline-offset: -6px; }
 @media (max-width: 800px) {
   main { grid-template-columns: 1fr; grid-template-rows: minmax(300px, 1fr) minmax(360px, 1fr); }
@@ -602,18 +611,15 @@ function rttPerLayer() {
 }
 
 // The diagram keeps a moderate size and sits centered, so big screens don't stretch it.
-function drawFlow(W, H, oy = 0, note = false) {
+function drawFlow(W, H, oy = 0) {
   const fw = Math.min(W, 900), fh = H;
   const dx = Math.round((W - fw) / 2), dy = oy;
-  const headH = note ? 52 : 30; // Shown alone, it also says what the replay is waiting on
+  const headH = 52;
   const big = "600 15px system-ui, sans-serif";
   ctx.font = big;
   const heads = flowHeading(anim.cur);
   addText(heads.find((t) => ctx.measureText(t).width <= fw - 28) || "", dx + fw / 2, dy + 22, big, "--ink", "center");
-  if (note)
-  {
-    drawStepNote(dx + fw / 2, dy + 42, fw - 28);
-  }
+  drawStepNote(animNote(anim, layerMs), dx + fw / 2, dy + 42, fw - 28);
   ctx.save();
   ctx.translate(dx, dy + headH);
   textShift.x = dx;
@@ -1127,14 +1133,7 @@ function draw(now) {
   }
   animTick(dt);
   labels.length = 0;
-  const pending = rp && loadingFor === null ? stepInFlight() : null;
-  stepNote = null;
-  if (pending)
-  {
-    const what = pending.v.n > 1 ? `Reading the ${pending.v.n.toLocaleString()}-token prompt` : "Working on the next token";
-    const done = rp.clock - pending.start, total = pending.t - pending.start;
-    stepNote = { text: `${what}... ${(done / 1000).toFixed(1)} of ${(total / 1000).toFixed(1)} s`, frac: Math.min(1, done / total) };
-  }
+  showChatNote(rp && loadingFor === null ? stepInFlight() : null);
   if (bothViews.matches)
   {
     const split = Math.round(H * 0.42);
@@ -1145,7 +1144,7 @@ function draw(now) {
   }
   else if (view === "flow")
   {
-    drawFlow(W, H, 0, true);
+    drawFlow(W, H);
   }
   else
   {
@@ -1215,11 +1214,14 @@ function drawHeat(W, H) {
   const k = topo.top_k;
   const skip = c && c.skipped ? " · skipping tokens to keep up" : "";
   const prompt = c && c.n > 1 ? `Reading the ${c.n.toLocaleString()}-token prompt at once` : "";
+  // Some models' first layers are dense and run no experts (GLM-5.3-Flash's first 3).
+  const ml = c ? c.layers.filter((p) => p.length > 0).length : L;
+  const where = ml < L ? `${ml} of its ${L} layers` : `${L} layers`;
   const heads = !c ? ["Every expert of every layer, grouped by the machine that holds it", "Every expert of every layer"]
-    : prompt ? [`${prompt}: each token runs ${k} experts in each of ${L} layers${skip}`, prompt]
-    : [`Each token runs ${k} experts in each of ${L} layers, ${(k * L).toLocaleString()} in all${skip}`, `${k} experts in each of ${L} layers, ${(k * L).toLocaleString()} per token`, `${k} experts per layer`];
+    : prompt ? [`${prompt}: each token runs ${k} experts in each of ${where}${skip}`, prompt]
+    : [`Each token runs ${k} experts in each of ${where}, ${(k * ml).toLocaleString()} in all${skip}`, `${k} experts in each of ${where}, ${(k * ml).toLocaleString()} per token`, `${k} experts per layer`];
   addText(heads.find((t) => ctx.measureText(t).width <= W - 2 * pad) || "", W / 2, pad + 12, big, "--ink", "center");
-  drawStepNote(W / 2, pad + 34, W - 2 * pad);
+  drawStepNote(animNote(mapAnim, mapLayerMs), W / 2, pad + 34, W - 2 * pad);
 
   // Each machine's band of columns: its name above, its expert range and share of the token's work below.
   const cellBg = color("--cell"), ink = color("--ink");
@@ -1342,20 +1344,77 @@ function drawHeat(W, H) {
   }
 }
 
-// The replay's slow step under a diagram's heading: what it is, its time so far, and a thin progress bar.
-function drawStepNote(cx, y, maxW) {
-  if (!stepNote)
+// How far a view's animation is through its current step, on that view's own clock and speed.
+function animNote(a, msOf) {
+  const c = a.cur;
+  if (!c || c.l >= topo.layers)
+  {
+    return null;
+  }
+  let total = 0, done = 0;
+  for (let l = 0; l < topo.layers; l++)
+  {
+    const ms = msOf(c, l);
+    total += ms;
+    if (l < c.l)
+    {
+      done += ms;
+    }
+  }
+  done += c.u * msOf(c, c.l);
+  if (total < 1000)
+  {
+    return null; // A step this quick needs no progress bar
+  }
+  const what = c.n > 1 ? `Reading the ${c.n.toLocaleString()}-token prompt` : c.word ? `Token “${shownWord(c.word)}”` : "Working on the next token";
+  return { text: `${what}... layer ${c.l + 1} of ${topo.layers} · ${(done / 1000).toFixed(1)} of ${(total / 1000).toFixed(1)} s`, frac: Math.min(1, done / total) };
+}
+
+// A view's status under its heading: what it is on, its time so far, and a thin progress bar.
+function drawStepNote(note, cx, y, maxW) {
+  if (!note)
   {
     return;
   }
   const font = "12px system-ui, sans-serif";
   ctx.font = font;
-  addText(ctx.measureText(stepNote.text).width <= maxW ? stepNote.text : stepNote.text.replace(/^[^.]*\.\.\. /, ""), cx, y, font, "--muted", "center");
+  addText(ctx.measureText(note.text).width <= maxW ? note.text : note.text.replace(/^[^.]*\.\.\. /, ""), cx, y, font, "--muted", "center");
   const bw = Math.min(200, maxW);
   ctx.fillStyle = color("--cell");
   ctx.fillRect(cx - bw / 2, y + 6, bw, 3);
   ctx.fillStyle = `rgb(${color("--now")})`;
-  ctx.fillRect(cx - bw / 2, y + 6, bw * stepNote.frac, 3);
+  ctx.fillRect(cx - bw / 2, y + 6, bw * note.frac, 3);
+}
+
+// The chat's own status, on the replay's clock: a bubble at the end of the conversation while a slow step plays.
+function showChatNote(pending) {
+  let el = $("chatNote");
+  if (!pending)
+  {
+    el?.remove();
+    return;
+  }
+  if (!el)
+  {
+    el = document.createElement("div");
+    el.id = "chatNote";
+    el.className = "msg status";
+    el.innerHTML = '<span class="dots"><i></i><i></i><i></i></span><span class="what"></span><div class="bar"><div></div></div>';
+  }
+  if (el !== $("log").lastElementChild)
+  {
+    $("log").appendChild(el);
+    toBottom();
+  }
+  const what = pending.v.n > 1 ? `Reading the ${pending.v.n.toLocaleString()}-token prompt` : "Working on the next token";
+  const done = rp.clock - pending.start, total = pending.t - pending.start;
+  const text = `${what}... ${(done / 1000).toFixed(1)} of ${(total / 1000).toFixed(1)} s`;
+  const span = el.querySelector(".what");
+  if (span.textContent !== text)
+  {
+    span.textContent = text;
+  }
+  el.querySelector(".bar > div").style.width = `${(Math.min(1, done / total) * 100).toFixed(1)}%`;
 }
 
 // Diagram text, drawn after everything else on a small backdrop so lines and packets never cover it.
@@ -1707,7 +1766,6 @@ $("input").addEventListener("keydown", (ev) => {
 
 // The box covers the diagram while a recording downloads and is read; a slow replay step shows inside the diagram.
 let loadingFor = null;
-let stepNote = null; // The replay's slow step, when one is playing: what it is and how far along
 function setLoading(text) {
   loadingFor = text;
   $("loading").hidden = text === null;

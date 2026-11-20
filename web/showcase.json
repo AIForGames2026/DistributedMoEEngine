@@ -16,6 +16,18 @@
       "note": "A note on this reply: experts are not separate models trained on different tasks or topics. Each layer has its own experts, and its router picks a few of them for every token; those are the experts you see light up in the diagram."
     },
     {
+      "id": "glm53-chat",
+      "source": "bench/trace/2026-11-20/chat-glm53-two-sparks.jsonl.gz",
+      "title": "Chat: GLM-5.3-Flash split across two DGX Sparks over RDMA",
+      "summary": "A scripted three-turn chat at temperature 0 with GLM-5.3-Flash (TASK-32): 45 layers mixing KDA linear attention and sparse attention, 288 experts chosen 8 at a time, 181 GB in Q4_K. Rank 0 on gx10-02 runs attention, the routers and experts 0 to 143 of each layer; rank 1 on gx10-01 runs experts 144 to 287, reached over RDMA. Every expert is in memory, so nothing streams from NVMe. It was recorded at 4.2 tokens/s with reasoning on, and the per-rank call counts match the engine's own counters.",
+      "results": "bench/trace/2026-11-20-glm53-chat.md",
+      "ranks": [
+        "gx10-02",
+        "gx10-01"
+      ],
+      "speed": 1
+    },
+    {
       "id": "qwen38-chat",
       "source": "bench/trace/2026-11-17/chat-qwen38-one-spark.jsonl.gz",
       "title": "Chat: Qwen3.8-Flash-Next on one DGX Spark, experts streamed from NVMe",

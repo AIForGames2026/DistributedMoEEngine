@@ -1,0 +1,22 @@
+load: non-expert weights and 4 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+rdma: context 131040 tokens + 8 generated, chunks of 2048; KV cache all in memory, f32, 128 bytes per token: 0.02 GB in memory (all of it would be 0.02 GB), GPU attention off
+load: 4 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 117 MB
+rdma: prefill 14336 of 131040 positions, 54.9 s
+rdma: prefill 26624 of 131040 positions, 102.0 s
+rdma: prefill 40960 of 131040 positions, 157.3 s
+rdma: prefill 53248 of 131040 positions, 204.7 s
+rdma: prefill 65536 of 131040 positions, 251.9 s
+rdma: prefill 79872 of 131040 positions, 306.9 s
+rdma: prefill 92160 of 131040 positions, 354.7 s
+rdma: prefill 106496 of 131040 positions, 410.0 s
+rdma: prefill 118784 of 131040 positions, 457.3 s
+rdma: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 2.7 s, Gated DeltaNet 1.3 s, output 0.9 s, router 0.1 s, experts 499.4 s, LM head 0.0 s
+rdma: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+rdma: time to first token 504.686 s (260 tokens/s prefill); decode 0.005 s per token (191.94 tokens/s) over 7 steps from position 131040; resident memory 207 MB
+rdma: 1043876 expert calls sent to 1 peer, 1052876 run locally; payload fp8_e4m3
+expert: rank 1 ran 1043876 expert FFNs for rank 0 in 284 grouped jobs, 1740118 us each on average (max 2025223 us), 494.19 s in all; resident memory 123 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 48 allocations, 48 frees, peak 11.9 MB, 0 bytes still allocated at exit (balanced)
+rdma: heap: 279 allocations, 279 frees, peak 92.0 MB, 0 bytes still allocated at exit (balanced)

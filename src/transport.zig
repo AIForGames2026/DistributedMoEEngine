@@ -73,14 +73,16 @@ pub const Endpoint = struct {
     const control_bye = 1;
     const control_grant = 1;
 
+    pub const inbox_len = 256;
+
     const Inbox = struct {
-        buf: [256]u32 = undefined,
+        buf: [inbox_len]u32 = undefined,
         head: usize = 0,
         len: usize = 0,
     };
 
     pub fn init(backend: Backend, rank: u6, slots: u16) Endpoint {
-        std.debug.assert(slots > 0);
+        std.debug.assert(slots > 0 and slots <= inbox_len);
         return .{ .backend = backend, .rank = rank, .slots = slots, .credits = slots };
     }
 
@@ -173,10 +175,10 @@ pub const Endpoint = struct {
 
     /// Drains the backend: credit grants update `credits`, data immediates
     /// queue for `tryRecv`.
+    /// It always polls, even with a full inbox, so credits reach a sender that holds unread packets.
     fn pump(self: *Endpoint) Error!void {
         var buf: [64]u32 = undefined;
-        const room = @min(buf.len, self.inbox.buf.len - self.inbox.len);
-        const n = try self.backend.vtable.poll_completions(self.backend.ptr, buf[0..room]);
+        const n = try self.backend.vtable.poll_completions(self.backend.ptr, &buf);
         for (buf[0..n]) |raw| {
             const imm = wire.Imm.decode(raw);
             switch (imm.kind) {
@@ -185,6 +187,11 @@ pub const Endpoint = struct {
                     if (self.credits > self.slots) return error.ProtocolError;
                 },
                 .dispatch, .combine => {
+                    // Credits keep unread packets within `slots`, which fits the inbox.
+                    if (self.inbox.len == self.inbox.buf.len)
+                    {
+                        return error.ProtocolError;
+                    }
                     const tail = (self.inbox.head + self.inbox.len) % self.inbox.buf.len;
                     self.inbox.buf[tail] = raw;
                     self.inbox.len += 1;
@@ -343,6 +350,33 @@ test "withheld credits block the sender instead of overwriting a slot" {
     try b.grantCredit(1);
     try a.trySend(&extra, .dispatch);
     try std.testing.expectError(error.WouldBlock, a.trySend(&extra, .dispatch));
+}
+
+test "credits still arrive while the inbox is full of unread packets" {
+    // An expert sending a batch's answers pumps the router's new calls into its inbox
+    // without reading them; the router's credit grants must still get through.
+    const slots: u16 = Endpoint.inbox_len;
+    var pair = try shm.Pair.create(slots);
+    defer pair.deinit();
+    var a = Endpoint.init(pair.side(0).backend(), 0, slots);
+    var b = Endpoint.init(pair.side(1).backend(), 1, slots);
+    var pkt = newPacket(0);
+    for (0..slots) |_|
+    {
+        try a.trySend(&pkt, .dispatch);
+    }
+    for (0..slots) |_|
+    {
+        try b.trySend(&pkt, .combine);
+    }
+    try std.testing.expectEqual(@as(usize, slots), b.inbox.len);
+    for (0..slots) |_|
+    {
+        _ = (try a.tryRecv()).?;
+        try a.release();
+    }
+    try a.flushCredits();
+    try b.trySend(&pkt, .combine);
 }
 
 test "goodbye handshake completes on both sides" {

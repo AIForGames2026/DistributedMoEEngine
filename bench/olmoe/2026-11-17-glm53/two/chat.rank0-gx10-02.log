@@ -1,11 +1,8 @@
-load: non-expert weights and 144 of 288 experts, 95.75 GB in 17.34 s, expert CRC32C OK
-gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (95.75 GB in 2.47 s)
+load: non-expert weights and 144 of 288 experts, 95.75 GB in 17.32 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (95.75 GB in 4.88 s)
 rdma: recording every step to /home/admin/lukehinojosa/bench-glm53/two/chat.jsonl
 rdma: OpenAI-compatible API at http://127.0.0.1:8093/v1 (model "GLM-5.3-Flash-Q4_K-00002-of-00002", chat format glm, context 16384 tokens, reusing shared prompt prefixes)
 rdma: chat page with the live diagram at http://127.0.0.1:8093/
-error: step: a non-finite value in the residual after layer 12 (positions 32 to 32)
-rdma: request 1 failed: NonFinite; stopping
-rdma: recorded 5 steps (0 dropped) to the trace
-rdma: 5437 expert calls sent to 1 peer, 5395 run locally; payload fp8_e4m3
-rdma: heap: 131 allocations, 122 frees, peak 3371.0 MB, 13711076 bytes still allocated at exit
-error: NonFinite
+rdma: request 1: 28 prompt tokens (0 reused), 89 generated in 23.06 s, first token 1988 ms, 4.2 tokens/s decoding, finish stop
+rdma: request 2: 137 prompt tokens (116 reused), 146 generated in 36.30 s, first token 1537 ms, 4.2 tokens/s decoding, finish stop
+rdma: request 3: 259 prompt tokens (0 reused), 48 generated in 24.26 s, first token 12980 ms, 4.2 tokens/s decoding, finish stop

@@ -1,0 +1,69 @@
+03:50:13 gx10-01 health: {"ok": true, "backend": "tensorfold", "busy": false, "requests_running": 0, "requests_total": 4992, "prompt_tokens_total
+03:50:14 window: deadline 2026-11-20 05:30, sections stop at 2026-11-20 06:30
+qwen38-27b-tf
+03:50:20 gx10-01: qwen38-27b-tf stopped, watchdog paused
+               total        used        free      shared  buff/cache   available
+Mem:             121           5         114           0           2         116
+03:50:23 gx10-01: watchdog lock confirmed held
+03:50:23 == staging experts 144 to 191 on gx10-01
+admin@192.168.177.11: 28.5 of 28.5 GB
+admin@192.168.177.11: staged ~/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf
+03:52:34 == rehearsal with the tiny model
+== golden 03:52:35, stop at 2026-11-20 06:30
+golden: rank 0 exit 0
+rdma: generate prompt 0: 32 tokens in 0.10 s (316.9 tokens/s, prompt included)
+rdma: generate prompt 1: 32 tokens in 0.11 s (290.3 tokens/s, prompt included)
+rdma: generate prompt 2: 32 tokens in 0.11 s (288.3 tokens/s, prompt included)
+rdma: PASS: every generated token matches transformers' generate(), logits within 1e-2
+rdma: 1443 expert calls sent to 1 peer, 1293 run locally; payload f32
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.83
+	Maximum resident set size (kbytes): 123664
+G32_DONE 03:52:40
+03:52:41 == chat
+== chat 03:52:42, stop at 2026-11-20 06:30
+> In two or three sentences, what is a mixture-of-experts language model?
+A mixture-of-experts (MoE) language model is a neural network that replaces its dense feed-forward layers with multiple specialized "expert" sub-networks, using a router to activate only a small subset of experts for each input token. This lets the model have a very large total parameter count while
+  (89 tokens, first token 1988 ms, 4.2 tokens/s, finish stop)
+
+> Why does it matter which machine each expert lives on when the model is split across computers?
+When an MoE model is sharded across machines, the router may send tokens to experts located on other nodes, which requires network communication (an "all-to-all" exchange) before and after the expert computation. Network transfers are far slower than on-device computation, so which experts live wher
+  (146 tokens, first token 1537 ms, 4.2 tokens/s, finish stop)
+
+> Give me a one-line summary of what we discussed.
+We discussed how mixture-of-experts models use a router to activate only a few specialized sub-networks per token, and how expert placement across machines matters because network communication and load imbalance can bottleneck performance in distributed settings.
+  (48 tokens, first token 12980 ms, 4.2 tokens/s, finish stop)
+
+G32_DONE 03:55:55
+03:55:55 == long32
+== long32 03:55:56, stop at 2026-11-20 06:30
+32k: rank 0 exit 124
+rdma: prefill 4096 of 32640 positions, 166.8 s
+rdma: prefill 8192 of 32640 positions, 340.5 s
+rdma: prefill 10240 of 32640 positions, 428.5 s
+rdma: prefill 14336 of 32640 positions, 606.4 s
+rdma: prefill 16384 of 32640 positions, 696.2 s
+rdma: prefill 20480 of 32640 positions, 875.7 s
+rdma: prefill 24576 of 32640 positions, 1056.8 s
+rdma: prefill 26624 of 32640 positions, 1147.2 s
+G32_DONE 04:16:00
+04:16:00 == long128
+== long128 04:16:00, stop at 2026-11-20 06:30
+128k: rank 0 exit 124
+cat: /tmp/lh_g32.pid: No such file or directory
+cat: /tmp/lh_g32.pid: No such file or directory
+rdma: prefill 14336 of 131040 positions, 605.8 s
+rdma: prefill 26624 of 131040 positions, 1145.0 s
+rdma: prefill 40960 of 131040 positions, 1782.2 s
+rdma: prefill 53248 of 131040 positions, 2341.8 s
+rdma: prefill 65536 of 131040 positions, 2903.2 s
+rdma: prefill 79872 of 131040 positions, 3573.6 s
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:36:02
+	Maximum resident set size (kbytes): 101099324
+G32_DONE 06:16:48
+06:16:48 restoring gx10-01's lab server
+qwen38-27b-tf
+06:17:34 gx10-01: qwen38-27b-tf healthy
+06:17:36 gx10-01: watchdog lock released
+06:17:36 gx10-01's lab server is back
+06:17:54 logs copied to /d/CLionProjects/DistributedMoEEngine/bench/olmoe/2026-11-17-glm53/two
+WINDOW_EXIT 0

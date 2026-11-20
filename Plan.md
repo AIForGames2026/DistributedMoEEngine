@@ -473,11 +473,18 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - **GPU:** the new layers and Q4_K experts run on the GPU.
   - **Tokenizer and chat format:** identical to Hugging Face, as in TASK-31.
   - **Chat replay:** the scripted three-turn chat from the three-Spark run is added to the public page, written up in `bench/trace/`.
+    - **Amended Nov 20** (user's decision): `gx10-03` was in use, so the replay is the two-Spark chat (`gx10-02` and `gx10-01`, every expert in memory) from the second window, on the public page (`bench/trace/2026-11-20-glm53-chat.md`).
 - **Progress (Nov 18)**: the real-model golden passes the amended criteria (one process, `golden-amended.log`); the investigation is in `bench/olmoe/2026-11-17-glm53.md`.
   - **Golden:** short prompts 0 and 2 pass (logits 2.2e-3); prompt 1 fails on 2 router flips; the long prompt has every top-1 identical but shares 97.24% of expert choices and 99.71% of DSA pools. A two-Spark split gives exactly the same.
   - **Narrowed:** not the GPU kernels, the experts or DSA selection. The difference grows from layer 3, in mHC's stream mixing, which amplifies small input differences about 16 times; the step itself matches transformers in float64.
   - **Sensitivity:** transformers with 1e-6 noise on its embeddings shares 97.943% of expert choices and 99.795% of DSA pools with its plain run on the long prompt (engine: 97.242% and 99.708%), so the long-prompt targets were beyond any f32 implementation. The criteria are amended above.
   - **Multi-machine:** `gx10-03` was in use, so the run moved to two Sparks (`gx10-02` and `gx10-01`). The first window lost `gx10-01`'s watchdog lock to a quoting bug and caused an OOM there (fixed); chat, 32k and 128k wait for a rerun.
+- **Progress (Nov 20)**: the second two-Spark window (03:50 to 06:17) recorded the chat and a full 32k; 128k hung over RDMA.
+  - **Chat:** three coherent turns at 4.2 tokens/s, no non-finite GPU output.
+  - **32k:** time to first token 1,410 s (23 tokens/s), decode 3.52 tokens/s, 5.5 million expert calls to each rank.
+  - **128k:** prefill reached 79,872 positions at 21 to 23 tokens/s, then both ranks spun waiting on each other with idle GPUs.
+  - **Hang fixed (likely cause):** an endpoint whose inbox held a full ring of unread calls stopped polling, so the GPU expert, sending a batch's answers, never saw rank 0's credits. `transport.zig` now always polls; a unit test reproduces the old deadlock. The same race stalled every batch short of hanging: the tiny model's 128k over RDMA went from 504.7 s to 9.0 s.
+  - **Left:** 128k over two Sparks with the fix, which also confirms the cause; the chat replay on the public page and in `bench/trace/`; the three-Spark run if `gx10-03` frees up.
 
 #### [TASK-33] Any Number of Expert Nodes
 - **Milestone**: None (after v1)

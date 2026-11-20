@@ -1,0 +1,7 @@
+expert: listening on port 48268
+load: 144 of 288 experts, 85.61 GB in 16.07 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (85.61 GB in 2.22 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 85763 MB
+trace: layer 12 expert 177 token 5 slot 0 (batched): output nan, CPU from the same slot 2.161e-1, input 1.250e0
+expert: rank 1 ran 5437 expert FFNs for rank 0 in 220 grouped jobs, 27896 us each on average (max 622438 us), 6.14 s in all; resident memory 85144 MB
+expert: heap: 69 allocations, 69 frees, peak 1362.9 MB, 0 bytes still allocated at exit (balanced)

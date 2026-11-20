@@ -130,6 +130,11 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.packets = try std.fmt.parseInt(u64, value, 10);
         } else if (std.mem.eql(u8, arg, "--slots")) {
             opts.slots = try std.fmt.parseInt(u16, value, 10);
+            if (opts.slots == 0 or opts.slots > transport.Endpoint.inbox_len)
+            {
+                std.debug.print("--slots: 1 to {d}\n", .{transport.Endpoint.inbox_len});
+                return error.BadSlots;
+            }
             slots_given = true;
         } else if (std.mem.eql(u8, arg, "--host")) {
             opts.host = value;

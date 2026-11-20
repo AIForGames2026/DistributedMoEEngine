@@ -1,0 +1,27 @@
+load: non-expert weights and 144 of 288 experts, 95.75 GB in 17.31 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (95.75 GB in 2.51 s)
+rdma: context 131040 tokens + 32 generated, chunks of 2048; KV cache all in memory, f32, 22528 bytes per token: 2.95 GB in memory (all of it would be 2.95 GB), GPU attention off
+Command terminated by signal 15
+	Command being timed: "src/engine/zig-out-g32g/bin/olmoe rdma-router models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf --peer rdma:192.168.177.11:48146@rocep1s0f1 --gpu --tokens models/glm53-flash/repo.tokens --context 131040 --generate 32 --chunk 2048 --max-step 2048"
+	User time (seconds): 31.29
+	System time (seconds): 6.51
+	Percent of CPU this job got: 112%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:33.52
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 97374772
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 48867561
+	Voluntary context switches: 91862
+	Involuntary context switches: 2098
+	Swaps: 0
+	File system inputs: 187010408
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

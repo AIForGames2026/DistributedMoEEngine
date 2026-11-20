@@ -1,0 +1,22 @@
+05:52:04 128k router exited
+Mem:             121           5          88           0          29         116
+== long32 05:52:08, stop at 07:35
+32k: rank 0 exit 0
+rdma: prefill 4096 of 32640 positions, 165.5 s
+rdma: prefill 8192 of 32640 positions, 338.5 s
+rdma: prefill 10240 of 32640 positions, 426.8 s
+rdma: prefill 14336 of 32640 positions, 605.1 s
+rdma: prefill 16384 of 32640 positions, 695.1 s
+rdma: prefill 20480 of 32640 positions, 873.5 s
+rdma: prefill 24576 of 32640 positions, 1054.0 s
+rdma: prefill 26624 of 32640 positions, 1144.5 s
+rdma: prefill 30720 of 32640 positions, 1325.4 s
+rdma: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 308.8 s, Gated DeltaNet 133.9 s, output 14.4 s, router 9.0 s, experts 936.2 s, LM head 0.1 s
+rdma: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 12.8 s, Gated DeltaNet 10.4 s, output 0.9 s, router 2.5 s, experts 8.9 s, LM head 0.5 s
+rdma: time to first token 1410.252 s (23 tokens/s prefill); decode 0.284 s per token (3.52 tokens/s) over 127 steps from position 32640; resident memory 99514 MB
+rdma: 5519891 expert calls sent to 1 peer, 5489821 run locally; payload fp8_e4m3
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 24:33.21
+	Maximum resident set size (kbytes): 99015652
+G32_DONE 06:16:45
+06:16:45 AFTER128_DONE
+06:16:45 timeout resumed

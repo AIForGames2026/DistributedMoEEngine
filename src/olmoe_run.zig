@@ -371,6 +371,11 @@ fn parseArgs(init: std.process.Init) !Options {
             opts.port = try std.fmt.parseInt(u16, value, 10);
         } else if (std.mem.eql(u8, arg, "--slots")) {
             opts.slots = try std.fmt.parseInt(u16, value, 10);
+            if (opts.slots.? == 0 or opts.slots.? > transport.Endpoint.inbox_len)
+            {
+                std.debug.print("--slots: 1 to {d}\n", .{transport.Endpoint.inbox_len});
+                return error.BadSlots;
+            }
         } else if (std.mem.eql(u8, arg, "--dev")) {
             opts.device = value;
         } else if (std.mem.eql(u8, arg, "--gid")) {

@@ -1,0 +1,24 @@
+load: non-expert weights and 4 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+rdma: context 131040 tokens + 8 generated, chunks of 2048; KV cache all in memory, f32, 128 bytes per token: 0.02 GB in memory (all of it would be 0.02 GB), GPU attention off
+warning: gpu: a f32 weight (64x16) runs on the CPU: no GPU kernel reads its format or width
+load: 4 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 120 MB
+rdma: prefill 14336 of 131040 positions, 0.9 s
+rdma: prefill 26624 of 131040 positions, 1.6 s
+rdma: prefill 40960 of 131040 positions, 2.4 s
+rdma: prefill 53248 of 131040 positions, 3.2 s
+rdma: prefill 65536 of 131040 positions, 4.0 s
+rdma: prefill 79872 of 131040 positions, 5.0 s
+rdma: prefill 92160 of 131040 positions, 5.9 s
+rdma: prefill 106496 of 131040 positions, 7.0 s
+rdma: prefill 118784 of 131040 positions, 8.0 s
+rdma: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 2.7 s, Gated DeltaNet 1.2 s, output 0.8 s, router 0.1 s, experts 4.0 s, LM head 0.0 s
+rdma: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+rdma: time to first token 9.024 s (14521 tokens/s prefill); decode 0.005 s per token (216.61 tokens/s) over 7 steps from position 131040; resident memory 213 MB
+rdma: 1043881 expert calls sent to 1 peer, 1052871 run locally; payload fp8_e4m3
+expert: rank 1 ran 1043881 expert FFNs for rank 0 in 284 grouped jobs, 366 us each on average (max 5713 us), 0.10 s in all; resident memory 128 MB; 0 non-finite GPU outputs replaced by the CPU's
+gpu: 512 calls on f32 weights ran on the CPU (no_kernel)
+expert: heap: 48 allocations, 48 frees, peak 11.9 MB, 0 bytes still allocated at exit (balanced)
+rdma: heap: 279 allocations, 279 frees, peak 92.1 MB, 0 bytes still allocated at exit (balanced)

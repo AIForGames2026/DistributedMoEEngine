@@ -1,0 +1,16 @@
+load: non-expert weights and 8 of 8 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (0.00 GB in 0.00 s)
+local: context 131040 tokens + 8 generated, chunks of 2048; KV cache all in memory, f32, 128 bytes per token: 0.02 GB in memory (all of it would be 0.02 GB), GPU attention off
+local: prefill 14336 of 131040 positions, 0.7 s
+local: prefill 26624 of 131040 positions, 1.3 s
+local: prefill 40960 of 131040 positions, 2.1 s
+local: prefill 53248 of 131040 positions, 2.8 s
+local: prefill 65536 of 131040 positions, 3.5 s
+local: prefill 79872 of 131040 positions, 4.4 s
+local: prefill 92160 of 131040 positions, 5.2 s
+local: prefill 106496 of 131040 positions, 6.3 s
+local: prefill 118784 of 131040 positions, 7.2 s
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 3.1 s, Gated DeltaNet 2.1 s, output 0.9 s, router 0.1 s, experts 1.6 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+local: time to first token 8.079 s (16219 tokens/s prefill); decode 0.003 s per token (327.19 tokens/s) over 7 steps from position 131040; resident memory 179 MB
+local: heap: 512 allocations, 512 frees, peak 94.6 MB, 0 bytes still allocated at exit (balanced)

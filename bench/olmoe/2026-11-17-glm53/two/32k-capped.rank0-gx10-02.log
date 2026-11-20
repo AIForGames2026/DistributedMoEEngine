@@ -1,0 +1,11 @@
+load: non-expert weights and 144 of 288 experts, 95.75 GB in 17.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (95.75 GB in 2.64 s)
+rdma: context 32640 tokens + 128 generated, chunks of 2048; KV cache all in memory, f32, 22528 bytes per token: 0.74 GB in memory (all of it would be 0.74 GB), GPU attention off
+rdma: prefill 4096 of 32640 positions, 166.8 s
+rdma: prefill 8192 of 32640 positions, 340.5 s
+rdma: prefill 10240 of 32640 positions, 428.5 s
+rdma: prefill 14336 of 32640 positions, 606.4 s
+rdma: prefill 16384 of 32640 positions, 696.2 s
+rdma: prefill 20480 of 32640 positions, 875.7 s
+rdma: prefill 24576 of 32640 positions, 1056.8 s
+rdma: prefill 26624 of 32640 positions, 1147.2 s

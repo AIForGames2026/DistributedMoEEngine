@@ -25,6 +25,70 @@ pub extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) DWORD;
 pub extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) BOOL;
 pub extern "kernel32" fn QueryPerformanceFrequency(freq: *i64) callconv(.winapi) BOOL;
 pub extern "kernel32" fn Sleep(ms: DWORD) callconv(.winapi) void;
+pub extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: DWORD, share: DWORD, attrs: ?*anyopaque, disposition: DWORD, flags: DWORD, template: ?HANDLE) callconv(.winapi) HANDLE;
+pub extern "kernel32" fn ReadFile(file: HANDLE, buf: [*]u8, len: DWORD, read: ?*DWORD, overlapped: ?*OVERLAPPED) callconv(.winapi) BOOL;
+pub extern "kernel32" fn WriteFile(file: HANDLE, buf: [*]const u8, len: DWORD, written: ?*DWORD, overlapped: ?*OVERLAPPED) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetFileSizeEx(file: HANDLE, size: *i64) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetLastError() callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetSystemTimeAsFileTime(ft: *u64) callconv(.winapi) void;
+pub extern "kernel32" fn GetComputerNameA(buf: [*]u8, len: *DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
+pub extern "kernel32" fn K32GetProcessMemoryInfo(process: HANDLE, counters: *PROCESS_MEMORY_COUNTERS, cb: DWORD) callconv(.winapi) BOOL;
+
+pub const PROCESS_MEMORY_COUNTERS = extern struct {
+    cb: DWORD = 0,
+    page_faults: DWORD = 0,
+    peak_working_set: usize = 0,
+    working_set: usize = 0,
+    quota_peak_paged_pool: usize = 0,
+    quota_paged_pool: usize = 0,
+    quota_peak_nonpaged_pool: usize = 0,
+    quota_nonpaged_pool: usize = 0,
+    pagefile_usage: usize = 0,
+    peak_pagefile_usage: usize = 0,
+};
+
+pub const GENERIC_READ: DWORD = 0x80000000;
+pub const GENERIC_WRITE: DWORD = 0x40000000;
+pub const FILE_SHARE_READ: DWORD = 0x1;
+pub const CREATE_ALWAYS: DWORD = 2;
+pub const OPEN_EXISTING: DWORD = 3;
+pub const FILE_ATTRIBUTE_NORMAL: DWORD = 0x80;
+
+pub const OVERLAPPED = extern struct {
+    internal: usize = 0,
+    internal_high: usize = 0,
+    offset: DWORD = 0,
+    offset_high: DWORD = 0,
+    event: ?HANDLE = null,
+};
+
+/// Opens `path` (UTF-8) with CreateFileW; null if it cannot.
+pub fn openFile(path: []const u8, access: DWORD, disposition: DWORD) ?HANDLE
+{
+    var wide: [1024:0]u16 = undefined;
+    const n = std.unicode.utf8ToUtf16Le(&wide, path) catch return null;
+    if (n >= wide.len)
+    {
+        return null;
+    }
+    wide[n] = 0;
+    const h = CreateFileW(wide[0..n :0], access, FILE_SHARE_READ, null, disposition, FILE_ATTRIBUTE_NORMAL, null);
+    return if (h == INVALID_HANDLE_VALUE) null else h;
+}
+
+/// Reads up to `len` bytes at `offset`, like pread; returns the count or null on an error.
+pub fn readAt(h: HANDLE, offset: u64, buf: []u8) ?usize
+{
+    var ov: OVERLAPPED = .{ .offset = @truncate(offset), .offset_high = @intCast(offset >> 32) };
+    var got: DWORD = 0;
+    const len: DWORD = @intCast(@min(buf.len, 1 << 30));
+    if (ReadFile(h, buf.ptr, len, &got, &ov) == 0)
+    {
+        return if (GetLastError() == 38) 0 else null; // ERROR_HANDLE_EOF
+    }
+    return got;
+}
 
 pub const ws2 = std.os.windows.ws2_32;
 pub const SOCKET = usize;

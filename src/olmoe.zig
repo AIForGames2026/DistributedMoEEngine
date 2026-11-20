@@ -656,12 +656,9 @@ pub fn cpuThreads() usize
         return cached;
     }
     var count: usize = std.Thread.getCpuCount() catch 1;
-    if (@import("builtin").os.tag != .windows)
+    if (@import("plat.zig").env("TF_THREADS")) |v|
     {
-        if (std.c.getenv("TF_THREADS")) |v|
-        {
-            count = std.fmt.parseInt(usize, std.mem.sliceTo(v, 0), 10) catch count;
-        }
+        count = std.fmt.parseInt(usize, v, 10) catch count;
     }
     count = std.math.clamp(count, 1, max_threads);
     thread_count.store(count, .monotonic);

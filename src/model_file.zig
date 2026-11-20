@@ -1,9 +1,11 @@
-//! Model files on Linux (TASK-08, TASK-10): opening a GGUF or ModelOpt NVFP4
+//! Model files (TASK-08, TASK-10): opening a GGUF or ModelOpt NVFP4
 //! safetensors checkpoint, parsing its header into a `loader.Model`, and
 //! reading a `loader.Plan` into memory through the TASK-03 io_uring O_DIRECT
-//! reader. Shared by `tfload` and `olmoe`.
+//! reader, or on Windows its unbuffered ReadFile twin (TASK-40). Shared by `tfload` and `olmoe`.
 const std = @import("std");
 const c = std.c;
+const is_windows = @import("builtin").os.tag == .windows;
+const win32 = @import("win32.zig");
 const gguf = @import("gguf.zig");
 const safetensors = @import("safetensors.zig");
 const loader = @import("loader.zig");
@@ -31,10 +33,26 @@ pub const max_gap = 64 * 1024;
 
 /// A file opened for buffered reads (headers, the end-of-file tail).
 pub const File = struct {
-    fd: c.fd_t,
+    fd: Fd,
     bytes: u64,
 
+    pub const Fd = if (is_windows) win32.HANDLE else c.fd_t;
+
     pub fn open(path: [:0]const u8) !File {
+        if (is_windows)
+        {
+            const h = win32.openFile(path, win32.GENERIC_READ, win32.OPEN_EXISTING) orelse {
+                std.debug.print("cannot open {s}\n", .{path});
+                return error.FileNotFound;
+            };
+            var size: i64 = 0;
+            if (win32.GetFileSizeEx(h, &size) == 0)
+            {
+                _ = win32.CloseHandle(h);
+                return error.Unexpected;
+            }
+            return .{ .fd = h, .bytes = @intCast(size) };
+        }
         const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (fd < 0) {
             std.debug.print("cannot open {s}\n", .{path});
@@ -46,12 +64,27 @@ pub const File = struct {
     }
 
     pub fn close(self: File) void {
+        if (is_windows)
+        {
+            _ = win32.CloseHandle(self.fd);
+            return;
+        }
         _ = c.close(self.fd);
     }
 
     pub fn readAt(self: File, offset: u64, dst: []u8) !void {
         var done: usize = 0;
         while (done < dst.len) {
+            if (is_windows)
+            {
+                const got = win32.readAt(self.fd, offset + done, dst[done..]) orelse return error.ShortRead;
+                if (got == 0)
+                {
+                    return error.ShortRead;
+                }
+                done += got;
+                continue;
+            }
             const n = c.pread(self.fd, dst[done..].ptr, dst.len - done, @intCast(offset + done));
             if (n <= 0) return error.ShortRead;
             done += @intCast(n);
@@ -304,6 +337,10 @@ pub const DirectSource = struct {
 };
 
 pub fn nowNs() u64 {
+    if (is_windows)
+    {
+        return win32.nowNs();
+    }
     var ts: c.timespec = undefined;
     _ = c.clock_gettime(c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));

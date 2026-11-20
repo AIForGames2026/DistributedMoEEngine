@@ -18,7 +18,7 @@ pub fn parallelFor(threads: usize, n: usize, ctx: anytype, comptime f: fn (@Type
             f(cx.*, first, end);
         }
     };
-    if (threads <= 1 or n <= 1 or !have_pthreads)
+    if (threads <= 1 or n <= 1 or !have_threads)
     {
         f(ctx, 0, n);
         return;
@@ -26,16 +26,80 @@ pub fn parallelFor(threads: usize, n: usize, ctx: anytype, comptime f: fn (@Type
     shared.run(@min(threads, max_threads), n, &ctx, Thunk.run);
 }
 
-const have_pthreads = builtin.os.tag != .windows and builtin.link_libc;
+const is_windows = builtin.os.tag == .windows;
+const have_threads = is_windows or builtin.link_libc;
+
+/// A lock and condition variable: pthreads, or Win32's slim reader/writer locks (TASK-40).
+const Mutex = if (is_windows) struct {
+    lock: ?*anyopaque = null,
+
+    fn acquire(self: *Mutex) void
+    {
+        AcquireSRWLockExclusive(&self.lock);
+    }
+    fn release(self: *Mutex) void
+    {
+        ReleaseSRWLockExclusive(&self.lock);
+    }
+} else struct {
+    m: c.pthread_mutex_t = c.PTHREAD_MUTEX_INITIALIZER,
+
+    fn acquire(self: *Mutex) void
+    {
+        _ = c.pthread_mutex_lock(&self.m);
+    }
+    fn release(self: *Mutex) void
+    {
+        _ = c.pthread_mutex_unlock(&self.m);
+    }
+};
+
+const Cond = if (is_windows) struct {
+    cv: ?*anyopaque = null,
+
+    fn wait(self: *Cond, m: *Mutex) void
+    {
+        _ = SleepConditionVariableSRW(&self.cv, &m.lock, 0xFFFFFFFF, 0);
+    }
+    fn signal(self: *Cond) void
+    {
+        WakeConditionVariable(&self.cv);
+    }
+    fn broadcast(self: *Cond) void
+    {
+        WakeAllConditionVariable(&self.cv);
+    }
+} else struct {
+    cv: c.pthread_cond_t = c.PTHREAD_COND_INITIALIZER,
+
+    fn wait(self: *Cond, m: *Mutex) void
+    {
+        _ = c.pthread_cond_wait(&self.cv, &m.m);
+    }
+    fn signal(self: *Cond) void
+    {
+        _ = c.pthread_cond_signal(&self.cv);
+    }
+    fn broadcast(self: *Cond) void
+    {
+        _ = c.pthread_cond_broadcast(&self.cv);
+    }
+};
+
+extern "kernel32" fn AcquireSRWLockExclusive(lock: *?*anyopaque) callconv(.winapi) void;
+extern "kernel32" fn ReleaseSRWLockExclusive(lock: *?*anyopaque) callconv(.winapi) void;
+extern "kernel32" fn SleepConditionVariableSRW(cv: *?*anyopaque, lock: *?*anyopaque, ms: u32, flags: u32) callconv(.winapi) c_int;
+extern "kernel32" fn WakeConditionVariable(cv: *?*anyopaque) callconv(.winapi) void;
+extern "kernel32" fn WakeAllConditionVariable(cv: *?*anyopaque) callconv(.winapi) void;
 
 const Func = *const fn (*const anyopaque, usize, usize) void;
 
 const Pool = struct {
     /// Held by the one caller running a loop.
-    call: c.pthread_mutex_t = c.PTHREAD_MUTEX_INITIALIZER,
-    mutex: c.pthread_mutex_t = c.PTHREAD_MUTEX_INITIALIZER,
-    wake: c.pthread_cond_t = c.PTHREAD_COND_INITIALIZER,
-    done: c.pthread_cond_t = c.PTHREAD_COND_INITIALIZER,
+    call: Mutex = .{},
+    mutex: Mutex = .{},
+    wake: Cond = .{},
+    done: Cond = .{},
     spawned: usize = 0,
     generation: u64 = 0,
     /// Workers with an id below this take part in the current loop.
@@ -50,10 +114,10 @@ const Pool = struct {
 
     fn run(self: *Pool, threads: usize, n: usize, ctx: *const anyopaque, func: Func) void
     {
-        _ = c.pthread_mutex_lock(&self.call);
-        defer _ = c.pthread_mutex_unlock(&self.call);
+        self.call.acquire();
+        defer self.call.release();
         const helpers = threads - 1;
-        _ = c.pthread_mutex_lock(&self.mutex);
+        self.mutex.acquire();
         while (self.spawned < helpers)
         {
             const th = std.Thread.spawn(.{}, worker, .{ self, self.spawned, self.generation }) catch break;
@@ -69,15 +133,15 @@ const Pool = struct {
         self.active = use;
         self.busy = use;
         self.generation += 1;
-        _ = c.pthread_cond_broadcast(&self.wake);
-        _ = c.pthread_mutex_unlock(&self.mutex);
+        self.wake.broadcast();
+        self.mutex.release();
         self.take();
-        _ = c.pthread_mutex_lock(&self.mutex);
+        self.mutex.acquire();
         while (self.busy > 0)
         {
-            _ = c.pthread_cond_wait(&self.done, &self.mutex);
+            self.done.wait(&self.mutex);
         }
-        _ = c.pthread_mutex_unlock(&self.mutex);
+        self.mutex.release();
     }
 
     fn take(self: *Pool) void
@@ -96,25 +160,25 @@ const Pool = struct {
     fn worker(self: *Pool, id: usize, start: u64) void
     {
         var seen = start;
-        _ = c.pthread_mutex_lock(&self.mutex);
+        self.mutex.acquire();
         while (true)
         {
             while (self.generation == seen)
             {
-                _ = c.pthread_cond_wait(&self.wake, &self.mutex);
+                self.wake.wait(&self.mutex);
             }
             seen = self.generation;
             if (id >= self.active)
             {
                 continue;
             }
-            _ = c.pthread_mutex_unlock(&self.mutex);
+            self.mutex.release();
             self.take();
-            _ = c.pthread_mutex_lock(&self.mutex);
+            self.mutex.acquire();
             self.busy -= 1;
             if (self.busy == 0)
             {
-                _ = c.pthread_cond_signal(&self.done);
+                self.done.signal();
             }
         }
     }

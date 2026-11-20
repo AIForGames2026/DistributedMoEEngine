@@ -1,19 +1,23 @@
-# Native Windows 11 x86_64 build of the engine's PoC programs (dispatch.exe,
-# tensorfold.exe). Runs in Windows PowerShell 5.1 or PowerShell 7, no admin.
+# Native Windows 11 x86_64 build of the engine (olmoe.exe, TASK-40) and its
+# PoC programs (dispatch.exe, tensorfold.exe). Runs in Windows PowerShell 5.1
+# or PowerShell 7, no admin.
 #
 #   .\build.ps1             build, run the unit tests, run the PoC checks
 #   .\build.ps1 -SkipChecks build and unit-test only
 #   .\build.ps1 -Package    also zip bin\ for GitHub Releases into dist\
+#   .\build.ps1 -Model M.gguf -Golden G.tfref   also run olmoe local's golden check
 #
 # Uses Zig from PATH if it matches .zig-version, else ~\tools\zig, and
 # installs it there (tools\setup\install-zig.ps1, SHA-256 checked) if missing.
 #
-# Windows covers the CPU parts the PoC check needs: the two-process MoE over
-# shared memory and TCP. io_uring, CUDA, and RDMA steps (io-test, gate) are
-# Linux only.
+# Windows covers the PoC check (the two-process MoE over shared memory and
+# TCP) and olmoe's one-process mode on the CPU. io_uring, CUDA, and RDMA steps
+# (io-test, gate) are Linux only.
 param(
     [switch]$SkipChecks,
     [switch]$Package,
+    [string]$Model,
+    [string]$Golden,
     [ValidateSet('Debug', 'ReleaseSafe', 'ReleaseFast', 'ReleaseSmall')]
     [string]$Optimize = 'ReleaseFast',
     [int]$Port = 7470
@@ -62,14 +66,18 @@ Write-Host "Zig: $zig"
 # Release binaries target x86_64_v2 (SSE4.2 CRC32C), like the Linux x86_64 build.
 $buildArgs = @('-Dtarget=x86_64-windows-gnu', '-Dcpu=x86_64_v2', "-Doptimize=$Optimize")
 Invoke-Step 'Unit tests' { & $zig build test --summary all }
-Invoke-Step "Build ($Optimize)" { & $zig build install @buildArgs }
+Invoke-Step "Build ($Optimize)" { & $zig build install olmoe @buildArgs }
 $dispatch = Join-Path $PSScriptRoot 'zig-out\bin\dispatch.exe'
+$olmoe = Join-Path $PSScriptRoot 'zig-out\bin\olmoe.exe'
 
 if (-not $SkipChecks) {
     Invoke-Step 'Dispatch check, shared memory (4,096 + 4,096 packets)' { & $dispatch shm }
     Invoke-Step 'PoC check: two-process MoE vs PyTorch goldens, shared memory' { & $dispatch shm --moe }
     Invoke-TcpCheck 'Dispatch check, TCP loopback' @()
     Invoke-TcpCheck 'PoC check: two-process MoE vs PyTorch goldens, TCP loopback' @('--moe')
+    if ($Model -and $Golden) {
+        Invoke-Step 'olmoe local: one process vs the transformers golden' { & $olmoe local $Model --golden $Golden }
+    }
 }
 
 if ($Package) {

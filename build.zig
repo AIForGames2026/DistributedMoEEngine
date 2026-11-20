@@ -132,6 +132,17 @@ fn linkUring(b: *std.Build, mod: *std.Build.Module, prefix: ?[]const u8) void {
     mod.linkSystemLibrary("uring", .{});
 }
 
+/// The model reader and the shared C sources: io_uring on Linux, overlapped ReadFile on Windows (TASK-40).
+fn addReader(b: *std.Build, target: std.Build.ResolvedTarget, mod: *std.Build.Module, uring: ?[]const u8) void {
+    if (target.result.os.tag == .windows)
+    {
+        mod.addCSourceFiles(.{ .files = &(c_sources ++ [_][]const u8{"csrc/io/win_reader.c"}), .flags = &c_flags });
+        return;
+    }
+    mod.addCSourceFiles(.{ .files = &(c_sources ++ [_][]const u8{"csrc/io/uring_reader.c"}), .flags = &c_flags });
+    linkUring(b, mod, uring);
+}
+
 /// io_uring expert reader (TASK-03): its unit test and bench need liburing,
 /// so they live in their own step, like the gate.
 fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, uring: ?[]const u8, rdma: bool, cuda: []const u8) void {
@@ -163,8 +174,7 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         .link_libc = true,
     });
     tfload_mod.addIncludePath(b.path("include"));
-    tfload_mod.addCSourceFiles(.{ .files = &(c_sources ++ [_][]const u8{"csrc/io/uring_reader.c"}), .flags = &c_flags });
-    linkUring(b, tfload_mod, uring);
+    addReader(b, target, tfload_mod, uring);
     const tfload = b.addExecutable(.{ .name = "tfload", .root_module = tfload_mod });
     b.step("tfload", "Build the expert loader tool (needs liburing)").dependOn(&b.addInstallArtifact(tfload, .{}).step);
 
@@ -186,8 +196,11 @@ fn addIo(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.
         .link_libc = true,
     });
     olmoe_mod.addIncludePath(b.path("include"));
-    olmoe_mod.addCSourceFiles(.{ .files = &(c_sources ++ [_][]const u8{"csrc/io/uring_reader.c"}), .flags = &c_flags });
-    linkUring(b, olmoe_mod, uring);
+    addReader(b, target, olmoe_mod, uring);
+    if (target.result.os.tag == .windows)
+    {
+        olmoe_mod.linkSystemLibrary("ws2_32", .{});
+    }
     // The server's built-in chat page (TASK-30).
     olmoe_mod.addAnonymousImport("live.html", .{ .root_source_file = b.path("web/live.html") });
     // The operator dashboard's page (TASK-25).

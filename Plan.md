@@ -623,8 +623,8 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 ---
 
 #### [TASK-40] Native Windows Engine (olmoe)
-- **Milestone**: None (after v1)
-- **Status**: Backlog (added Nov 17)
+- **Milestone**: Release Candidate (pulled in Nov 20; was after v1)
+- **Status**: In Progress (added Nov 17, started Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 17, after TASK-25 needed WSL2 plus `--advertise` and an SSH tunnel to make the desktop an expert node. Natively, Windows builds only `dispatch.exe` and `tensorfold.exe`. The forward pass already builds and passes its tests there (`olmoe.zig`, `expert_cache.zig` and the thread pool have Windows branches); what is Linux only is `olmoe_run.zig` and the modules around it.
   - **Model loading:** a Windows reader behind the same interface as the io_uring O_DIRECT one (`model_file.zig`, `csrc/io/uring_reader.c`): unbuffered `ReadFile` to load every expert, and overlapped reads on an I/O completion port for the expert cache (`--cache`).
@@ -637,6 +637,11 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - **Server:** `--serve` passes `tools/ref/check_serve.py` and the built-in page shows the live diagram.
   - **Split:** a native Windows expert rank with a Spark router over TCP passes the same checks, with no WSL2 or tunnel, and `shm` passes on Windows alone.
   - **Build:** `build.ps1` builds `olmoe.exe` (with `-Gpu` for CUDA), Linux builds and tests are unchanged, and results are recorded in `bench/` with the Windows and driver versions.
+  - **Amended Nov 20** (user's decision): pulled in before v1, on `main`, and the README's content lock notes it. It adds Windows code only.
+- **Progress (Nov 20)**: the first step, model loading and `local` on the CPU (`bench/olmoe/2026-11-20-windows-native.md`).
+  - **Done:** `csrc/io/win_reader.c` gives `tf_io.h` on Windows (unbuffered `ReadFile`, overlapped reads in flight); `model_file.zig` opens and reads with Win32; `src/plat.zig` holds the few process and file calls `olmoe_run.zig` made through libc; the thread pool (`pool.zig`) uses SRW locks and condition variables, so Windows is no longer single-threaded; `build.ps1` builds `olmoe.exe` and, given `-Model` and `-Golden`, runs its check.
+  - **Checks:** native `olmoe local` on the desktop passes TASK-10 (`olmoe_forward.tfref`: logits within 3.77e-5, every expert choice identical) and TASK-24 (3 x 64 tokens match `generate()`, logits within 4.77e-5) on the CPU at 14 tokens/s; `--cache 512` gives the same tokens. Unit tests: 116 pass, 1 skipped on Windows; Linux (WSL2) tests pass and its `olmoe local` gives the same results.
+  - **Not yet:** `--gpu` (nvcc with `cl.exe`), Qwen3-30B-A3B with `--cache` from an NVMe drive, `--serve` and `--record` (telemetry and the server on Winsock), and the `expert`, `router` and `shm` modes; each of these stops with a message on Windows for now.
 
 #### [TASK-41] Prefetch and Cache Misses in the Live View
 - **Milestone**: None (after v1)
@@ -697,7 +702,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 TASK-20 is `should` but untagged: it is never cut, only reduced to a minimal build guide.
 
-**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist; TASK-33 lets the engine use any number of nodes, but runs are limited to the machines available), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends and macOS engine builds (post-v1: Vulkan in TASK-34 and Metal with a macOS build in TASK-35; until then non-NVIDIA machines join only as CPU expert nodes, TASK-22), and native Windows engine builds (post-v1 in TASK-40; until then `build.ps1` builds `dispatch.exe` for the CPU PoC check over shared memory and TCP, and the engine runs in WSL2).
+**Out of scope for v1** (recorded so they are not silently added): 8-node and 1-trillion-parameter runs (only 3 Sparks exist; TASK-33 lets the engine use any number of nodes, but runs are limited to the machines available), public or unauthenticated access to the engine and the operator dashboard (TASK-25, post-v1; TASK-30's server stays on localhost or a private network), approximate expert skipping, hardware DE tuning beyond TASK-13, GPU-initiated RDMA (IBGDA), training or fine-tuning, non-NVIDIA GPU backends and macOS engine builds (post-v1: Vulkan in TASK-34 and Metal with a macOS build in TASK-35; until then non-NVIDIA machines join only as CPU expert nodes, TASK-22), and native Windows engine builds beyond TASK-40 (pulled in before v1 on Nov 20; until it is done, the engine's other modes run in WSL2).
 
 ---
 
@@ -707,9 +712,9 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-40 (native Windows engine), TASK-42 (model families built from shared parts) |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-42 (model families built from shared parts) |
 | **To Do** | (none) |
-| **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
+| **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17), TASK-40 (native Windows engine, Nov 20) |
 | **Review** | (none) |
 | **Done** | TASK-39 (Mixtral, DeepSeek V3 as Moonlight-16B, and gpt-oss, Nov 18; `bench/olmoe/2026-11-18-families.md`), TASK-38 (chat templates read from the GGUF, Nov 18; `bench/olmoe/2026-11-18-chat-templates.md`), TASK-37 (SentencePiece and more pre-tokenizers, Nov 18; `bench/olmoe/2026-11-18-tokenizers.md`), TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`), TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 

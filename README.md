@@ -24,7 +24,7 @@ export PATH="$HOME/tools/zig:$PATH"
 zig build install -Doptimize=ReleaseFast
 ```
 
-**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds a subset of the engine.
+**Windows 11:** in PowerShell, from the repo root. It installs Zig if needed and builds the engine's one-process mode (`olmoe.exe local`, CPU only) and the two-process check; everything else runs in WSL2.
 
 ```powershell
 .\build.ps1
@@ -74,7 +74,7 @@ zig-out/bin/olmoe node --dashboard <dashboard IP> --models ~/models --secret-fil
 
 Approve the machine on the page, tick it under Model, and press Load. Chat on the page, or point any OpenAI-compatible client at `http://<dashboard>:8080/v1`. The dashboard speaks plain HTTP and listens only on 127.0.0.1 unless you pass `--listen`, so keep it on a private network or behind a TLS proxy. Every option is in [Building and running everything](docs/BUILDING.md).
 
-**On Windows**, the dashboard and the agent run in WSL2 (the native build has no `olmoe`). Build in Ubuntu as above, and keep `dashboard.token` and `node.secret` in your WSL home directory: under `/mnt/c` every file looks readable by everyone, so they are refused. A dashboard in WSL opens in your Windows browser at `http://127.0.0.1:8080/`.
+**On Windows**, the dashboard and the agent run in WSL2 (the native `olmoe.exe` runs `local` only). Build in Ubuntu as above, and keep `dashboard.token` and `node.secret` in your WSL home directory: under `/mnt/c` every file looks readable by everyone, so they are refused. A dashboard in WSL opens in your Windows browser at `http://127.0.0.1:8080/`.
 
 To make a Windows PC an expert node, start the agent in WSL with `--advertise 127.0.0.1`, since WSL's network address is hidden behind Windows:
 
@@ -120,6 +120,7 @@ The website is now the engine itself: recorded chats and runs of the real engine
 - **Release Candidate (`v0.9.0-rc1`, Nov 29):** the benchmark report and architecture whitepaper (TASK-19), developer documentation and the API freeze (TASK-20), and sharing the project with other developers once the site is final ([#52](https://github.com/AIForGames2026/DistributedMoEEngine/issues/52)).
 - **Final (`v1.0.0`, Dec 6):** the public release and docs freeze.
 - Post-v1 work in progress (GLM-5.3-Flash's 128k prompt over two Sparks, TASK-32) adds results to `bench/`, not new site content.
+- **Amended Nov 20:** the native Windows engine (TASK-40) is pulled in before v1. It adds Windows code only; Linux builds and tests are unchanged.
 
 **Not in this build**
 - Compressed expert streaming (TASK-13) was cut on Nov 11.

@@ -70,6 +70,7 @@
 const std = @import("std");
 const c = std.c;
 const build_options = @import("build_options");
+const is_windows = @import("builtin").os.tag == .windows;
 const gguf = @import("gguf.zig");
 const loader = @import("loader.zig");
 const olmoe = @import("olmoe.zig");
@@ -77,6 +78,7 @@ const tfref = @import("tfref.zig");
 const wire = @import("wire.zig");
 const transport = @import("transport.zig");
 const mf = @import("model_file.zig");
+const plat = @import("plat.zig");
 const Arena = @import("arena.zig").Arena;
 const ExpertCache = @import("expert_cache.zig").ExpertCache;
 const split = @import("split.zig");
@@ -204,11 +206,16 @@ pub fn main(init: std.process.Init) !void {
         {
             try all.append(init.arena.allocator(), arg);
         }
-        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "dashboard"))
+        if (is_windows and all.items.len >= 2 and (std.mem.eql(u8, all.items[1], "dashboard") or std.mem.eql(u8, all.items[1], "node")))
+        {
+            std.debug.print("olmoe {s}: Linux only\n", .{all.items[1]});
+            std.process.exit(2);
+        }
+        if (!is_windows and all.items.len >= 2 and std.mem.eql(u8, all.items[1], "dashboard"))
         {
             return dashboard.main(init.gpa, all.items[2..]);
         }
-        if (all.items.len >= 2 and std.mem.eql(u8, all.items[1], "node"))
+        if (!is_windows and all.items.len >= 2 and std.mem.eql(u8, all.items[1], "node"))
         {
             return node_agent.main(init.gpa, all.items[2..]);
         }
@@ -283,17 +290,20 @@ pub fn main(init: std.process.Init) !void {
             .probe = if (box) |b| .{ .ctx = b.cache, .sample = sampleCache } else .{ .ctx = &l.local, .sample = sampleLocal },
             .cache = if (box) |b| b.cache else null,
         };
-        const tel = try openTelemetry(gpa, l.cfg, moe, opts, "local", live);
+        const tel = if (is_windows) try noTelemetry(opts, "local") else try openTelemetry(gpa, l.cfg, moe, opts, "local", live);
         const run_moe = if (tel) |t| t.tap.moe() else moe;
-        const result = if (opts.serve != null)
+        const result = if (!is_windows and opts.serve != null)
             runServe(gpa, &l, run_moe, opts, "local", tel.?.bc, if (box != null) opts.max_step else null)
         else if (opts.context > 0)
             runLong(gpa, &l.weights.?, run_moe, opts, "local")
         else
             runGolden(gpa, &l.weights.?, run_moe, opts, "local");
-        if (tel) |t|
+        if (!is_windows)
         {
-            t.close("local");
+            if (tel) |t|
+            {
+                t.close("local");
+            }
         }
         if (box) |b|
         {
@@ -301,6 +311,11 @@ pub fn main(init: std.process.Init) !void {
         }
         reportGuards(opts, "local", moe.capacity, null);
         return result;
+    }
+    if (is_windows)
+    {
+        std.debug.print("olmoe {s}: not on Windows yet; Windows runs local\n", .{mode});
+        std.process.exit(2);
     }
     const is_rdma = std.mem.startsWith(u8, mode, "rdma");
     if (is_rdma and !build_options.rdma) {
@@ -1529,6 +1544,17 @@ const Telemetry = struct {
     }
 };
 
+/// Windows has no telemetry yet (TASK-40): refuses `--serve` and `--record`.
+fn noTelemetry(opts: Options, name: []const u8) !?Telemetry
+{
+    if (opts.serve != null or opts.record != null)
+    {
+        std.debug.print("{s}: --serve and --record are not on Windows yet\n", .{name});
+        return error.Unsupported;
+    }
+    return null;
+}
+
 /// Sets up the telemetry tap when `--serve` or `--record` asks for it, else returns null.
 fn openTelemetry(gpa: std.mem.Allocator, cfg: olmoe.Config, moe: olmoe.Moe, opts: Options, name: []const u8, live: Live) !?Telemetry
 {
@@ -1569,9 +1595,7 @@ fn openTelemetry(gpa: std.mem.Allocator, cfg: olmoe.Config, moe: olmoe.Moe, opts
 
 fn unixNow() i64
 {
-    var ts: c.timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK.REALTIME, &ts);
-    return @intCast(ts.sec);
+    return plat.unixNow();
 }
 
 /// The built-in chat page (TASK-30), embedded from `web/live.html`.
@@ -1590,11 +1614,7 @@ const Live = struct {
 fn hostName(buf: *[64]u8) []const u8
 {
     @memset(buf, 0);
-    if (c.gethostname(buf, buf.len - 1) != 0)
-    {
-        return "this machine";
-    }
-    return std.mem.sliceTo(buf, 0);
+    return plat.hostName(buf) orelse "this machine";
 }
 
 /// A single process's experts, all loaded, as the live diagram's engine counter.
@@ -1758,9 +1778,15 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
         std.debug.print("{s}: --prefix-cache does not support {s} yet\n", .{ name, modelName(cfg) });
         return error.Unsupported;
     }
-    if (opts.kv_offload) |dir|
+    if (is_windows and (opts.kv_offload != null or opts.prefix_cache != null))
     {
-        const path = try zPrint(&path_buf, "{s}/tf_kv_{d}.bin", .{ dir, c.getpid() });
+        std.debug.print("{s}: --kv-offload and --prefix-cache are Linux only\n", .{name});
+        return error.Unsupported;
+    }
+    if (!is_windows and opts.kv_offload != null)
+    {
+        const dir = opts.kv_offload.?;
+        const path = try zPrint(&path_buf, "{s}/tf_kv_{d}.bin", .{ dir, plat.pid() });
         tier = try kv_tier.TierCache.open(gpa, cfg, cap, .{ .max_chunk = opts.chunk, .window = opts.kv_window, .path = path, .format = opts.kv_format });
         cache = try olmoe.KvCache.tiered(cfg, cap, opts.kv_format, tier.?.tier());
     }
@@ -1792,28 +1818,31 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     const t0 = mf.nowNs();
     var pos: usize = 0;
     var full = false;
-    if (key) |k|
+    if (!is_windows)
     {
-        if (try prefix_cache.find(gpa, k, tokens)) |m|
+        if (key) |k|
         {
-            const tr = try prefix_cache.restore(k, m, &cache, logits);
-            pos = m.positions;
-            full = m.full;
-            std.debug.print("{s}: prefix cache: restored {d} of {d} positions{s} from {s} ({d} saved): {d:.2} GB in {d:.2} s ({d:.2} GB/s)\n", .{
-                name,
-                m.positions,
-                n,
-                if (m.full) " and the last logits" else "",
-                m.fileName(),
-                m.saved,
-                @as(f64, @floatFromInt(tr.bytes)) / 1e9,
-                @as(f64, @floatFromInt(tr.ns)) / 1e9,
-                @as(f64, @floatFromInt(tr.bytes)) / @max(@as(f64, @floatFromInt(tr.ns)), 1),
-            });
-        }
-        else
-        {
-            std.debug.print("{s}: prefix cache: no saved prefix shares a whole chunk with this prompt\n", .{name});
+            if (try prefix_cache.find(gpa, k, tokens)) |m|
+            {
+                const tr = try prefix_cache.restore(k, m, &cache, logits);
+                pos = m.positions;
+                full = m.full;
+                std.debug.print("{s}: prefix cache: restored {d} of {d} positions{s} from {s} ({d} saved): {d:.2} GB in {d:.2} s ({d:.2} GB/s)\n", .{
+                    name,
+                    m.positions,
+                    n,
+                    if (m.full) " and the last logits" else "",
+                    m.fileName(),
+                    m.saved,
+                    @as(f64, @floatFromInt(tr.bytes)) / 1e9,
+                    @as(f64, @floatFromInt(tr.ns)) / 1e9,
+                    @as(f64, @floatFromInt(tr.bytes)) / @max(@as(f64, @floatFromInt(tr.ns)), 1),
+                });
+            }
+            else
+            {
+                std.debug.print("{s}: prefix cache: no saved prefix shares a whole chunk with this prompt\n", .{name});
+            }
         }
     }
     var next_report: usize = n / 10;
@@ -1847,19 +1876,22 @@ fn runLong(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe, opts
     }
     reportProfile(name, "prefill");
     olmoe.profile = .{};
-    if (key) |k|
+    if (!is_windows)
     {
-        if (!full)
+        if (key) |k|
         {
-            const s = try prefix_cache.save(k, tokens, &cache, logits);
-            std.debug.print("{s}: prefix cache: saved {d} positions to {s}: {d:.2} GB in {d:.2} s ({d:.2} GB/s)\n", .{
-                name,
-                n,
-                s.fileName(),
-                @as(f64, @floatFromInt(s.transfer.bytes)) / 1e9,
-                @as(f64, @floatFromInt(s.transfer.ns)) / 1e9,
-                @as(f64, @floatFromInt(s.transfer.bytes)) / @max(@as(f64, @floatFromInt(s.transfer.ns)), 1),
-            });
+            if (!full)
+            {
+                const s = try prefix_cache.save(k, tokens, &cache, logits);
+                std.debug.print("{s}: prefix cache: saved {d} positions to {s}: {d:.2} GB in {d:.2} s ({d:.2} GB/s)\n", .{
+                    name,
+                    n,
+                    s.fileName(),
+                    @as(f64, @floatFromInt(s.transfer.bytes)) / 1e9,
+                    @as(f64, @floatFromInt(s.transfer.ns)) / 1e9,
+                    @as(f64, @floatFromInt(s.transfer.bytes)) / @max(@as(f64, @floatFromInt(s.transfer.ns)), 1),
+                });
+            }
         }
     }
     const out_tokens = try gpa.alloc(u32, opts.generate);
@@ -1961,15 +1993,9 @@ fn fingerprint(buf: []u8, opts: Options) ![]const u8
 {
     var path_buf: [512]u8 = undefined;
     const path = try zPrint(&path_buf, "{s}", .{opts.model});
-    const fd = c.open(path, .{ .ACCMODE = .RDONLY }, @as(c.mode_t, 0));
-    if (fd < 0)
-    {
-        return error.ModelNotFound;
-    }
-    const size = c.lseek(fd, 0, c.SEEK.END);
-    _ = c.close(fd);
-    const att = if (c.getenv("TF_ATT_KERNEL")) |v| std.mem.sliceTo(v, 0) else "0";
-    const mm = if (c.getenv("TF_MM_KERNEL")) |v| std.mem.sliceTo(v, 0) else "0";
+    const size = plat.fileBytes(path) orelse return error.ModelNotFound;
+    const att = plat.env("TF_ATT_KERNEL") orelse "0";
+    const mm = plat.env("TF_MM_KERNEL") orelse "0";
     const base = if (std.mem.lastIndexOfScalar(u8, opts.model, '/')) |i| opts.model[i + 1 ..] else opts.model;
     return std.fmt.bufPrint(buf, "engine {s}; model {s} ({d} bytes); yarn {d}; gpu {}; TF_ATT_KERNEL {s}; TF_MM_KERNEL {s}; kv {t}", .{
         build_options.engine_build, base, size, yarn_factor, opts.gpu, att, mm, opts.kv_format,
@@ -2002,23 +2028,7 @@ fn zPrint(buf: []u8, comptime fmt: []const u8, args: anytype) ![:0]const u8
 fn writeFile(path: []const u8, bytes: []const u8) !void
 {
     var buf: [512]u8 = undefined;
-    const z = try zPrint(&buf, "{s}", .{path});
-    const fd = c.open(z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(c.mode_t, 0o644));
-    if (fd < 0)
-    {
-        return error.WriteFailed;
-    }
-    defer _ = c.close(fd);
-    var off: usize = 0;
-    while (off < bytes.len)
-    {
-        const n = c.write(fd, bytes[off..].ptr, bytes.len - off);
-        if (n <= 0)
-        {
-            return error.WriteFailed;
-        }
-        off += @intCast(n);
-    }
+    try plat.writeFile(try zPrint(&buf, "{s}", .{path}), bytes);
 }
 
 /// The model, for messages.
@@ -2095,10 +2105,10 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
     var ties: usize = 0;
     var same_bits = true;
     var compared: usize = 0;
-    const detail = c.getenv("TF_GOLDEN_DETAIL") != null; // Per-layer routing differences, for diagnosis
-    if (c.getenv("TF_DUMP_LAYER")) |v|
+    const detail = plat.env("TF_GOLDEN_DETAIL") != null; // Per-layer routing differences, for diagnosis
+    if (plat.env("TF_DUMP_LAYER")) |v|
     {
-        dump_layer = std.fmt.parseInt(usize, std.mem.sliceTo(v, 0), 10) catch null;
+        dump_layer = std.fmt.parseInt(usize, v, 10) catch null;
         olmoe.dump = dumpOne;
     }
     for (0..@intCast(gcfg[0])) |p| {
@@ -2130,10 +2140,10 @@ pub fn runGolden(gpa: std.mem.Allocator, w: *const olmoe.Weights, moe: olmoe.Moe
         const t0 = mf.nowNs();
         try olmoe.forwardAs(gpa, w, moe, tokens, logits, trace, opts.kv_format);
         const ms = @as(f64, @floatFromInt(mf.nowNs() - t0)) / 1e6;
-        if (c.getenv("TF_GOLDEN_DUMP")) |dz| // Raw expert and pool choices, to compare runs with each other
+        if (plat.env("TF_GOLDEN_DUMP")) |dz| // Raw expert and pool choices, to compare runs with each other
         {
             var pb: [512]u8 = undefined;
-            const dump = std.mem.sliceTo(dz, 0);
+            const dump = dz;
             try writeFile(try std.fmt.bufPrint(&pb, "{s}.p{d}.topk", .{ dump, p }), std.mem.sliceAsBytes(trace.topk));
             try writeFile(try std.fmt.bufPrint(&pb, "{s}.p{d}.pools", .{ dump, p }), std.mem.sliceAsBytes(trace.qsa));
         }
@@ -2447,25 +2457,10 @@ fn mb(bytes: u64) f64
     return @as(f64, @floatFromInt(bytes)) / 1e6;
 }
 
-/// Resident memory of this process in bytes, or 0 if /proc is unreadable.
+/// Resident memory of this process in bytes, or 0 if it cannot be read.
 fn rssBytes() u64
 {
-    const fd = c.open("/proc/self/statm", .{ .ACCMODE = .RDONLY });
-    if (fd < 0)
-    {
-        return 0;
-    }
-    defer _ = c.close(fd);
-    var buf: [128]u8 = undefined;
-    const n = c.read(fd, &buf, buf.len);
-    if (n <= 0)
-    {
-        return 0;
-    }
-    var it = std.mem.tokenizeScalar(u8, buf[0..@intCast(n)], ' ');
-    _ = it.next();
-    const pages = std.fmt.parseInt(u64, it.next() orelse return 0, 10) catch return 0;
-    return pages * std.heap.pageSize();
+    return plat.rssBytes();
 }
 
 /// Generates `opts.generate` tokens after each golden prompt. When greedy and

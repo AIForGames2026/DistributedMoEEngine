@@ -1,6 +1,32 @@
 {
   "recordings": [
     {
+      "id": "sparks-desktop-chat",
+      "source": "bench/trace/2026-11-16/chat-sparks-desktop.jsonl.gz",
+      "title": "Chat: Qwen3-30B-A3B across three DGX Sparks and a desktop CPU",
+      "summary": "A scripted three-turn chat at temperature 0 with Qwen3-30B-A3B (48 layers, 128 experts, top 8, thinking on) over four processes (TASK-33): the three Sparks over RDMA, plus a desktop's CPU in WSL2 over TCP on the campus network, one router mixing both kinds of link. The desktop answers each expert call in about 1.4 ms against 0.06 ms on a Spark's GPU, so it sets the pace at 2.0 tokens/s; it plays at 4x by default. Its replies differ from the three-Spark chat because FP8 activations round differently when experts move.",
+      "results": "bench/trace/2026-11-16-chats.md",
+      "ranks": [
+        "gx10-02",
+        "gx10-03",
+        "gx10-01",
+        "desktop"
+      ],
+      "speed": 4,
+      "note": "A note on this reply: experts are not separate models trained on different tasks or topics. Each layer has its own experts, and its router picks a few of them for every token; those are the experts you see light up in the diagram."
+    },
+    {
+      "id": "qwen38-chat",
+      "source": "bench/trace/2026-11-17/chat-qwen38-one-spark.jsonl.gz",
+      "title": "Chat: Qwen3.8-Flash-Next on one DGX Spark, experts streamed from NVMe",
+      "summary": "A scripted three-turn chat at temperature 0 through the engine's OpenAI-compatible server (TASK-30), with Qwen3.8-Flash-Next (TASK-31): 48 layers mixing Gated DeltaNet and attention, 512 experts chosen 10 at a time. The Q8_0 weights are larger than gx10-02's memory, so the experts stream from NVMe through a 12,000-slot cache on the GPU. It was recorded at 7 to 8 tokens/s with reasoning on.",
+      "results": "bench/trace/2026-11-17-qwen38-chat.md",
+      "ranks": [
+        "gx10-02"
+      ],
+      "speed": 1
+    },
+    {
       "id": "olmoe-chat",
       "source": "bench/trace/2026-11-15/chat-olmoe-two-sparks-rdma.jsonl.gz",
       "title": "Chat: OLMoE-1B-7B split across two DGX Sparks over RDMA",
@@ -10,7 +36,8 @@
         "gx10-02",
         "gx10-03"
       ],
-      "speed": 1
+      "speed": 1,
+      "note": "A note on this reply: experts are not separate models trained on different tasks or topics. Each layer has its own experts, and its router picks a few of them for every token; those are the experts you see light up in the diagram."
     },
     {
       "id": "qwen3-chat",
@@ -21,18 +48,8 @@
       "ranks": [
         "gx10-02"
       ],
-      "speed": 1
-    },
-    {
-      "id": "qwen38-chat",
-      "source": "bench/trace/2026-11-17/chat-qwen38-one-spark.jsonl.gz",
-      "title": "Chat: Qwen3.8-Flash-Next on one DGX Spark, experts streamed from NVMe",
-      "summary": "The same scripted three-turn chat with Qwen3.8-Flash-Next (TASK-31): 48 layers mixing Gated DeltaNet and attention, 512 experts chosen 10 at a time. The Q8_0 weights are larger than gx10-02's memory, so the experts stream from NVMe through a 12,000-slot cache on the GPU. It was recorded at 7 to 8 tokens/s with reasoning on.",
-      "results": "bench/trace/2026-11-17-qwen38-chat.md",
-      "ranks": [
-        "gx10-02"
-      ],
-      "speed": 1
+      "speed": 1,
+      "note": "A note on this reply: experts are not separate models trained on different tasks or topics. Each layer has its own experts, and its router picks a few of them for every token; those are the experts you see light up in the diagram."
     },
     {
       "id": "qwen3-cache-chat",
@@ -43,7 +60,8 @@
       "ranks": [
         "gx10-02"
       ],
-      "speed": 1
+      "speed": 1,
+      "note": "A note on this reply: experts are not separate models trained on different tasks or topics. Each layer has its own experts, and its router picks a few of them for every token; those are the experts you see light up in the diagram."
     },
     {
       "id": "three-sparks-chat",
@@ -57,20 +75,6 @@
         "gx10-01"
       ],
       "speed": 16
-    },
-    {
-      "id": "sparks-desktop-chat",
-      "source": "bench/trace/2026-11-16/chat-sparks-desktop.jsonl.gz",
-      "title": "Chat: Qwen3-30B-A3B across three DGX Sparks and a desktop CPU",
-      "summary": "The same chat over four processes (TASK-33): the three Sparks over RDMA, plus a desktop's CPU in WSL2 over TCP on the campus network, one router mixing both kinds of link. The desktop answers each expert call in about 1.4 ms against 0.06 ms on a Spark's GPU, so it sets the pace at 2.0 tokens/s; it plays at 4x by default. Its replies differ from the three-Spark chat because FP8 activations round differently when experts move.",
-      "results": "bench/trace/2026-11-16-chats.md",
-      "ranks": [
-        "gx10-02",
-        "gx10-03",
-        "gx10-01",
-        "desktop"
-      ],
-      "speed": 4
     },
     {
       "id": "soak",

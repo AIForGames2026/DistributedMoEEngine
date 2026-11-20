@@ -17,8 +17,6 @@
   --rank1: 234, 88, 12;
   --rank2: 147, 51, 234;
   --rank3: 219, 39, 119;
-  --heat-floor: 0.22;
-  --heat-span: 0.4;
   --ok: #15803d;
   --bad: #b91c1c;
   --user: #e8eefc;
@@ -41,8 +39,6 @@
     --line: #2a313a;
     --link: #2a313a;
     --cell: #222831;
-    --heat-floor: 0.08;
-    --heat-span: 0.22;
     --rank0: 96, 145, 255;
     --rank1: 251, 146, 60;
     --rank2: 192, 132, 252;
@@ -203,9 +199,6 @@ function freshState(h) {
   }
   return {
     cols, colOf,
-    heat: cols.map((c) => new Float32Array(h.layers * c.length)),
-    total: cols.map((c) => new Float32Array(h.layers * c.length)),
-    totalMax: 1,
     drawn: new Array(ranks).fill(0),
     base: null,
     engine: null,
@@ -213,7 +206,6 @@ function freshState(h) {
     decode: [], prefill: null,
     rtt: [], cache0: null, cache: null,
     offset: 0, delay: 0,
-    packets: [], linkCalls: [],
     // Machines whose experts come from a drive through a cache (TASK-41); older recordings have none.
     cacheRanks: new Set(Array.isArray(h.cache_ranks) ? h.cache_ranks.filter((r) => Number.isInteger(r) && r >= 0 && r < ranks) : []),
   };
@@ -296,8 +288,7 @@ function stepInRange(f, h) {
   return f.engine.length === Math.max(2, h.ranks.length);
 }
 
-// `rateNow` is the clock for rates: real time when live, the recording's time when replaying.
-function onStep(f, rateNow = performance.now(), word = "") {
+function onStep(f, word = "") {
   if (!topo || !validStep(f) || !stepInRange(f, topo)) { if (live) live.rejected++; return; }
   const ranks = topo.ranks.length;
   const byRank = new Array(ranks).fill(0);
@@ -307,17 +298,9 @@ function onStep(f, rateNow = performance.now(), word = "") {
   }
   live.lastSeq = f.seq;
   live.frames++;
-  // One token lights its experts fully; a prefill chunk shades them by how often they ran.
-  let peak = 1;
-  if (f.n > 1) for (let i = 2; i < f.x.length; i += 3) peak = Math.max(peak, f.x[i]);
   for (let i = 0; i < f.x.length; i += 3) {
     const l = f.x[i], e = f.x[i + 1], c = f.x[i + 2];
     const r = Math.min(topo.owner[e], ranks - 1);
-    const cell = l * live.cols[r].length + live.colOf[e];
-    const v = f.n > 1 ? 0.35 + 0.65 * c / peak : 1;
-    live.heat[r][cell] = Math.max(live.heat[r][cell], v);
-    live.total[r][cell] += c;
-    live.totalMax = Math.max(live.totalMax, live.total[r][cell]);
     byRank[r] += c;
   }
   for (let r = 0; r < ranks; r++) live.drawn[r] += byRank[r];
@@ -336,13 +319,6 @@ function onStep(f, rateNow = performance.now(), word = "") {
     while (live.decode.length > 1 && f.ms - live.decode[0] > 3000) live.decode.shift();
   } else {
     live.prefill = { n: f.n, ms: f.step_us / 1000 };
-  }
-  const now = performance.now();
-  for (let r = 1; r < ranks; r++) {
-    if (byRank[r] === 0) continue;
-    live.linkCalls.push({ t: rateNow, r, calls: byRank[r] });
-    const dots = Math.min(byRank[r], f.n > 1 ? 24 : 8);
-    for (let i = 0; i < dots; i++) live.packets.push({ t0: now + i * 12, lane: Math.random(), r });
   }
   animFeed(f, word);
 }
@@ -1110,20 +1086,14 @@ function draw(now) {
     return;
   }
   animTick(dt);
-  // Replays fade at the speed they play, and hold still while paused.
-  const speed = rp ? (rp.playing ? rp.speed : 0) : 1;
-  const decay = Math.exp(-dt * speed / 0.35);
-  for (const h of live.heat) for (let i = 0; i < h.length; i++) h[i] *= decay;
   labels.length = 0;
   if (view === "flow")
   {
     drawFlow(W, H);
-    live.packets.length = 0;
-    live.linkCalls = live.linkCalls.filter((c) => (rp ? rp.clock : now) - c.t < 1000);
   }
   else
   {
-    drawHeat(W, H, now);
+    drawHeat(W, H);
   }
   if (loadingFor !== "fetch") {
     const pending = rp && !holding() ? stepInFlight() : null;
@@ -1138,69 +1108,192 @@ function draw(now) {
   requestAnimationFrame(draw);
 }
 
-// The "All experts" view: every layer's experts as a grid per machine, glowing as they run.
-function drawHeat(W, H, now) {
-  const ranks = topo.ranks.length;
-  const stacked = ranks > 1 && W < 640;
-  const boxes = layout(W, H, ranks, stacked);
-  const cellBg = color("--cell");
-  const floor = parseFloat(color("--heat-floor")) || 0.08, span = parseFloat(color("--heat-span")) || 0.22;
-  for (let r = 0; r < ranks; r++) {
-    const b = boxes[r];
-    const rgb = rankRgb(r);
-    const cols = live.cols[r].length || 1;
-    const fit = (font, long, short) => {
-      ctx.font = font;
-      return ctx.measureText(long).width <= b.w - 8 ? long : short;
-    };
-    const head = "600 13px system-ui, sans-serif", sub = "12px system-ui, sans-serif";
-    addText(fit(head, `rank ${r} · ${topo.ranks[r]}`, `rank ${r}`), b.x, b.y + 4, head, "--ink");
-    const calls = `${live.drawn[r].toLocaleString()} calls`;
-    addText(fit(sub, `${live.cols[r].length} experts per layer · ${calls}`, calls), b.x, b.y + 20, sub, "--muted");
-    const top = b.y + 32, avail = b.h - 40;
-    // When one row per layer leaves tiny cells, wrap each layer onto the row count giving the largest cells.
-    let wrap = 1, best = Math.min(b.w / cols, avail / topo.layers);
-    for (let w = 2; w <= 16 && Math.min(b.w / cols, avail / topo.layers) < 4; w++) {
-      const g = w > 1 ? 2 : 0;
-      const c = Math.min(b.w / Math.ceil(cols / w), (avail - g * (topo.layers - 1)) / (topo.layers * w));
-      if (c > best + 0.01) {
-        best = c;
-        wrap = w;
-      }
-    }
-    const per = Math.ceil(cols / wrap), gap = wrap > 1 ? 2 : 0;
-    const cell = Math.max(1, best);
-    const gw = cell * per, gh = cell * wrap * topo.layers + gap * (topo.layers - 1);
-    const ox = b.x + (b.w - gw) / 2, oy = top + (avail - gh) / 2;
-    b.grid = { ox, oy, gw, gh };
-    const inset = cell >= 6 ? 1 : 0;
-    const heat = live.heat[r], total = live.total[r];
-    for (let l = 0; l < topo.layers; l++) {
-      for (let c = 0; c < live.cols[r].length; c++) {
-        const i = l * live.cols[r].length + c;
-        const base = total[i] > 0 ? floor + span * Math.sqrt(total[i] / live.totalMax) : 0;
-        const a = Math.max(heat[i], base);
-        const cx = ox + (c % per) * cell + inset, cy = oy + l * (wrap * cell + gap) + Math.floor(c / per) * cell + inset, cw = cell - 2 * inset;
-        ctx.fillStyle = cellBg;
-        ctx.fillRect(cx, cy, cw, cw);
-        if (a > 0.01) {
-          ctx.fillStyle = `rgba(${rgb}, ${a.toFixed(3)})`;
-          ctx.fillRect(cx, cy, cw, cw);
-        }
-      }
-    }
-    ctx.fillStyle = color("--muted");
-    ctx.font = "11px system-ui, sans-serif";
-    if (cell >= 4) {
-      ctx.save();
-      ctx.translate(ox - 6, oy + gh / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.textAlign = "center";
-      ctx.fillText("layer", 0, 0);
-      ctx.restore();
+// The "All experts" view: every expert of every layer in one grid, grouped by the machine that holds it,
+// with the current token's path: the experts running now, and the ones it already used in lower layers.
+function drawHeat(W, H) {
+  const L = topo.layers, ranks = topo.ranks.length;
+  const c = anim.cur || anim.recent;
+  const cl = !c ? -1 : c === anim.cur ? Math.min(c.l, L) : L; // A token not animated yet shows its whole path
+  const small = W < 560, pad = 14;
+  const font = "12px system-ui, sans-serif", bold = "600 12px system-ui, sans-serif", big = "600 15px system-ui, sans-serif";
+  const shown = [];
+  for (let r = 0; r < ranks; r++)
+  {
+    if (live.cols[r].length)
+    {
+      shown.push(r);
     }
   }
-  if (ranks > 1) drawLinks(boxes, stacked, now, rp ? rp.clock : now, stacked ? W : H);
+  const axis = small ? 44 : 60, gap = small ? 6 : 12;
+  const left = pad + axis, right = W - pad;
+  const top = pad + 58, bottom = H - pad - (small ? 70 : 62);
+  const gaps = gap * (shown.length - 1), aw = right - left - gaps, ah = bottom - top;
+  // Square cells. A model much too wide for its height folds each layer's experts onto a few short rows,
+  // only when that makes the cells far bigger; cells may be under a pixel, and lit experts stay visible.
+  let fold = 1, cw = 0;
+  for (let f = 1; f <= 16; f++)
+  {
+    const across = shown.reduce((n, r) => n + Math.ceil(live.cols[r].length / f), 0);
+    const s = Math.min(aw / across, (ah - (f > 1 ? L - 1 : 0)) / (L * f));
+    if (s > cw * 1.5)
+    {
+      fold = f;
+      cw = s;
+    }
+  }
+  const ch = cw, lgap = fold > 1 ? 1 : 0; // A thin gap between layers once each spans several rows
+  const per = (r) => Math.ceil(live.cols[r].length / fold);
+  const across = shown.reduce((n, r) => n + per(r), 0);
+  const layerH = ch * fold, gh = L * layerH + (L - 1) * lgap;
+  const gx = left + (aw - cw * across) / 2, gy = top + (ah - gh) / 2;
+  const rowY = (l) => gy + (L - 1 - l) * (layerH + lgap); // Layer 1 at the bottom, as the token climbs in the "One token" view
+  const cellAt = (r, j) => ({ x: (j % per(r)) * cw, y: Math.floor(j / per(r)) * ch });
+
+  // How many expert runs the token (or prompt) has made on each machine so far, out of its total.
+  const done = new Array(ranks).fill(0);
+  let total = 0;
+  for (let l = 0; c && l < L; l++)
+  {
+    for (const p of c.layers[l])
+    {
+      total += p.c;
+      if (l <= cl)
+      {
+        done[ownerOf(p.e)] += p.c;
+      }
+    }
+  }
+
+  ctx.font = big;
+  const k = topo.top_k;
+  const skip = c && c.skipped ? " · skipping tokens to keep up" : "";
+  const prompt = c && c.n > 1 ? `Reading the ${c.n.toLocaleString()}-token prompt at once` : "";
+  const heads = !c ? ["Every expert of every layer, grouped by the machine that holds it", "Every expert of every layer"]
+    : prompt ? [`${prompt}: each token runs ${k} experts in each of ${L} layers${skip}`, prompt]
+    : [`Each token runs ${k} experts in each of ${L} layers, ${(k * L).toLocaleString()} in all${skip}`, `${k} experts in each of ${L} layers, ${(k * L).toLocaleString()} per token`, `${k} experts per layer`];
+  addText(heads.find((t) => ctx.measureText(t).width <= W - 2 * pad) || "", W / 2, pad + 12, big, "--ink", "center");
+
+  // Each machine's band of columns: its name above, its expert range and share of the token's work below.
+  const cellBg = color("--cell"), ink = color("--ink");
+  const counts = (n) => {
+    const a = n.toLocaleString(), b = total.toLocaleString();
+    return c && c.n > 1 ? [`${a} of ${b} expert runs here`, `${a} of ${b}`] : [`${a} of ${b} experts ran here`, `${a} of ${b} ran here`, `${a} of ${b}`];
+  };
+  const names = [], ranges = [];
+  for (const r of shown)
+  {
+    const ids = live.cols[r];
+    names.push([`rank ${r} · ${topo.ranks[r]}`, topo.ranks[r], `rank ${r}`]);
+    const contiguous = ids[ids.length - 1] - ids[0] === ids.length - 1;
+    ranges.push(contiguous ? [`experts ${ids[0]} to ${ids[ids.length - 1]}`, `${ids[0]} to ${ids[ids.length - 1]}`, ""] : [`${ids.length} experts`, ""]);
+  }
+  // Each row of labels takes the longest wording that fits every machine, so the machines read alike.
+  const level = (f, lists) => {
+    ctx.font = f;
+    let worst = 0;
+    lists.forEach((options, b) => {
+      const w = per(shown[b]) * cw + gap / 2;
+      const i = options.findIndex((t) => ctx.measureText(t).width <= w);
+      worst = Math.max(worst, i < 0 ? options.length - 1 : i);
+    });
+    return worst;
+  };
+  const nameAt = level(bold, names), rangeAt = level(font, ranges);
+  const countAt = c ? level(bold, shown.map(() => counts(total))) : 0; // Measured at the full count, so the wording holds as it grows
+  const bands = [];
+  let x = gx;
+  shown.forEach((r, b) => {
+    const ids = live.cols[r], bw = per(r) * cw;
+    const inset = cw >= 3 && ch >= 3 ? 0.4 : 0;
+    bands[r] = x;
+    ctx.fillStyle = `rgb(${rankRgb(r)})`;
+    ctx.fillRect(x, gy - 12, bw, 3);
+    addText(names[b][Math.min(nameAt, names[b].length - 1)], x + bw / 2, gy - 18, bold, "--ink", "center");
+    ctx.fillStyle = cellBg;
+    for (let l = 0; l < L; l++)
+    {
+      for (let j = 0; j < ids.length; j++)
+      {
+        const at = cellAt(r, j);
+        ctx.fillRect(x + at.x + inset, rowY(l) + at.y + inset, cw - 2 * inset, ch - 2 * inset);
+      }
+    }
+    addText(ranges[b][Math.min(rangeAt, ranges[b].length - 1)], x + bw / 2, gy + gh + 16, font, "--muted", "center");
+    if (c)
+    {
+      addText(counts(done[r])[countAt], x + bw / 2, gy + gh + 34, bold, "--ink", "center");
+    }
+    x += bw + gap;
+  });
+
+  // The token's path: the layers it has passed, then the layer it is in now, outlined.
+  for (let l = 0; c && l <= Math.min(cl, L - 1); l++)
+  {
+    const picks = c.layers[l], now = l === cl && c === anim.cur;
+    const peak = picks.reduce((m, p) => Math.max(m, p.c), 1);
+    for (const p of picks)
+    {
+      const r = ownerOf(p.e);
+      if (bands[r] === undefined)
+      {
+        continue;
+      }
+      const share = c.n > 1 ? 0.35 + 0.65 * p.c / peak : 1; // A prompt shades each expert by how many of its tokens chose it
+      const at = cellAt(r, live.colOf[p.e]);
+      const cx = bands[r] + at.x, cy = rowY(l) + at.y;
+      const sw = Math.max(cw, 1.5), sh = Math.max(ch, 1.5);
+      ctx.fillStyle = `rgba(${rankRgb(r)}, ${(now ? share : 0.45 * share).toFixed(3)})`;
+      ctx.fillRect(cx, cy, sw, sh);
+      if (now)
+      {
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx - 0.5, cy - 0.5, sw + 1, sh + 1);
+      }
+    }
+  }
+
+  // The layer axis, with the token's current layer marked as in the "One token" view.
+  const mid = (l) => rowY(l) + layerH / 2 + 4;
+  const marked = c === anim.cur && cl >= 0 && cl < L;
+  if (!marked || cl < L - 2)
+  {
+    addText(`layer ${L}`, gx - 8, mid(L - 1), font, "--muted", "right");
+  }
+  if (!marked || cl > 1)
+  {
+    addText("layer 1", gx - 8, mid(0), font, "--muted", "right");
+  }
+  if (marked)
+  {
+    ctx.fillStyle = `rgb(${color("--now")})`;
+    ctx.fillRect(gx - 5, rowY(cl), 3, Math.max(layerH, 2));
+    addText(`layer ${cl + 1}`, gx - 8, mid(cl), bold, "--ink", "right");
+  }
+
+  // A key for the squares.
+  const keyY = H - pad - 4, sq = 10;
+  const used = c && c.n > 1 ? "this prompt already used it" : "this token already used it";
+  const items = [["idle", "one expert in one layer", "an expert"], ["now", "running now", "running"], ["used", used, "already used"]];
+  ctx.font = font;
+  const long = items.reduce((w, it) => w + sq + 22 + ctx.measureText(it[1]).width, 0) <= W - 2 * pad;
+  const keyRgb = rankRgb(shown.length ? shown[0] : 0);
+  let kx = pad;
+  for (const [kind, text, short] of items)
+  {
+    ctx.fillStyle = kind === "idle" ? cellBg : `rgba(${keyRgb}, ${kind === "now" ? 1 : 0.45})`;
+    ctx.fillRect(kx, keyY - sq + 1, sq, sq);
+    if (kind === "now")
+    {
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(kx - 0.5, keyY - sq + 0.5, sq + 1, sq + 1);
+    }
+    const t = long ? text : short;
+    ctx.font = font;
+    addText(t, kx + sq + 6, keyY, font, "--ink");
+    kx += sq + 22 + ctx.measureText(t).width;
+  }
 }
 
 // Diagram text, drawn after everything else on a small backdrop so lines and packets never cover it.
@@ -1237,33 +1330,6 @@ function drawLabels() {
   ctx.textAlign = "left";
 }
 
-// Rank 0 on the left (on top when narrow), its peers in a grid beside it.
-function layout(W, H, ranks, stacked) {
-  const pad = 20;
-  if (ranks === 1) return [{ x: pad, y: pad, w: W - 2 * pad, h: H - 2 * pad }];
-  const peers = ranks - 1;
-  const gap = Math.max(stacked ? 60 : 90, (stacked ? H : W) * 0.1);
-  const share = peers === 1 ? 0.5 : 0.42;
-  const along = (stacked ? H : W) - 2 * pad - gap;
-  const across = (stacked ? W : H) - 2 * pad;
-  const first = along * share;
-  const rest = along - first;
-  const boxes = [stacked ? { x: pad, y: pad, w: across, h: first } : { x: pad, y: pad, w: first, h: across }];
-  // The peers' grid, as square as the space allows, with wider gaps when links run through them.
-  const lines = Math.max(1, Math.min(peers, Math.round(Math.sqrt(peers * across / rest))));
-  const per = Math.ceil(peers / lines);
-  const inner = per > 1 ? 28 : 16;
-  const cellAcross = (across - inner * (lines - 1)) / lines;
-  const cellAlong = (rest - inner * (per - 1)) / per;
-  for (let i = 0; i < peers; i++) {
-    const a = Math.floor(i / per), b = i % per;
-    const o = pad + first + gap + b * (cellAlong + inner);
-    const q = pad + a * (cellAcross + inner);
-    boxes.push(stacked ? { x: q, y: o, w: cellAcross, h: cellAlong, line: a, pos: b } : { x: o, y: q, w: cellAlong, h: cellAcross, line: a, pos: b });
-  }
-  return boxes;
-}
-
 // Where `u` (0 to 1) falls along a path of points, nudged `off` pixels sideways.
 function pointAt(path, u, off) {
   let total = 0;
@@ -1279,102 +1345,6 @@ function pointAt(path, u, off) {
     left -= len;
   }
   return path[0];
-}
-
-// Each link's path. A peer with another box between it and rank 0 is reached through the gaps:
-// along the channel below its line of boxes, then up the gap before it.
-function linkPaths(boxes, stacked, extent) {
-  const P = (al, ac) => (stacked ? { x: ac, y: al } : { x: al, y: ac });
-  const A0 = (b) => (stacked ? b.y : b.x), C0 = (b) => (stacked ? b.x : b.y);
-  const gA0 = (b) => (stacked ? b.grid.oy : b.grid.ox), gA1 = (b) => gA0(b) + (stacked ? b.grid.gh : b.grid.gw);
-  const gC0 = (b) => (stacked ? b.grid.ox : b.grid.oy), gC1 = (b) => gC0(b) + (stacked ? b.grid.gw : b.grid.gh);
-  const mid = (b) => (gC0(b) + gC1(b)) / 2;
-  const head = 12; // Room for a box's header text, which sits just inside its top edge
-  const a = boxes[0];
-  const start = P(gA1(a) + 6, mid(a));
-  const startA = gA1(a) + 6;
-  const paths = [null];
-  const labelAt = [null];
-  for (let r = 1; r < boxes.length; r++) {
-    const b = boxes[r];
-    const end = P(gA0(b) - 6, mid(b));
-    if (!b.pos) {
-      paths.push([start, end]);
-      labelAt.push(null);
-      continue;
-    }
-    const row = boxes.filter((q) => q.line === b.line);
-    const next = boxes.filter((q) => q.line === b.line + 1);
-    const prev = row.find((q) => q.pos === b.pos - 1), first = row.find((q) => q.pos === 0);
-    const lo = Math.max(...row.map(gC1));
-    const hi = next.length ? Math.min(...next.map(C0)) - (stacked ? 0 : head) : extent - 2;
-    const ch = (lo + hi) / 2;
-    const gap = (gA1(prev) + (stacked ? A0(b) - head : gA0(b))) / 2;
-    const into = A0(first) - 0.35 * (A0(first) - startA);
-    paths.push([start, P(into, ch), P(gap, ch), P(gap, mid(b)), end]);
-    labelAt.push(P((gA0(prev) + gA1(prev)) / 2, ch));
-  }
-  return { start, paths, labelAt };
-}
-
-function drawLinks(boxes, stacked, now, rateNow, extent) {
-  const a = boxes[0];
-  const { start, paths, labelAt } = linkPaths(boxes, stacked, extent);
-  const x0 = start.x, y0 = start.y;
-  const ends = paths.map((p) => (p ? p[p.length - 1] : null));
-  ctx.strokeStyle = color("--link");
-  ctx.lineWidth = boxes.length > 3 ? 4 : 8;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  for (let r = 1; r < boxes.length; r++) {
-    ctx.beginPath();
-    ctx.moveTo(paths[r][0].x, paths[r][0].y);
-    for (let i = 1; i < paths[r].length; i++) ctx.lineTo(paths[r][i].x, paths[r][i].y);
-    ctx.stroke();
-  }
-  // A dot rides out with each dispatch and back with its combine.
-  const flight = 420;
-  live.packets = live.packets.filter((p) => now - p.t0 < flight && p.r < boxes.length);
-  for (const p of live.packets) {
-    const t = (now - p.t0) / flight;
-    if (t < 0) continue;
-    const out = t < 0.5;
-    const u = out ? t * 2 : 2 - t * 2;
-    const { x, y } = pointAt(paths[p.r], u, (p.lane - 0.5) * 6);
-    ctx.fillStyle = `rgba(${rankRgb(p.r)}, ${out ? 0.9 : 0.55})`; // Colored by the machine it visits, as in the key
-    ctx.beginPath();
-    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  live.linkCalls = live.linkCalls.filter((c) => rateNow - c.t < 1000);
-  const perLink = new Array(boxes.length).fill(0);
-  for (const c of live.linkCalls) perLink[c.r] += c.calls;
-  const rtt = rttPerLayer();
-  const font = "12px system-ui, sans-serif";
-  const label = (x, y, lines, align = "center") => lines.forEach((t, i) => addText(t, x, y + i * 16, font, "--muted", align));
-  const pk = (calls) => `${Math.round(calls * topo.chunks * 2).toLocaleString()} packets/s`;
-  const rttText = rtt !== null ? [`${rtt.toFixed(0)} µs per layer`] : [];
-  if (boxes.length === 2) {
-    const mx = (x0 + ends[1].x) / 2 + (stacked ? 70 : 0), my = (y0 + ends[1].y) / 2;
-    label(mx, my - (stacked ? 0 : 18), [topo.transport]);
-    label(mx, my + (stacked ? 16 : 24), [pk(perLink[1]), ...rttText]);
-  } else {
-    // Many links: a summary in rank 0's header, and each link's rate near its peer when there is room.
-    const total = perLink.reduce((sum, v) => sum + v, 0);
-    label(a.x + a.w, a.y + 4, [`${topo.transport} · ${pk(total)}`, ...rttText], "right");
-    if (boxes.length <= 5 && !stacked) {
-      for (let r = 1; r < boxes.length; r++) {
-        if (labelAt[r])
-        {
-          label(labelAt[r].x, labelAt[r].y + 4, [pk(perLink[r])]);
-        }
-        else
-        {
-          label(x0 + (ends[r].x - x0) * 0.7, y0 + (ends[r].y - y0) * 0.7 - 8, [pk(perLink[r])]);
-        }
-      }
-    }
-  }
 }
 
 function stat(k, v, s, cls) {
@@ -1788,6 +1758,7 @@ function resetReplayChat() {
   $("log").innerHTML = "";
   rp.reply = null;
   rp.shown = 0;
+  rp.noted = false;
   if (rp.label)
   {
     addLabel(rp.label);
@@ -1796,7 +1767,7 @@ function resetReplayChat() {
 }
 
 function applyItem(it) {
-  if (it.step) return onStep(it.v, it.t, it.word);
+  if (it.step) return onStep(it.v, it.word);
   const n = it.v;
   if (n.t === "chat") {
     // Each request carries the whole conversation; show what is new.
@@ -1812,6 +1783,12 @@ function applyItem(it) {
     if (n.finish === "client_gone") rp.reply.foot.textContent = "the client stopped this reply";
     else rp.reply.footer(n, n.finish);
     rp.reply = null;
+    // A recording can correct what its model got wrong, right after the first reply.
+    if (rp.label && rp.label.note && !rp.noted)
+    {
+      addMsg("note", rp.label.note);
+      rp.noted = true;
+    }
   }
 }
 
@@ -1835,8 +1812,6 @@ function seekReplay(t) {
   rp.seeking = true;
   while (rp.i < rp.items.length && rp.items[rp.i].t <= rp.clock) applyItem(rp.items[rp.i++]);
   rp.seeking = false;
-  for (const h of live.heat) h.fill(0);
-  live.packets = [];
 }
 
 function advanceReplay(dt) {

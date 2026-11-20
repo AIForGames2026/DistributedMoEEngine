@@ -16,7 +16,7 @@ The guided mission was built for this session, and testing showed it was the wro
 
 | # | Theme | Raised by | Count | Decision | Issue |
 |---|---|---|---|---|---|
-| 1 | [Can't tell what the diagram shows](#1-cant-tell-what-the-diagram-shows) | T1, T3, T6, professor (Nov 13) | 3 testers + professor | **Fix now** (done) | [#45](https://github.com/AIForGames2026/DistributedMoEEngine/issues/45) |
+| 1 | [Can't tell what the diagram shows](#1-cant-tell-what-the-diagram-shows) | T1, T3, T6, professor (Nov 13) | 3 testers + professor | **Fix now** (done, #53 open) | [#45](https://github.com/AIForGames2026/DistributedMoEEngine/issues/45), [#53](https://github.com/AIForGames2026/DistributedMoEEngine/issues/53) |
 | 2 | [Are the animations accurate?](#2-are-the-animations-accurate) | professor (Nov 17) | professor | **Fix now** (done) | [#46](https://github.com/AIForGames2026/DistributedMoEEngine/issues/46) |
 | 3 | [The generated reply feels off](#3-the-generated-reply-feels-off) | professor (Nov 17) | professor | **Fix now** | [#47](https://github.com/AIForGames2026/DistributedMoEEngine/issues/47) |
 | 4 | [Don't know what to do in the mission](#4-dont-know-what-to-do-in-the-mission) | T1, T2, T3, T6 | 4 | **Won't fix** | [#48](https://github.com/AIForGames2026/DistributedMoEEngine/issues/48) |
@@ -36,6 +36,7 @@ The guided mission was built for this session, and testing showed it was the wro
   - **Readable labels and links** (`d5c1fe7`, Nov 16): text drawn on a backdrop so it stays readable, stronger light-mode colors, links between machines routed around other boxes instead of crossing them, and a loading spinner.
   - **"One token" view** (`5204040`, Nov 17): follows one token through every layer, showing which experts it visits on which machine and when it crosses the cable, with a key.
   - **Prefetch and cache** (`4143dee`, Nov 18): shows experts loading from the drive, prefetched in time, or missed.
+  - **"All experts" view** (#53): redrawn as one map of the whole model, with columns grouped by machine and one meaning, the current token's path up the layers. A title, a key, a marked current layer and "N of 384 experts ran here" under each machine replace four unlabeled grids whose shading meant two things.
 
 ### 2. Are the animations accurate?
 - **Professor:** "I am concerned that the animations aren't on point; please verify their accuracy."
@@ -114,6 +115,6 @@ The guided mission was built for this session, and testing showed it was the wro
 
 Every theme with a decision is a GitHub issue labeled `playtest`, with a priority label, an owner and a milestone, on the [board](https://github.com/orgs/AIForGames2026/projects/3); [this filter](https://github.com/AIForGames2026/DistributedMoEEngine/issues?q=label%3Aplaytest) lists them all.
 - **Fix now, done:** #45, #46 and #51 (Beta), closed. Their commits were merged before the issues were opened.
-- **Fix now:** #47 (Beta), open.
+- **Fix now:** #47 and #53 (Beta), open.
 - **Fix later:** #52 (Release Candidate).
 - **Won't fix:** #48, #49 and #50, also labeled `wontfix` and closed as not planned.

@@ -83,6 +83,7 @@ for (const rec of manifest.recordings) {
     id: rec.id,
     title: rec.title,
     summary: rec.summary || '',
+    note: rec.note || '',
     file,
     results: rec.results ? blob + rec.results : null,
     ranks: rec.ranks || null,

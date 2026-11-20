@@ -1,6 +1,6 @@
 # Testing Session 1: guided mission (asynchronous, Nov 13 to 15)
 
-Six forum replies to the testing post ([`TestPlan.md`](../../TestPlan.md)), all on desktop Windows (four Chrome, one Edge, one Firefox), build `TFS-alpha2`. No names; testers are numbered in reply order. Answers are paraphrased, with short quotes.
+Nine replies to the testing post ([`TestPlan.md`](../../TestPlan.md)), all on desktop Windows (seven Chrome, one Edge, one Firefox), build `TFS-alpha2`. T7 to T9 were added Nov 20; the target and problem sections below count the first six, and [`FEEDBACK.md`](../../FEEDBACK.md) counts all nine. No names; testers are numbered in reply order. Answers are paraphrased, with short quotes.
 
 ## Replies
 
@@ -12,6 +12,9 @@ Six forum replies to the testing post ([`TestPlan.md`](../../TestPlan.md)), all 
 | T4 | Firefox | 179 s | 28 s | 63, 34, 43, 38 | 0 | 1 | no | 1 | no: the cluster "seemed to be the only option" | yes | 5 (no number given; "very easy to see") | router (predictor recall) | In the challenge, only the cluster could be changed. |
 | T5 | Chrome | 141 s | 16 s | 30, 34, 45, 32 | 0 | 1 | no | 2 | partly: curious what a direct connection would do | yes | (none) | models | Least sure at the challenge. |
 | T6 | Chrome | 125 s | 8 s | 20, 38, 41, 26 | 0 | 1 | no | 1 | yes: direct TCP beats the internet relay | yes | 4 | machines | "I don't really understand what is going on or how what I change has a meaningful impact." |
+| T7 | Chrome | 227 s | 44 s | 73, 44, 61, 49 | 1 | 2 | no | 2 | yes: direct TCP is faster on the same hardware | yes | 5 | machines | "The instructions were easy to follow and made it clear what to do next." |
+| T8 | Chrome | 229 s | 347 s | 47, 40, 57, 86 | 0 | 3 | yes | 0 | no: first tried the greyed-out controls and animation speed | no (described the missing prefetch) | | API | Assumed the locked options were the ones to change; unsure what to give feedback on. Intro time exceeds the total. |
+| T9 | (in class) | | | | | | | 0 | (didn't remember) | yes | | | No result line saved. "The mission card made each next step clear." |
 
 ## Against the test plan's targets
 

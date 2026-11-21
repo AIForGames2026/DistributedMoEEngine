@@ -5,7 +5,7 @@
 > Team: one engineer (Luke Hinojosa) working with an AI pair programmer (Claude). All tasks are owned by Luke.
 > **Names:** the engine binary was renamed from `olmoe` to `tfswarm` on Nov 20 (TASK-44); earlier tasks and results use the old name.
 >
-> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, #35 is TASK-33, opened Nov 16, and #36 to #41 are TASK-34 to TASK-39, #42 is TASK-40 and #43 is TASK-41, opened Nov 17, #44 is TASK-42, opened Nov 18, #54 is TASK-43, opened Nov 20, #55 is TASK-44, and #56 is TASK-45, opened Nov 20). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
+> Board: https://github.com/orgs/AIForGames2026/projects/3 (issues #1 to #35 mirror the tasks below; #23 is TASK-21, added after the PoC, #24 to #31 are TASK-22 to TASK-29, #32 to #34 are TASK-30 to TASK-32, opened Nov 15, #35 is TASK-33, opened Nov 16, and #36 to #41 are TASK-34 to TASK-39, #42 is TASK-40 and #43 is TASK-41, opened Nov 17, #44 is TASK-42, opened Nov 18, #54 is TASK-43, opened Nov 20, #55 is TASK-44, #56 is TASK-45, #57 to #65 are TASK-46 to TASK-54, and #66 to #68 are TASK-55 to TASK-57, opened Nov 20). Live demo: https://aiforgames2026.github.io/DistributedMoEEngine/
 > Sources: `Research/GB10 Distributed MoE Engine.pdf` (system blueprint) and `Research/NVIDIA Blackwell Hardware Decompression Engine.pdf` (platform verification). Where the two disagree, the verification report wins. See Section 7.
 
 ### Hardware
@@ -672,7 +672,7 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
 
 #### [TASK-42] Model Families Built from Shared Parts
 - **Milestone**: None (after v1)
-- **Status**: Review (added Nov 18, started Nov 20, acceptance met Nov 20)
+- **Status**: Done (added Nov 18, started Nov 20, closed Nov 20)
 - **Priority**: `could` | **Area**: `code`
 - **Description**: Added Nov 18, after TASK-39 brought the engine to 8 families. Some code per family cannot be avoided: a GGUF holds tensors and a few settings, not the computation, and some settings are in no file at all (gpt-oss's YaRN without truncation, Mixtral's rope on adjacent pairs). llama.cpp and transformers also keep one file per architecture. Vendoring llama.cpp's model files was considered and rejected: they build whole layers as ggml graphs, with each MoE layer a single operation in one process, so expert dispatch, streaming, lookahead and the cache would need every vendored file patched. What can change is how the engine organizes this code:
   - **Today:** `olmoe.Arch` is an enum checked in 18 places across `olmoe.zig`, `olmoe_run.zig` and `split.zig`, and each new family adds more. `deepseek.zig` and `glm53.zig` each have a whole `step` of their own, so they fall behind the shared one: neither takes part in lookahead, their MLA runs on the CPU only, and fixes to the shared loop do not reach them.
@@ -762,6 +762,168 @@ Every task carries one priority label (`must`, `should`, `could`), one area labe
   - **Uninstall:** with a launcher running, uninstalling closed it and removed the files, shortcut and uninstall entry; answering No kept the settings folder, `/DELETESETTINGS` removed it, and cancelling left the launcher running. Running the installer over a running launcher closed it first.
   - **GPU default:** the CUDA build's Load form started with GPU ticked and Settings could turn that off; the CPU build greyed both out.
   - **Tests:** 134 on Windows, 138 in WSL2 and on `gx10-02` (RDMA and GPU, where `tfswarm` builds).
+
+#### [TASK-46] Generic Reference Harness
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision), after TASK-42 made a new family cost a table entry plus a hand-written reference script and tiny model. That script is now the larger part of the cost. This is the first of nine tasks toward supporting most open MoE models (TASK-46 to TASK-54).
+  - **One script:** `tools/ref/ref_hf.py` loads any `AutoModelForCausalLM` from its config on the meta device, fills it from a GGUF, and finds the expert modules to make them lazy, as today's per-family scripts do.
+  - **Names:** GGUF tensor names map back to Hugging Face names through gguf-py's `tensor_mapping` (llama.cpp, MIT), with the converter's transformations undone (Llama's permuted query and key rows, merged experts).
+  - **Tiny models:** the real config is shrunk, a seeded random model is saved, and llama.cpp's `convert_hf_to_gguf.py` converts it, so tiny GGUFs are no longer written by hand and the loader is checked against what the converter writes.
+  - **Borrowing (user's decision, Nov 20):** code under MIT, BSD or Apache-2.0 may be borrowed, keeping its license notice and listed in `THIRD_PARTY.md`. Here llama.cpp's tools run as tools, not linked into the engine.
+  - **Out:** removing the per-family scripts, which stay until the harness reproduces them.
+- **Acceptance Criteria**:
+  - **Same goldens:** for all 9 families, the harness reproduces the tiny and real goldens within the tolerances the engine is held to (logits within 1e-5 of today's goldens on tiny models), on the same transformers version.
+  - **Tiny models:** a tiny model for each family comes from the converter and passes the engine's checks in one process and split.
+  - **A new family from the harness alone:** it is what TASK-48 uses. Results in `bench/olmoe/`.
+
+#### [TASK-47] Part Tests Across CPU and GPU
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision), after TASK-42 left each part checked only inside whole models. New GPU kernels (TASK-50, TASK-54) need a check of each part on its own, as llama.cpp's `test-backend-ops` checks each op on each backend against the CPU.
+  - **Tests:** each part runs on random inputs on the CPU and on the GPU, and the two are compared: GQA attention (with QK norm, gate, biases, sinks and window), Gated DeltaNet, KDA, both MLAs, both routers, experts, and shared experts.
+  - **Tokenizers:** check whether TASK-37's choice of pre-tokenizer is already data, and if not, recognize a tokenizer by a hash of its output on a fixed text, as llama.cpp does, so a new pattern is one table row.
+  - **Repeatability:** each GPU part runs twice on the same inputs; one that differs is reported, as the split's fp8 activations were in TASK-42.
+- **Acceptance Criteria**:
+  - **Coverage:** every part above has a test with a stated tolerance, run by `zig build test` on the CPU and by a GPU step on `gx10-02`.
+  - **Tokenizers:** a new pre-tokenizer pattern takes one table entry, or the write-up shows it already does.
+  - **Linux and Windows:** the CPU tests pass on Windows, in WSL2 and on `gx10-02`. Results in `bench/olmoe/`.
+
+#### [TASK-48] Families from Existing Parts
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision). Families whose parts the engine already has, each a table entry in `src/families.zig` and the harness's reference and tiny model.
+  - **Families:** Qwen3-Next, MiniMax-M2, Hunyuan-A13B, dots.llm1, Ling 2 (Bailing), ERNIE 4.5 (text only), Mistral Large 3, and GLM-4.5 to 4.7.
+  - **Loader:** the standard loader learns ungated shared experts and dense leading layers, which GLM-4.5 needs; today only GLM-5.3's and DeepSeek's loaders have them.
+  - **Real models:** two or three that fit on `gx10-02`'s disk, chosen with the user at the start (candidates: ERNIE-4.5-21B-A3B, Ling-mini-2.0, Qwen3-Next-80B at Q4). The others are checked by tiny model.
+  - **Out:** a family that turns out to need a new part moves to TASK-49. The task may split in two if eight families are too many.
+- **Acceptance Criteria**:
+  - **Same results:** every existing family's tokens and logits match bit for bit before and after (`bench/olmoe/2026-11-20-shared-parts/record.sh`).
+  - **New families:** each passes against transformers in one process and split; its tiny model runs in `zig build test`; the real ones pass the TASK-10 and TASK-24 checks and chat through TASK-38's templates; none needed new step code.
+  - **Tokenizers:** each new family's tokenizer matches Hugging Face's on `check_tokenizer.py`'s texts. Results in `bench/olmoe/`.
+
+#### [TASK-49] Small New Parts
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision). Families that need one small part each, added to the parts in `Config`.
+  - **Parts:** LayerNorm; multipliers on the embedding, residual, attention and logits; logit capping; clipping of the query, key and value projections; a dense block in parallel with the MoE block; the softmax router limited to groups; and DSA on DeepSeek's MLA.
+  - **Families:** Granite MoE, Grok, DBRX, Phi-3.5-MoE, Arctic, DeepSeek V2, and DeepSeek V3.2.
+  - **Real models:** those that fit, chosen with the user at the start (candidates: Granite-3.1-3B-A800M, DeepSeek-V2-Lite, Phi-3.5-MoE at Q4). Grok, DBRX, Arctic and DeepSeek V3.2 are checked by tiny model.
+- **Acceptance Criteria**:
+  - **Same results:** every existing family matches bit for bit before and after.
+  - **New families:** as TASK-48's, with each new part covered by TASK-47's tests. Results in `bench/olmoe/`.
+
+#### [TASK-50] Mamba-2 and Nemotron's Experts
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision), after Nemotron 3.5 Bolt was set aside in TASK-42 for needing new math. The largest single gap: about five families.
+  - **Mamba-2:** the state-space scan, its short convolution, and the grouped gated norm, with its state in the recurrent-state slots the Gated DeltaNet uses.
+  - **Experts:** squared-ReLU experts without a gate, and LatentMoE (experts that run on a smaller projection of the input).
+  - **Bolt's format:** NVIDIA publishes a GGUF of Nemotron 3.5 Bolt; if it uses a quant type the engine lacks, its decoding is ported from ggml (MIT).
+  - **Families:** Nemotron-H, Nemotron 3 Nano, Granite 4 hybrids, and Nemotron 3.5 Bolt.
+  - **Borrowing:** the CPU path is the engine's own reference. The GPU scan and convolution may come from llama.cpp's CUDA kernels (MIT) or `state-spaces/mamba` and `causal-conv1d` (Apache-2.0, BSD), with notices in `THIRD_PARTY.md`.
+- **Acceptance Criteria**:
+  - **Same results:** every existing family matches bit for bit before and after.
+  - **New families:** each passes against transformers on the CPU in one process and split, with a tiny model in `zig build test`; Nemotron 3.5 Bolt and one other real model pass the TASK-10 and TASK-24 checks; a GPU path, if added, passes TASK-47's tests. Results in `bench/olmoe/`.
+
+#### [TASK-51] Llama 4
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision); named in TASK-39 as needing new math.
+  - **Parts:** chunked attention, layers without rope, attention temperature scaling, and MoE layers alternating with dense ones.
+  - **Real model:** Llama 4 Scout at Q4 (about 60 GB), if it still fits on `gx10-02` at the start.
+  - **Out:** the vision encoder.
+- **Acceptance Criteria**:
+  - **Same results:** every existing family matches bit for bit before and after.
+  - **Llama 4:** passes against transformers in one process and split, with a tiny model in `zig build test`, and chats through its template. Results in `bench/olmoe/`.
+
+#### [TASK-52] Mamba-1 and Jamba
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision); named in TASK-39 as needing new math. Needs TASK-50's recurrent state and convolution.
+  - **Parts:** Mamba-1's selective scan, in layers mixed with attention and MoE as Jamba places them.
+  - **Real model:** Jamba Mini at Q4 if it fits, chosen with the user at the start.
+- **Acceptance Criteria**:
+  - **Same results:** every existing family matches bit for bit before and after.
+  - **Jamba:** passes against transformers in one process and split, with a tiny model in `zig build test`. Results in `bench/olmoe/`.
+
+#### [TASK-53] Unusual MoE Blocks
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision). The lowest-priority families, each with a block unlike the others.
+  - **LongCat-Flash:** experts that cost nothing to run, and an MoE block joined by a shortcut.
+  - **MiniMax-M1:** lightning attention, a linear attention. `flash-linear-attention` (MIT, Triton) is read as a reference.
+  - **Real models:** none; both are far larger than `gx10-02` holds, so tiny models stand in.
+- **Acceptance Criteria**:
+  - **Same results:** every existing family matches bit for bit before and after.
+  - **New families:** each passes against transformers in one process and split on its tiny model, which runs in `zig build test`. Results in `bench/olmoe/`.
+
+#### [TASK-54] GPU Kernels for the CPU-Only Parts
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision). Parts that still run on the CPU while the rest of a step is on the GPU, which slows DeepSeek, GLM-5.3 and gpt-oss. Needs TASK-47's part tests.
+  - **Kernels:** both MLAs (DeepSeek's and GLM's), attention sinks and sliding windows, experts with biases and gpt-oss's SwiGLU, and Mamba-2's scan once TASK-50 has it.
+  - **Expert cache:** its slots learn to hold expert biases, so gpt-oss can stream its experts.
+  - **Borrowing:** llama.cpp's CUDA kernels (MIT) are the starting point where they exist; they build for GB10 and the 5070 Ti, unlike FlashMLA and DeepGEMM, which target other GPUs. Borrowed files keep their notice and are listed in `THIRD_PARTY.md`.
+- **Acceptance Criteria**:
+  - **Correct:** each kernel passes TASK-47's tests, and each affected real model still passes against transformers on the GPU; the CPU paths stay bit for bit.
+  - **Faster:** decode on the GPU is recorded before and after for Moonlight, gpt-oss-20b and GLM-5.3-Flash. Results in `bench/olmoe/`.
+
+#### [TASK-55] Model Shares from Hugging Face and the Dashboard
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision). Today the dashboard loads a model only if every node holds the identical whole GGUF, though each rank reads only its own experts' byte ranges. Nodes should instead receive only their share.
+  - **Share files:** a node stores its share as a sparse file at the GGUF's own byte offsets, with a record of the ranges it holds, so the loader's read plans work unchanged. On Windows the agent marks the file sparse when it creates it.
+  - **Sources (user's decision):** a node fetches its ranges from Hugging Face with HTTP Range requests, or from the dashboard's copy over the authenticated node link. The dashboard's commands name a model and its pieces, never a path, and downloads go only to allowed hosts. Peers are TASK-57.
+  - **Checking (user's idea):** no machine needs the whole file. The dashboard starts a SHA-256 at byte 0, and each node in turn continues it over the bytes it holds, passing on the hash's internal state (its 32 bytes, the byte count, and any partial 64-byte block). The final value must equal the SHA-256 Hugging Face publishes. Every byte of the file (header, padding, non-expert weights) is assigned to some node. On a mismatch, the relay reruns by halves to find the wrong range, which is fetched again. Afterwards each node hashes each of its pieces, and the dashboard keeps that list for later transfers.
+  - **Loading:** the dashboard accepts a load when the shares together cover the file and are verified. Shares follow today's equal split until TASK-56.
+  - **Gated models:** a Hugging Face token stays on the dashboard, which fetches gated pieces itself and passes them on.
+  - **Out:** serving before a share is complete (user's decision); a node joins a load only once its whole share is on disk and verified.
+- **Acceptance Criteria**:
+  - **Shares:** a model none of the nodes holds is loaded across `gx10-02` and the desktop (and WSL2 as a third node) from Hugging Face, each node storing only its share, and passes the TASK-10 and TASK-24 checks; the same with the dashboard's copy as the source.
+  - **Checking:** the relay matches Hugging Face's SHA-256 for that model; a piece corrupted on purpose on one node fails the relay, is found by the rerun, and is fetched again.
+  - **Disk:** each node's share uses about its share of the file's size on disk, on Linux and Windows.
+  - **Safety:** a command naming a path outside the models directory or a host not allowed is refused. Results in `bench/serve/`.
+
+#### [TASK-56] Expert Placement by Tier and Use
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision), after TASK-55. Shares should be unequal and balanced: the most-used experts closest and on the fastest storage.
+  - **Tiers:** each node reports what it can give in VRAM, RAM, NVMe and HDD, and the planner fills the fastest tiers first across the cluster.
+  - **Use:** expert-use counts come from the dashboard's live routing data (TASK-16b), kept per model. The hottest experts go to VRAM and to the router's own machine or the lowest-latency nodes. A first load without counts uses a short calibration run.
+  - **Settings (user's decision):** the operator sets the policy (tiered, or equal, latency weight, and caps per node and tier) on the dashboard's Settings page, and each node can declare its own limits, such as VRAM to keep free or no HDD.
+  - **Equal split (user's decision):** an option that splits equally by tier: an equal share of what fits in VRAM, then of RAM, and so on.
+  - **Engine:** a rank that holds experts in several tiers keeps some in VRAM, some in RAM, and streams the rest from NVMe or HDD through the expert cache. Whether a discrete GPU's VRAM can hold experts today is checked at the start.
+- **Acceptance Criteria**:
+  - **Placement:** on `gx10-02` and the desktop, the planner puts more experts in VRAM than RAM and in RAM than on disk, and the hottest experts on the fastest tier, and the dashboard shows each node's share by tier.
+  - **Faster:** decode on a model larger than the cluster's fast memory is recorded with tiered placement, today's equal split, and the equal-by-tier option; the tiered placement is the fastest, or the write-up explains why not.
+  - **Limits:** a node's declared limits and the operator's caps are never exceeded.
+  - **Same results:** tokens and logits match bit for bit whatever the placement (f32 activations). Results in `bench/serve/`.
+
+#### [TASK-57] Peer-to-Peer Pieces and Rebalancing
+- **Milestone**: None (after v1)
+- **Status**: Backlog (added Nov 20)
+- **Priority**: `could` | **Area**: `code`
+- **Description**: Added Nov 20 (user's decision), after TASK-55 and TASK-56. Nodes should get pieces from each other, and placement should follow use as it changes.
+  - **Peers:** a node fetches a piece from another node, checked against TASK-55's per-piece SHA-256 list. The dashboard picks each piece's cheapest source: a peer on the LAN, then the dashboard, then Hugging Face.
+  - **Rebalancing:** when the use counts drift, or a node joins or leaves, the planner makes a new placement and only the pieces that move are copied, mostly peer to peer. The running model keeps serving on the old placement until the new one is in place and verified.
+  - **Out:** serving a piece before it is verified.
+- **Acceptance Criteria**:
+  - **Peers:** a node joining a running cluster gets its share mostly from peers, with the bytes from each source recorded, and every piece checked.
+  - **Rebalancing:** after a change in use, only moved pieces are copied, serving continues meanwhile, and tokens and logits match bit for bit before and after the move (f32 activations).
+  - **Failure:** a peer that sends a wrong piece is caught by the check and the piece comes from another source. Results in `bench/serve/`.
+
 ---
 
 ## 4. Scope Tiers & Cut Lines
@@ -794,11 +956,11 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 
 | Column | Tasks |
 |---|---|
-| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook) |
+| **Backlog** | TASK-13 (`cut` Nov 11; `bench/storage/2026-11-11-compression.md`), TASK-19, TASK-20, TASK-34 (Vulkan, waits for a borrowed Arc A750), TASK-35 (Metal and macOS, waits for a borrowed M4 MacBook), TASK-46 to TASK-54 (toward most open MoE models: reference harness, part tests, new families and parts, GPU kernels), TASK-55 to TASK-57 (model shares from Hugging Face, the dashboard and peers, placed by tier and use) |
 | **To Do** | (none) |
 | **In Progress** | TASK-32 (GLM-5.3-Flash, Nov 17) |
-| **Review** | TASK-42 (model families built from shared parts, acceptance met Nov 20) |
-| **Done** | TASK-45 (Windows installer, updates and uninstall, Nov 20; `bench/serve/2026-11-20-windows-installer.md`), TASK-44 (Windows tray launcher and settings in the dashboard, Nov 20; `bench/serve/2026-11-20-windows-launcher.md`), TASK-43 (native Windows dashboard and node agent, Nov 20; `bench/olmoe/2026-11-20-windows-dashboard.md`), TASK-40 (native Windows engine, Nov 20; `bench/olmoe/2026-11-20-windows-native.md`), TASK-39 (Mixtral, DeepSeek V3 as Moonlight-16B, and gpt-oss, Nov 18; `bench/olmoe/2026-11-18-families.md`), TASK-38 (chat templates read from the GGUF, Nov 18; `bench/olmoe/2026-11-18-chat-templates.md`), TASK-37 (SentencePiece and more pre-tokenizers, Nov 18; `bench/olmoe/2026-11-18-tokenizers.md`), TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`), TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
+| **Review** | None |
+| **Done** | TASK-42 (model families built from shared parts, Nov 20; `bench/olmoe/2026-11-20-shared-parts.md`), TASK-45 (Windows installer, updates and uninstall, Nov 20; `bench/serve/2026-11-20-windows-installer.md`), TASK-44 (Windows tray launcher and settings in the dashboard, Nov 20; `bench/serve/2026-11-20-windows-launcher.md`), TASK-43 (native Windows dashboard and node agent, Nov 20; `bench/olmoe/2026-11-20-windows-dashboard.md`), TASK-40 (native Windows engine, Nov 20; `bench/olmoe/2026-11-20-windows-native.md`), TASK-39 (Mixtral, DeepSeek V3 as Moonlight-16B, and gpt-oss, Nov 18; `bench/olmoe/2026-11-18-families.md`), TASK-38 (chat templates read from the GGUF, Nov 18; `bench/olmoe/2026-11-18-chat-templates.md`), TASK-37 (SentencePiece and more pre-tokenizers, Nov 18; `bench/olmoe/2026-11-18-tokenizers.md`), TASK-36 (every GGUF quant format on the CPU and GPU, Nov 18; `bench/olmoe/2026-11-18-quant-formats.md`), TASK-41 (prefetch and cache misses in the live view, Nov 18; `bench/trace/2026-11-18-prefetch.md`), TASK-25 (operator dashboard, Nov 17; `bench/serve/2026-11-17-dashboard.md`), TASK-31 (Qwen3.8-Flash-Next, experts streamed from NVMe, Nov 17; `bench/olmoe/2026-11-17-qwen38.md`), TASK-29 (Qwen3.6-35B-A3B, hybrid linear attention, Nov 16; `bench/olmoe/2026-11-16-qwen35.md`), TASK-33 (any number of expert nodes, Nov 16; `bench/olmoe/2026-11-16-nodes.md`), TASK-01 to TASK-06 (PoC released as `v0.1.0-poc` on Oct 27; PoC result in `POC.md`), TASK-27 (compact KV cache formats, Nov 16; `bench/olmoe/2026-11-16-kv-formats.md`), TASK-18 (Pages showcase of recorded runs, Nov 16; https://aiforgames2026.github.io/DistributedMoEEngine/), TASK-17 (capacity and memory guardrails, Nov 16; `bench/rc/2026-11-16-guardrails.md`), TASK-15 (one-hour soak and cross-machine run, Nov 16; `bench/rc/2026-11-16-soak.md`), TASK-16 (recording and replay, Nov 15; `bench/trace/2026-11-15-recording.md`), TASK-30 (server and built-in chat harness, Nov 15; `bench/serve/2026-11-15-server-latency.md`), TASK-16b (live telemetry, Nov 15; `bench/serve/2026-11-15-live-telemetry.md`), TASK-23 (Testing Session 1, Nov 13; `bench/playtest/session-1.md`), TASK-07 (acceptance met Nov 5; `bench/transport/2026-11-05.md`), TASK-08 (acceptance met Nov 5; `bench/storage/gx10-03-2026-11-05.md`), TASK-10 (acceptance met Nov 5; `bench/olmoe/2026-11-05.md`), TASK-21 (direct TCP path, Nov 5; `bench/transport/2026-11-05-direct-path.md`), TASK-26 (Ampere run passed Nov 10; `bench/olmoe/2026-11-10-ampere.md`), TASK-24 (generation over RDMA passed Nov 10; `bench/olmoe/2026-11-10-generate.md`), TASK-11 (lookahead and expert cache passed on `gx10-03` Nov 10; `bench/olmoe/2026-11-10-lookahead.md`), TASK-14 (30-minute forced-misprediction soak passed on `gx10-03` Nov 11; `bench/olmoe/2026-11-10-miss-handling.md`), TASK-15b (two Sparks over RDMA, Nov 11; `bench/rc/2026-11-11-two-sparks.md`; one unexplained differing round in an earlier repeat), TASK-09 (tracker across two Sparks, Nov 11; `bench/tracker/2026-11-11.md`), TASK-22 (CPU expert on the desktop with a GB10 router, Nov 11; `bench/olmoe/2026-11-11-cpu-expert.md`), TASK-12 (128k context with the KV middle on NVMe, Qwen3-30B-A3B, Nov 11; `bench/olmoe/2026-11-11-long-context.md`), TASK-28 (saved prompt prefixes, 128k first token in 4.2 s instead of 510 s, Nov 11; `bench/olmoe/2026-11-11-prefix-cache.md`) |
 
 | Area | Tasks | Count |
 |---|---|---|
@@ -862,6 +1024,18 @@ Columns: `Backlog` | `To Do` | `In Progress` | `Review` | `Done`
 | TASK-31 | 29 (Gated DeltaNet), 11 and 14 (expert cache), 33 (more than two nodes) | 32 |
 | TASK-32 | 31 (delta-rule kernels, sparse attention) | (none) |
 | TASK-33 | 09 (tracker), 10, 16b (live diagram), 17 (capacity) | 31 |
+| TASK-46 | 42 (family table) | 48, 49, 50, 51, 52, 53 |
+| TASK-47 | 42 | 50 (GPU path), 54 |
+| TASK-48 | 46 | (none) |
+| TASK-49 | 46 | (none) |
+| TASK-50 | 46 | 52, 54 (Mamba-2 kernel) |
+| TASK-51 | 46 | (none) |
+| TASK-52 | 46, 50 (recurrent state, convolution) | (none) |
+| TASK-53 | 46 | (none) |
+| TASK-54 | 47 | (none) |
+| TASK-55 | 25 (dashboard), 43 (Windows agent) | 56, 57 |
+| TASK-56 | 55, 16b (live routing data), 14 (expert cache) | 57 |
+| TASK-57 | 55, 56 | (none) |
 
 **Critical path (MVP)**: TASK-05 → TASK-01 → TASK-02 → TASK-07 → TASK-10 → TASK-24 → TASK-30 → TASK-16 → TASK-18 (TASK-15 feeds TASK-16 in parallel).
 

@@ -2,6 +2,8 @@
 
 TensorFold-Swarm is GPL-3.0-or-later. These parts come from other projects under their own licenses, which are compatible with it.
 
+Code under MIT, BSD or Apache-2.0 may be borrowed (the user's decision, Nov 20, for TASK-46 to TASK-54). Each borrowed file keeps its license notice and is listed here with its source and commit. Code under other terms, such as a model's community or research-only license, is read for its math and not copied.
+
 ## ggml (llama.cpp), MIT
 
 From [llama.cpp](https://github.com/ggml-org/llama.cpp) at commit `ffc87c3a7989cb657641a6459a186f303e176af8` (Nov 18, 2026), TASK-36:

@@ -1,0 +1,12 @@
+> In two or three sentences, what is a mixture-of-experts language model?
+A mixture-of-experts (MoE) language model is an architecture that combines multiple specialized "expert" neural networks, each trained to handle specific tasks or data patterns. A gating mechanism dynamically selects which experts to activate for a given input, enabling efficient and scalable proces
+  (374 tokens, first token 823 ms, 6.2 tokens/s, finish stop)
+
+> Why does it matter which machine each expert lives on when the model is split across computers?
+The placement of experts across machines matters because it affects **communication efficiency**, **load
+  (500 tokens, first token 3192 ms, 6.0 tokens/s, finish length)
+
+> Give me a one-line summary of what we discussed.
+A mixture-of-experts (MoE) language model uses specialized neural networks and a gating mechanism to efficiently process tasks, with expert placement across machines affecting communication efficiency, load balancing, and latency.
+  (239 tokens, first token 1310 ms, 6.4 tokens/s, finish stop)
+

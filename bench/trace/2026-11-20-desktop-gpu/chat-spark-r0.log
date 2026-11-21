@@ -1,0 +1,8 @@
+load: non-expert weights and 32 of 128 experts, 9.38 GB in 6.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (9.38 GB in 0.25 s)
+rdma: recording every step to /tmp/lh_c20_spark.jsonl
+rdma: OpenAI-compatible API at http://127.0.0.1:8092/v1 (model "Qwen3-30B-A3B-Q8_0", prompts from the GGUF's chat template, context 8192 tokens, reusing shared prompt prefixes)
+rdma: chat page with the live diagram at http://127.0.0.1:8092/
+rdma: request 1: 24 prompt tokens (0 reused), 363 generated in 25.13 s, first token 450 ms, 14.7 tokens/s decoding, finish stop
+rdma: request 2: 133 prompt tokens (24 reused), 458 generated in 33.51 s, first token 1843 ms, 14.4 tokens/s decoding, finish stop
+rdma: request 3: 237 prompt tokens (133 reused), 385 generated in 28.17 s, first token 1711 ms, 14.5 tokens/s decoding, finish stop

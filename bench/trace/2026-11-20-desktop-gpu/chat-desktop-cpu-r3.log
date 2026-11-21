@@ -1,0 +1,6 @@
+expert: listening on port 7835
+load: 32 of 128 experts, 7.70 GB in 2.45 s, expert CRC32C OK
+expert: rank 3 serving, resident memory 7730 MB
+error: tcp recv: peer closed with 0 of 8 bytes read
+expert: heap: 43 allocations, 43 frees, peak 28.4 MB, 0 bytes still allocated at exit (balanced)
+error: ConnectionClosed

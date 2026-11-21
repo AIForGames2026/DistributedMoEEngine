@@ -1,0 +1,8 @@
+load: non-expert weights and 32 of 128 experts, 9.38 GB in 4.79 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (9.38 GB in 0.25 s)
+tcp+rdma: recording every step to /tmp/lh_c20_desktop-cpu.jsonl
+tcp+rdma: OpenAI-compatible API at http://127.0.0.1:8092/v1 (model "Qwen3-30B-A3B-Q8_0", prompts from the GGUF's chat template, context 8192 tokens, reusing shared prompt prefixes)
+tcp+rdma: chat page with the live diagram at http://127.0.0.1:8092/
+tcp+rdma: request 1: 24 prompt tokens (0 reused), 361 generated in 104.72 s, first token 4011 ms, 3.6 tokens/s decoding, finish stop
+tcp+rdma: request 2: 133 prompt tokens (24 reused), 500 generated in 161.90 s, first token 18649 ms, 3.5 tokens/s decoding, finish length
+tcp+rdma: request 3: 250 prompt tokens (133 reused), 232 generated in 85.43 s, first token 21268 ms, 3.6 tokens/s decoding, finish stop

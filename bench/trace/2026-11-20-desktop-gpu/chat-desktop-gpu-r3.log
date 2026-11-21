@@ -1,0 +1,7 @@
+expert: listening on port 7800
+load: 32 of 128 experts, 7.70 GB in 2.33 s, expert CRC32C OK
+gpu: NVIDIA GeForce RTX 5070 Ti (compute 12.0), weights copied to device memory (7.70 GB in 1.11 s)
+expert: rank 3 serving (calls gathered and run grouped by expert on the GPU), resident memory 7871 MB
+error: tcp recv: peer closed with 0 of 8 bytes read
+expert: heap: 60 allocations, 60 frees, peak 41.0 MB, 0 bytes still allocated at exit (balanced)
+error: ConnectionClosed

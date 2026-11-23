@@ -1,0 +1,64 @@
+load: 32 of 128 experts, 7.70 GB in 5.69 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 7848 MB
+load: 32 of 128 experts, 7.70 GB in 5.88 s, expert CRC32C OK
+load: 32 of 128 experts, 7.70 GB in 5.89 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 7848 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 3 serving (calls gathered and run grouped by expert on the GPU), resident memory 7848 MB
+load: non-expert weights and 32 of 128 experts, 9.38 GB in 6.16 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (9.38 GB in 0.24 s)
+rdma: prompt 0, position 0: top-1 279, transformers' 2701, whose own top two are 4.42e-1 apart
+rdma: prompt 0 (5 tokens, 147 ms): logits max err 1.11e1 (last 5 positions), top-1 4/5, hidden max err 9.23e1, experts chosen 1879/1920 same (97.865%), QSA blocks 0/0 same (100.000%) FAIL
+rdma: prompt 1, position 0: top-1 264, transformers' 374, whose own top two are 3.63e-1 apart
+rdma: prompt 1 (17 tokens, 356 ms): logits max err 1.10e1 (last 17 positions), top-1 16/17, hidden max err 8.23e1, experts chosen 6392/6528 same (97.917%), QSA blocks 0/0 same (100.000%) FAIL
+rdma: prompt 2, position 1: top-1 315, transformers' 362, whose own top two are 1.47e-2 apart
+rdma: prompt 2 (15 tokens, 325 ms): logits max err 8.24e0 (last 15 positions), top-1 14/15, hidden max err 8.37e1, experts chosen 5671/5760 same (98.455%), QSA blocks 0/0 same (100.000%) FAIL
+rdma: FAIL: a short prompt's logits differ by up to 1.11e1 (target 1e-2) or a QSA block differs, a top-1 token differs, or a long prompt shares too few choices
+rdma: generate prompt 0: 32 tokens in 2.22 s (14.4 tokens/s, prompt included)
+rdma:   tokens: 12095 13 576 6722 315 279 3639 15072 374 7148 13 576 6722 315 279 3639 4180 374 6515 11 422 727 13 576 6722 315 15948 374 61124 75372 13 576
+rdma:   same as transformers' generate(): 32/32 tokens, logits max err 2.40e0 at step 21 FAIL
+rdma: generate prompt 1: 32 tokens in 2.44 s (13.1 tokens/s, prompt included)
+rdma:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 308 284 526 5384 445 6269 264 1372 25 40964 262 1173 955 579 39345 1445 4390
+rdma:   same as transformers' generate(): 32/32 tokens, logits max err 2.26e0 at step 5 FAIL
+rdma: generate prompt 2: 32 tokens in 2.43 s (13.2 tokens/s, prompt included)
+rdma:   tokens: 429 279 1614 646 387 803 11050 13 4354 11 279 29058 16953 374 3545 3118 389 279 3950 594 8177 1584 11 892 374 537 2500 3080 279 3950 374 15233
+rdma:   same as transformers' generate(): 12/32 tokens, logits max err 8.39e-1 at step 11 FAIL
+rdma: FAIL: generated tokens or their logits differ from transformers' generate()
+rdma: 48452 expert calls sent to 3 peers, 15676 run locally; payload fp8_e4m3
+rdma: rank 1 (GX10-02): 16190 expert calls
+rdma: rank 2 (GX10-02): 16115 expert calls
+rdma: rank 3 (GX10-02): 16147 expert calls
+expert: rank 3 ran 16147 expert FFNs for rank 0 in 4693 grouped jobs, expert: rank 1 ran 16190 expert FFNs for rank 0 in 4704 grouped jobs, expert: rank 2 ran 16115 expert FFNs for rank 0 in 4657 grouped jobs, 455 us each on average (max 1808 us), 2.13 s in all; resident memory 463 us each on average (max 1981 us), 2.18 s in all; resident memory 7853 MB; 0 non-finite GPU outputs replaced by the CPU's
+451 us each on average (max 1861 us), 2.10 s in all; resident memory 7853 MB; 0 non-finite GPU outputs replaced by the CPU's
+7853 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 60 allocations, 60 frees, peak 41.0 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 60 allocations, 60 frees, peak 41.0 MB, 0 bytes still allocated at exit (balanced)
+rdma: heap: 395 allocations, 395 frees, peak 168.3 MB, 0 bytes still allocated at exit (balanced)
+error: GenerateMismatch
+Command exited with non-zero status 1
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm rdma /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --golden /home/admin/lukehinojosa/models/qwen3-30b-a3b/qwen3_yarn_generate.tfref --gpu --yarn 4 --generate 32 --ranks 4 --payload fp8 --dev rocep1s0f0"
+	User time (seconds): 35.99
+	System time (seconds): 5.57
+	Percent of CPU this job got: 249%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:16.64
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 9449592
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 16058356
+	Voluntary context switches: 33151
+	Involuntary context switches: 159
+	Swaps: 0
+	File system inputs: 63438120
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
+exit 1

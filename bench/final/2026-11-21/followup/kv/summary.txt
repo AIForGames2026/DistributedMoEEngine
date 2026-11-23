@@ -1,0 +1,16 @@
+b05d5fb olmoe-bf16: 64/64 tokens 64/64 tokens 64/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 32/32 tokens
+b05d5fb olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 2/32 tokens
+21172ab olmoe-bf16: 64/64 tokens 64/64 tokens 64/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 32/32 tokens
+21172ab olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 2/32 tokens
+14cf7b8 olmoe-bf16: 64/64 tokens 64/64 tokens 64/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 32/32 tokens
+14cf7b8 olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 2/32 tokens
+5449a56 olmoe-bf16: 64/64 tokens 64/64 tokens 18/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 17/32 tokens
+5449a56 olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 32/32 tokens
+009fc67 olmoe-bf16: 64/64 tokens 64/64 tokens 18/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 17/32 tokens
+009fc67 olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 32/32 tokens
+a3cc0a2 olmoe-bf16: 64/64 tokens 64/64 tokens 18/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 17/32 tokens
+a3cc0a2 olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 32/32 tokens
+9d05193 olmoe-bf16: 64/64 tokens 64/64 tokens 18/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 17/32 tokens
+9d05193 olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 32/32 tokens
+f3873c4 olmoe-bf16: 64/64 tokens 64/64 tokens 18/64 tokens   qwen3-bf16: 26/32 tokens 32/32 tokens 17/32 tokens
+f3873c4 olmoe-fp8: 37/64 tokens 29/64 tokens 0/64 tokens   qwen3-fp8: 26/32 tokens 32/32 tokens 32/32 tokens

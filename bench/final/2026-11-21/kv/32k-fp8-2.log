@@ -1,0 +1,43 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.85 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.84 s)
+local: context 32640 tokens + 128 generated, chunks of 2048; KV cache all in memory, fp8, 50688 bytes per token: 1.66 GB in memory (all of it would be 1.66 GB), GPU attention on
+local: prefill 4096 of 32640 positions, 3.9 s
+local: prefill 8192 of 32640 positions, 8.4 s
+local: prefill 10240 of 32640 positions, 11.0 s
+local: prefill 14336 of 32640 positions, 16.8 s
+local: prefill 16384 of 32640 positions, 20.1 s
+local: prefill 20480 of 32640 positions, 27.2 s
+local: prefill 24576 of 32640 positions, 35.3 s
+local: prefill 26624 of 32640 positions, 39.6 s
+local: prefill 30720 of 32640 positions, 48.8 s
+local: prefill time: projections 3.9 s, QK norm and rope 1.7 s, attention 30.7 s, Gated DeltaNet 0.0 s, output 3.4 s, router 1.8 s, experts 10.6 s, LM head 0.0 s
+local: decode time: projections 0.5 s, QK norm and rope 0.0 s, attention 1.7 s, Gated DeltaNet 0.0 s, output 0.4 s, router 0.2 s, experts 1.6 s, LM head 0.3 s
+local: time to first token 53.428 s (611 tokens/s prefill); decode 0.038 s per token (26.39 tokens/s) over 127 steps from position 32640; resident memory 34395 MB
+local: FAIL: generated tokens differ (6 of 128 the same before the first difference), logits differ (by up to 6.00e0 through it) compared with /home/admin/lukehinojosa/bench-final/kv32.bin
+local: heap: 603 allocations, 603 frees, peak 1938.1 MB, 0 bytes still allocated at exit (balanced)
+error: CompareFailed
+Command exited with non-zero status 1
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens /home/admin/lukehinojosa/models/qwen3-30b-a3b/repo.tokens --chunk 2048 --gpu --yarn 4 --context 32640 --generate 128 --kv-format fp8 --compare /home/admin/lukehinojosa/bench-final/kv32.bin"
+	User time (seconds): 87.85
+	System time (seconds): 5.98
+	Percent of CPU this job got: 138%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:07.94
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 33739460
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 29159242
+	Voluntary context switches: 143081
+	Involuntary context switches: 1063
+	Swaps: 0
+	File system inputs: 63433520
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
+exit 1

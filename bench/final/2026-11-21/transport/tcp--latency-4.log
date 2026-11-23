@@ -1,0 +1,2 @@
+tcp: one-way latency over 4096 round trips of 7552-byte packets: min 4.18 us, p50 5.99 us, p99 8.27 us, p99.9 9.66 us
+exit 0

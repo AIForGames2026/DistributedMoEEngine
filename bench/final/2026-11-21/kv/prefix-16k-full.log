@@ -1,0 +1,33 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.85 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: context 16384 tokens + 8 generated, chunks of 2048; KV cache all in memory, f32, 196608 bytes per token: 3.23 GB in memory (all of it would be 3.22 GB), GPU attention on
+local: prefix cache: restored 16384 of 16384 positions and the last logits from 83e068d37e6f82ac.tfpx (16384 saved): 3.22 GB in 0.54 s (5.95 GB/s)
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.0 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 0.1 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: time to first token 0.564 s (29047 tokens/s prefill); decode 0.046 s per token (21.73 tokens/s) over 7 steps from position 16384; resident memory 35849 MB
+local: PASS: all 8 generated tokens and their logits match /home/admin/lukehinojosa/bench-final/p16.bin bit for bit
+local: heap: 76 allocations, 76 frees, peak 3269.0 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens /home/admin/lukehinojosa/models/qwen3-30b-a3b/repo.tokens --chunk 2048 --gpu --yarn 4 --context 16384 --generate 8 --prefix-cache /home/admin/lukehinojosa/bench-final/prefixes --compare /home/admin/lukehinojosa/bench-final/p16.bin"
+	User time (seconds): 1.88
+	System time (seconds): 2.83
+	Percent of CPU this job got: 43%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:10.83
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 35018348
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 17479785
+	Voluntary context switches: 33566
+	Involuntary context switches: 44
+	Swaps: 0
+	File system inputs: 69726768
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

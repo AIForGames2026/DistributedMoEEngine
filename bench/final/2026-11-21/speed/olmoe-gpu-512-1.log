@@ -1,0 +1,31 @@
+load: non-expert weights and 64 of 64 experts, 7.36 GB in 1.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.36 GB in 0.19 s)
+local: context 512 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 262144 bytes per token: 0.17 GB in memory (all of it would be 0.17 GB), GPU attention on
+local: prefill time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 0.1 s, LM head 0.0 s
+local: decode time: projections 0.2 s, QK norm and rope 0.0 s, attention 0.2 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 0.7 s, LM head 0.1 s
+local: time to first token 0.245 s (2088 tokens/s prefill); decode 0.010 s per token (96.47 tokens/s) over 127 steps from position 512; resident memory 7682 MB
+local: heap: 425 allocations, 425 frees, peak 233.9 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --tokens /home/admin/lukehinojosa/bench-final/synth.tokens --generate 128 --chunk 512 --context 512 --gpu"
+	User time (seconds): 1.98
+	System time (seconds): 0.83
+	Percent of CPU this job got: 70%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.00
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 7525120
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3735843
+	Voluntary context switches: 9178
+	Involuntary context switches: 30
+	Swaps: 0
+	File system inputs: 14371408
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

@@ -1,0 +1,1 @@
+/home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf: 36 extents found

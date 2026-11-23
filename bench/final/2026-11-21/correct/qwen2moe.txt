@@ -1,0 +1,8 @@
+tiny-qwen2moe-local: local: PASS: Qwen2-MoE logits within 1e-2 of the PyTorch reference (worst 2.26e-6), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it 
+tiny-qwen2moe-local-gpu: local: PASS: Qwen2-MoE logits within 1e-2 of the PyTorch reference (worst 2.38e-6), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it 
+tiny-qwen2moe-shm3-gpu: shm: PASS: Qwen2-MoE logits within 1e-2 of the PyTorch reference (worst 2.38e-6), every top-1 token identical shm: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it 
+qwen2moe-local-gpu: local: PASS: Qwen2-MoE logits within 1e-2 of the PyTorch reference (worst 1.51e-4), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it 
+qwen2moe-local-cpu: local: PASS: Qwen2-MoE logits within 1e-2 of the PyTorch reference (worst 1.64e-4), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it 
+qwen2moe-shm3-gpu: shm: PASS: Qwen2-MoE logits within 1e-2 of the PyTorch reference (worst 1.51e-4), every top-1 token identical shm: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it 
+qwen2moe-shm3-gpu-fp8: shm: FAIL: generated tokens or their logits differ from transformers' generate() error: GenerateMismatch 
+qwen2moe-local-gpu-ahead: local: PASS: Qwen2-MoE logits within 1e-2 of the PyTorch reference (worst 1.51e-4), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it 

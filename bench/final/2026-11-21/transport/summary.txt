@@ -1,0 +1,4 @@
+qwen3-shm4-fp8: shm:   same as transformers' generate(): 12/32 tokens, logits max err 8.39e-1 at step 11 FAIL shm: FAIL: generated tokens or their logits differ from transformers' generate() error: GenerateMismatch
+qwen3-rdma4-fp8: rdma:   same as transformers' generate(): 12/32 tokens, logits max err 8.39e-1 at step 11 FAIL rdma: FAIL: generated tokens or their logits differ from transformers' generate() error: GenerateMismatch
+qwen3-shm4-f32: shm: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.86e-4), every top-1 token identical shm: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+qwen3-rdma4-f32: rdma: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.86e-4), every top-1 token identical rdma: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it

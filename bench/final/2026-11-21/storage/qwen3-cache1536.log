@@ -1,0 +1,31 @@
+load: non-expert weights and 128 of 128 experts (through the expert cache), 1.68 GB in 0.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.68 GB in 0.04 s)
+local: expert cache: 1536 slots (7.74 GB), 2 loader threads, 128 experts of layers below 1 loaded and kept in 0.54 s; cached experts run on the GPU
+local: context 512 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 196608 bytes per token: 0.13 GB in memory (all of it would be 0.13 GB), GPU attention on
+local: heap: 65 allocations, 65 frees, peak 212.2 MB, 0 bytes still allocated at exit (balanced)
+error: TooManyTokens
+Command exited with non-zero status 1
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens /home/admin/lukehinojosa/models/qwen3-30b-a3b/repo.tokens --context 512 --generate 128 --chunk 512 --gpu --cache 1536"
+	User time (seconds): 0.12
+	System time (seconds): 0.83
+	Percent of CPU this job got: 64%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.47
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 9489948
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 4696456
+	Voluntary context switches: 5665
+	Involuntary context switches: 15
+	Swaps: 0
+	File system inputs: 4528688
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
+exit 1

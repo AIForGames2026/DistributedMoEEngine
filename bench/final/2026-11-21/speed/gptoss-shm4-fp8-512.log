@@ -1,0 +1,58 @@
+load: 8 of 32 experts, 2.55 GB in 1.74 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (2.55 GB in 0.07 s)
+expert: rank 3 serving (calls gathered and run grouped by expert on the GPU), resident memory 2680 MB
+load: 8 of 32 experts, 2.55 GB in 1.89 s, expert CRC32C OK
+load: 8 of 32 experts, 2.55 GB in 1.90 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (2.55 GB in 0.07 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 2680 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (2.55 GB in 0.07 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 2680 MB
+load: non-expert weights and 8 of 32 experts, 4.46 GB in 2.15 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (4.46 GB in 0.12 s)
+shm: context 512 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 98304 bytes per token: 0.06 GB in memory (all of it would be 0.06 GB), GPU attention off
+warning: gpu: a mxfp4 weight (2880x2880) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+warning: gpu: a mxfp4 weight (2880x2880) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+warning: gpu: a mxfp4 weight (2880x2880) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+warning: gpu: a mxfp4 weight (2880x2880) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+shm: prefill time: projections 0.1 s, QK norm and rope 0.0 s, attention 3.5 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 94.9 s, LM head 0.0 s
+shm: decode time: projections 0.5 s, QK norm and rope 0.0 s, attention 2.0 s, Gated DeltaNet 0.0 s, output 0.3 s, router 0.0 s, experts 24.3 s, LM head 0.5 s
+shm: time to first token 98.727 s (5 tokens/s prefill); decode 0.217 s per token (4.61 tokens/s) over 127 steps from position 512; resident memory 4820 MB
+shm: 45771 expert calls sent to 3 peers, 15573 run locally; payload fp8_e4m3
+shm: rank 1 (GX10-02): 15538 expert calls
+shm: rank 2 (GX10-02): 15040 expert calls
+shm: rank 3 (GX10-02): 15193 expert calls
+expert: rank 1 ran 15538 expert FFNs for rank 0 in 2539 grouped jobs, expert: rank 3 ran 15193 expert FFNs for rank 0 in 2102 grouped jobs, expert: rank 2 ran 15040 expert FFNs for rank 0 in 2900 grouped jobs, 29384 us each on average (max 1089255 us), 74.61 s in all; resident memory 33912 us each on average (max 1417623 us), 71.28 s in all; resident memory 25474 us each on average (max 974067 us), 73.87 s in all; resident memory 2698 MB; 0 non-finite GPU outputs replaced by the CPU's
+2697 MB; 0 non-finite GPU outputs replaced by the CPU's
+2693 MB; 0 non-finite GPU outputs replaced by the CPU's
+gpu: 2900 calls on mxfp4 weights ran on the CPU (biased)
+gpu: 2102 calls on mxfp4 weights ran on the CPU (biased)
+gpu: 2539 calls on mxfp4 weights ran on the CPU (biased)
+gpu: 2323 calls on mxfp4 weights ran on the CPU (biased)
+expert: heap: 58 allocations, 58 frees, peak 135.4 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 58 allocations, 58 frees, peak 135.4 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 58 allocations, 58 frees, peak 135.4 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 454 allocations, 454 frees, peak 383.4 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm shm /home/admin/lukehinojosa/models/gpt-oss-20b/gpt-oss-20b-MXFP4.gguf --tokens /home/admin/lukehinojosa/bench-final/synth.tokens --generate 128 --chunk 512 --context 512 --ranks 4 --gpu --payload fp8 --max-step 512"
+	User time (seconds): 507.66
+	System time (seconds): 3.32
+	Percent of CPU this job got: 392%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:10.13
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4806168
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 6161839
+	Voluntary context switches: 21241
+	Involuntary context switches: 1786
+	Swaps: 0
+	File system inputs: 23630968
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

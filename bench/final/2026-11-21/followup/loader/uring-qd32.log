@@ -1,0 +1,4 @@
+bs=1024KiB qd=32 window=32MiB sqpoll=1 fixed_buf=1 fixed_file=1 dio_align=4/512
+read 17.18 GB: 6.92 GB/s (I/O time), 6.92 GB/s (wall)
+latency us: p50 2699  p95 4693  p99 5015  max 6461  (16384 requests)
+page cache delta: +0 MiB

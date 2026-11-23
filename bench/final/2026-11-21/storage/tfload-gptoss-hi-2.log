@@ -1,0 +1,3 @@
+gpt-oss-20b-MXFP4.gguf: GGUF, 24 layers x 32 experts, d_model 2880, d_ff 2880; gate/up/down mxfp4/mxfp4/mxfp4; 13.25 MB per expert per layer
+load: experts 16-31 of 32: 1152 weights, 5.09 GB wanted, 5.09 GB read in 144 spans (of 12.11 GB file)
+load: region touched in 0.122 s; io_uring O_DIRECT read 0.755 s (6.74 GB/s, fixed buffer 0); CRC32C of every weight OK in 0.189 s

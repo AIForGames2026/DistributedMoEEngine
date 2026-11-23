@@ -1,0 +1,38 @@
+load: non-expert weights and 8 of 8 experts, 28.45 GB in 5.15 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (28.45 GB in 0.75 s)
+local: context 4096 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 262144 bytes per token: 1.11 GB in memory (all of it would be 1.11 GB), GPU attention on
+local: prefill 512 of 4096 positions, 1.9 s
+local: prefill 1024 of 4096 positions, 3.8 s
+local: prefill 1536 of 4096 positions, 5.8 s
+local: prefill 2048 of 4096 positions, 7.7 s
+local: prefill 2560 of 4096 positions, 9.6 s
+local: prefill 3072 of 4096 positions, 11.6 s
+local: prefill 3584 of 4096 positions, 13.6 s
+local: prefill time: projections 1.0 s, QK norm and rope 0.3 s, attention 0.4 s, Gated DeltaNet 0.0 s, output 0.8 s, router 0.4 s, experts 12.3 s, LM head 0.0 s
+local: decode time: projections 0.6 s, QK norm and rope 0.0 s, attention 1.0 s, Gated DeltaNet 0.0 s, output 0.4 s, router 0.0 s, experts 6.5 s, LM head 0.1 s
+local: time to first token 15.572 s (263 tokens/s prefill); decode 0.068 s per token (14.68 tokens/s) over 127 steps from position 4096; resident memory 29727 MB
+local: heap: 445 allocations, 445 frees, peak 1228.3 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/mixtral-8x7b/Mixtral-8x7B-Instruct-v0.1.Q4_K_M.gguf --tokens /home/admin/lukehinojosa/bench-final/synth.tokens --generate 128 --chunk 512 --context 4096 --gpu"
+	User time (seconds): 26.53
+	System time (seconds): 2.76
+	Percent of CPU this job got: 89%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:32.71
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 29037848
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 16020694
+	Voluntary context switches: 59718
+	Involuntary context switches: 301
+	Swaps: 0
+	File system inputs: 55561968
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

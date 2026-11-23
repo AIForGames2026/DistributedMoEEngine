@@ -1,0 +1,38 @@
+load: non-expert weights and 64 of 64 experts, 7.36 GB in 1.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.36 GB in 0.19 s)
+local: context 4000 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 262144 bytes per token: 1.08 GB in memory (all of it would be 1.08 GB), GPU attention on
+local: prefill 512 of 4000 positions, 0.3 s
+local: prefill 1024 of 4000 positions, 0.5 s
+local: prefill 1536 of 4000 positions, 0.7 s
+local: prefill 2048 of 4000 positions, 0.9 s
+local: prefill 2560 of 4000 positions, 1.1 s
+local: prefill 3072 of 4000 positions, 1.3 s
+local: prefill 3584 of 4000 positions, 1.5 s
+local: prefill time: projections 0.3 s, QK norm and rope 0.1 s, attention 0.2 s, Gated DeltaNet 0.0 s, output 0.2 s, router 0.1 s, experts 0.7 s, LM head 0.0 s
+local: decode time: projections 0.2 s, QK norm and rope 0.0 s, attention 0.9 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 0.7 s, LM head 0.1 s
+local: time to first token 1.760 s (2273 tokens/s prefill); decode 0.016 s per token (62.92 tokens/s) over 127 steps from position 4000; resident memory 8606 MB
+local: heap: 446 allocations, 446 frees, peak 1148.3 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --tokens /home/admin/lukehinojosa/bench-final/synth.tokens --generate 128 --chunk 512 --context 4000 --gpu"
+	User time (seconds): 4.72
+	System time (seconds): 1.26
+	Percent of CPU this job got: 93%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06.42
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 8418756
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 4278539
+	Voluntary context switches: 23812
+	Involuntary context switches: 74
+	Swaps: 0
+	File system inputs: 14371408
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

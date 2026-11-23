@@ -1,0 +1,41 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.86 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: prompt 0 (5 tokens, 64 ms): logits max err 1.87e-4 (last 5 positions), top-1 5/5, hidden max err 1.34e-3, experts chosen 1920/1920 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (17 tokens, 121 ms): logits max err 2.86e-4 (last 17 positions), top-1 17/17, hidden max err 1.95e-3, experts chosen 6528/6528 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 177 ms): logits max err 1.07e-4 (last 15 positions), top-1 15/15, hidden max err 1.83e-3, experts chosen 5760/5760 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.86e-4), every top-1 token identical
+local: generate prompt 0: 32 tokens in 0.86 s (37.3 tokens/s, prompt included)
+local:   tokens: 12095 13 576 6722 315 279 3639 15072 374 7148 13 576 6722 315 279 3639 4180 374 6515 11 422 727 13 576 6722 315 15948 374 61124 75372 13 576
+local:   same as transformers' generate(): 32/32 tokens, logits max err 1.18e-4 at step 21 ok
+local: generate prompt 1: 32 tokens in 0.92 s (34.9 tokens/s, prompt included)
+local:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 308 284 526 5384 445 6269 264 1372 25 40964 262 1173 955 579 39345 1445 4390
+local:   same as transformers' generate(): 32/32 tokens, logits max err 9.54e-5 at step 10 ok
+local: generate prompt 2: 32 tokens in 0.92 s (34.7 tokens/s, prompt included)
+local:   tokens: 429 279 1614 646 387 803 11050 13 4354 11 279 29058 374 5990 2814 304 264 1616 429 374 537 7853 315 279 3950 594 2309 304 279 8500 13 1096
+local:   same as transformers' generate(): 32/32 tokens, logits max err 6.87e-5 at step 7 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: heap: 371 allocations, 371 frees, peak 155.8 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --golden /home/admin/lukehinojosa/models/qwen3-30b-a3b/qwen3_yarn_generate.tfref --gpu --yarn 4 --generate 32"
+	User time (seconds): 4.58
+	System time (seconds): 2.13
+	Percent of CPU this job got: 54%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:12.30
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 31987328
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 15964605
+	Voluntary context switches: 31527
+	Involuntary context switches: 59
+	Swaps: 0
+	File system inputs: 63619504
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

@@ -1,0 +1,17 @@
+load: non-expert weights and 64 of 64 experts, 7.36 GB in 1.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.36 GB in 0.19 s)
+local: prompt 0 (5 tokens, 27 ms): logits max err 1.04e0 (last 5 positions), top-1 5/5, hidden max err 2.09e-1, experts chosen 630/640 same (98.438%), QSA blocks 0/0 same (100.000%) FAIL
+local: prompt 1 (21 tokens, 46 ms): logits max err 1.63e0 (last 21 positions), top-1 21/21, hidden max err 3.22e-1, experts chosen 2642/2688 same (98.289%), QSA blocks 0/0 same (100.000%) FAIL
+local: prompt 2 (17 tokens, 52 ms): logits max err 4.00e0 (last 17 positions), top-1 12/17, hidden max err 3.86e-1, experts chosen 2100/2176 same (96.507%), QSA blocks 0/0 same (100.000%) FAIL
+local: fp8 KV cache: logits differ by up to 4.00e0; reported, not held to 1e-2
+local: generate prompt 0: 64 tokens in 0.62 s (102.5 tokens/s, prompt included)
+local:   tokens: 7785 15 187 187 510 14731 273 6181 310 253 14029 15 187 187 510 3072 273 6181 310 1475 9963 3041 952 15 187 187 510 3565 3448 273 6181 310 5112 15 187 187 510 2586 273 6181 310 4441 275 3060 15 187 187 33639 310 247 3558 273 253 1986 14726 13 443 24 13 443 938 13 24952 13
+local:   same as transformers' generate(): 37/64 tokens, logits max err 1.58e0 at step 15 FAIL
+local: generate prompt 1: 64 tokens in 0.64 s (99.9 tokens/s, prompt included)
+local:   tokens: 5713 251 42401 9 79 14 18 10 559 5713 251 42401 9 79 14 19 10 187 187 3845 9 36240 251 42401 9 740 1228 187 187 4 24882 27 7288 187 187 510 5713 251 42401 1159 310 247 33037 1159 326 45319 253 295 394 34125 251 42401 1180 15 733 4648 247 5853 1925 29054 1320 281 4657 3786
+local:   same as transformers' generate(): 29/64 tokens, logits max err 1.48e0 at step 13 FAIL
+local: generate prompt 2: 64 tokens in 0.64 s (99.3 tokens/s, prompt included)
+local:   tokens: 253 3453 7877 310 4577 685 253 3280 7877 15 831 476 320 4217 604 253 1566 310 1512 1781 390 604 253 3280 310 1512 1029 14 6967 15 187 187 510 2634 24711 6638 14 1171 14 16217 1641 65 966 275 2634 13473 348 64 49704 15 9866 65 17930 436 2934 15 3856 434 271 1650 273 849 281 897
+local:   same as transformers' generate(): 0/64 tokens, logits max err 1.32e0 at step 0 FAIL
+local: fp8 KV cache: generated tokens or their logits differ from transformers' generate(); reported, not held to it
+local: heap: 655 allocations, 655 frees, peak 86.2 MB, 0 bytes still allocated at exit (balanced)

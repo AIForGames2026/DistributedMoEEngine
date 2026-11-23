@@ -1,0 +1,12 @@
+error: invalid option: "gpu"
+info: available option: "target": The CPU architecture, OS, and ABI to build for
+info: available option: "cpu": Target CPU features to add or subtract
+info: available option: "ofmt": Target object format
+info: available option: "dynamic-linker": Path to interpreter on the target system
+info: available option: "optimize": Prioritize performance, safety, or binary size
+info: available option: "rdma": Build dispatch with the RDMA transport (needs libibverbs)
+info: available option: "uring": liburing install prefix, if not in system paths
+info: available option: "cuda": CUDA toolkit root (default /usr/local/cuda)
+info: to access the help menu: zig build -h
+error: configure command exited with code 1: .zig-cache/o/b2d6219e05f71b737830e03265d0d03d/configurer --zig /home/admin/lukehinojosa/tools/zig/zig --build-root /home/admin/lukehinojosa/bench-final/old/src-9e39d09 -Doptimize=ReleaseFast -Dgpu=true -During=/home/admin/lukehinojosa/tools
+exit 1

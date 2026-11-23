@@ -1,0 +1,3 @@
+tcp: 4096 dispatch + 4096 combine packets verified (CRC, generation, payload), 64 slots
+tcp: 51.5 ms, 12.58 us per token (pipelined), 9.61 Gb/s both directions
+exit 0

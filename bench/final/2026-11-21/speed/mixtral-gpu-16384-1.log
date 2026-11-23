@@ -1,0 +1,40 @@
+load: non-expert weights and 8 of 8 experts, 28.45 GB in 5.17 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (28.45 GB in 0.74 s)
+local: context 16384 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 262144 bytes per token: 4.33 GB in memory (all of it would be 4.33 GB), GPU attention on
+local: prefill 2048 of 16384 positions, 7.7 s
+local: prefill 3584 of 16384 positions, 13.6 s
+local: prefill 5120 of 16384 positions, 19.6 s
+local: prefill 6656 of 16384 positions, 25.6 s
+local: prefill 8192 of 16384 positions, 31.8 s
+local: prefill 10240 of 16384 positions, 40.2 s
+local: prefill 11776 of 16384 positions, 46.6 s
+local: prefill 13312 of 16384 positions, 53.1 s
+local: prefill 14848 of 16384 positions, 59.7 s
+local: prefill time: projections 3.9 s, QK norm and rope 1.2 s, attention 5.6 s, Gated DeltaNet 0.0 s, output 3.4 s, router 1.6 s, experts 49.3 s, LM head 0.0 s
+local: decode time: projections 0.6 s, QK norm and rope 0.0 s, attention 3.5 s, Gated DeltaNet 0.0 s, output 0.4 s, router 0.0 s, experts 6.6 s, LM head 0.1 s
+local: time to first token 66.375 s (247 tokens/s prefill); decode 0.088 s per token (11.39 tokens/s) over 127 steps from position 16384; resident memory 32949 MB
+local: heap: 517 allocations, 517 frees, peak 4449.5 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/mixtral-8x7b/Mixtral-8x7B-Instruct-v0.1.Q4_K_M.gguf --tokens /home/admin/lukehinojosa/bench-final/synth.tokens --generate 128 --chunk 512 --context 16384 --gpu"
+	User time (seconds): 82.36
+	System time (seconds): 5.26
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:26.69
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 32183784
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 22609296
+	Voluntary context switches: 157274
+	Involuntary context switches: 892
+	Swaps: 0
+	File system inputs: 55561968
+	File system outputs: 24
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

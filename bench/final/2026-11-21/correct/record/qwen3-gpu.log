@@ -1,0 +1,11 @@
+load: non-expert weights and 128 of 128 experts, 18.63 GB in 3.37 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (18.63 GB in 0.49 s)
+local: context 256 tokens + 24 generated, chunks of 64; KV cache all in memory, f32, 196608 bytes per token: 0.06 GB in memory (all of it would be 0.06 GB), GPU attention on
+local: prefill 64 of 256 positions, 0.3 s
+local: prefill 128 of 256 positions, 0.7 s
+local: prefill 192 of 256 positions, 1.0 s
+local: prefill time: projections 0.2 s, QK norm and rope 0.1 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.3 s, router 0.2 s, experts 0.3 s, LM head 0.0 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.1 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 0.2 s, LM head 0.0 s
+local: time to first token 1.298 s (197 tokens/s prefill); decode 0.023 s per token (43.81 tokens/s) over 23 steps from position 256; resident memory 18846 MB
+local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/qwen3-gpu.bin bit for bit
+local: heap: 128 allocations, 128 frees, peak 126.8 MB, 0 bytes still allocated at exit (balanced)

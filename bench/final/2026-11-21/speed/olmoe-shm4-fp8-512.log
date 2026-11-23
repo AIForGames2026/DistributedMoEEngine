@@ -1,0 +1,50 @@
+load: 16 of 64 experts, 1.71 GB in 1.29 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.71 GB in 0.04 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 1835 MB
+load: 16 of 64 experts, 1.71 GB in 1.34 s, expert CRC32C OK
+load: 16 of 64 experts, 1.71 GB in 1.34 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.71 GB in 0.04 s)
+expert: rank 3 serving (calls gathered and run grouped by expert on the GPU), resident memory 1835 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (1.71 GB in 0.04 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 1835 MB
+load: non-expert weights and 16 of 64 experts, 2.22 GB in 1.42 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (2.22 GB in 0.06 s)
+shm: context 512 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 262144 bytes per token: 0.17 GB in memory (all of it would be 0.17 GB), GPU attention on
+shm: prefill time: projections 0.1 s, QK norm and rope 0.0 s, attention 0.0 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 2.4 s, LM head 0.0 s
+shm: decode time: projections 0.4 s, QK norm and rope 0.0 s, attention 0.2 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 2.3 s, LM head 0.1 s
+shm: time to first token 2.564 s (200 tokens/s prefill); decode 0.024 s per token (42.00 tokens/s) over 127 steps from position 512; resident memory 2617 MB
+shm: 61143 expert calls sent to 3 peers, 20649 run locally; payload fp8_e4m3
+shm: rank 1 (GX10-02): 21166 expert calls
+shm: rank 2 (GX10-02): 20372 expert calls
+shm: rank 3 (GX10-02): 19605 expert calls
+expert: rank 1 ran 21166 expert FFNs for rank 0 in 2331 grouped jobs, expert: rank 3 ran 19605 expert FFNs for rank 0 in 2657 grouped jobs, 501 us each on average (max 20376 us), 1.17 s in all; resident memory 1854 MB; 0 non-finite GPU outputs replaced by the CPU's
+474 us each on average (max 8142 us), 1.26 s in all; resident memory 1846 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: rank 2 ran 20372 expert FFNs for rank 0 in 2372 grouped jobs, 530 us each on average (max 11500 us), 1.26 s in all; resident memory 1853 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 53 allocations, 53 frees, peak 172.9 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 53 allocations, 53 frees, peak 172.9 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 53 allocations, 53 frees, peak 172.9 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 448 allocations, 448 frees, peak 359.9 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm shm /home/admin/lukehinojosa/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --tokens /home/admin/lukehinojosa/bench-final/synth.tokens --generate 128 --chunk 512 --context 512 --ranks 4 --gpu --payload fp8 --max-step 512"
+	User time (seconds): 23.44
+	System time (seconds): 2.82
+	Percent of CPU this job got: 311%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08.44
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2579096
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3810812
+	Voluntary context switches: 11050
+	Involuntary context switches: 138
+	Swaps: 0
+	File system inputs: 14372944
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

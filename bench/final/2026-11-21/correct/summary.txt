@@ -1,0 +1,4 @@
+olmoe-golden: local: PASS: OLMoE logits within 1e-2 of the PyTorch reference (worst 4.67e-5), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+qwen3-golden: local: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.86e-4), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+qwen36-golden: local: PASS: Qwen3.5-MoE logits within 1e-2 of the PyTorch reference (worst 4.96e-5), every top-1 token identical local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+glm53-golden: local: expert cache: 6819 expert calls: 23.8% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 76.2% missed; 9380 calls set aside while others ran; 13525.5 ms with nothing to run but loads; 5 error: TooManyTokens

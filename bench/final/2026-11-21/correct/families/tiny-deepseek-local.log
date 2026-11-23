@@ -1,0 +1,16 @@
+load: non-expert weights and 16 of 16 experts, 0.00 GB in 0.00 s, expert CRC32C OK
+local: prompt 0 (5 tokens, 2 ms): logits max err 1.91e-6 (last 5 positions), top-1 5/5, hidden max err 3.10e-6, experts chosen 30/30 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (20 tokens, 3 ms): logits max err 2.62e-6 (last 20 positions), top-1 20/20, hidden max err 5.25e-6, experts chosen 120/120 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (7 tokens, 1 ms): logits max err 2.03e-6 (last 7 positions), top-1 7/7, hidden max err 4.05e-6, experts chosen 42/42 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: DeepSeek V3 logits within 1e-2 of the PyTorch reference (worst 2.62e-6), every top-1 token identical
+local: generate prompt 0: 16 tokens in 0.00 s (6760.4 tokens/s, prompt included)
+local:   tokens: 176 224 106 224 106 240 24 173 32 123 71 91 21 231 173 142
+local:   same as transformers' generate(): 16/16 tokens, logits max err 2.62e-6 at step 11 ok
+local: generate prompt 1: 16 tokens in 0.00 s (4214.9 tokens/s, prompt included)
+local:   tokens: 30 240 138 87 86 1 225 225 132 238 82 206 155 160 55 185
+local:   same as transformers' generate(): 16/16 tokens, logits max err 3.10e-6 at step 11 ok
+local: generate prompt 2: 16 tokens in 0.00 s (6371.8 tokens/s, prompt included)
+local:   tokens: 55 185 128 232 232 232 232 232 232 153 153 160 21 42 231 113
+local:   same as transformers' generate(): 16/16 tokens, logits max err 3.99e-6 at step 8 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: heap: 259 allocations, 259 frees, peak 1.0 MB, 0 bytes still allocated at exit (balanced)

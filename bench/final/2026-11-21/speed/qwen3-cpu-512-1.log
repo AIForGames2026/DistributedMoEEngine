@@ -1,0 +1,30 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.86 s, expert CRC32C OK
+local: context 512 tokens + 128 generated, chunks of 512; KV cache all in memory, f32, 196608 bytes per token: 0.13 GB in memory (all of it would be 0.13 GB), GPU attention off
+local: prefill time: projections 3.6 s, QK norm and rope 0.1 s, attention 7.4 s, Gated DeltaNet 0.0 s, output 3.4 s, router 0.1 s, experts 12.3 s, LM head 0.0 s
+local: decode time: projections 10.1 s, QK norm and rope 0.1 s, attention 5.3 s, Gated DeltaNet 0.0 s, output 5.5 s, router 0.2 s, experts 72.7 s, LM head 0.9 s
+local: time to first token 26.970 s (19 tokens/s prefill); decode 0.747 s per token (1.34 tokens/s) over 127 steps from position 512; resident memory 32823 MB
+local: heap: 429 allocations, 429 frees, peak 437.4 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens /home/admin/lukehinojosa/bench-final/synth.tokens --generate 128 --chunk 512 --context 512"
+	User time (seconds): 406.80
+	System time (seconds): 7.54
+	Percent of CPU this job got: 319%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:09.84
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 32127568
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 238464
+	Voluntary context switches: 541885
+	Involuntary context switches: 18486
+	Swaps: 0
+	File system inputs: 63433520
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

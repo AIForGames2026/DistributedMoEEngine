@@ -1,0 +1,60 @@
+load: 32 of 128 experts, 7.70 GB in 5.82 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 2 serving (calls gathered and run grouped by expert on the GPU), resident memory 7842 MB
+load: 32 of 128 experts, 7.70 GB in 5.92 s, expert CRC32C OK
+load: 32 of 128 experts, 7.70 GB in 6.04 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 1 serving (calls gathered and run grouped by expert on the GPU), resident memory 7842 MB
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.70 GB in 0.20 s)
+expert: rank 3 serving (calls gathered and run grouped by expert on the GPU), resident memory 7842 MB
+load: non-expert weights and 32 of 128 experts, 9.38 GB in 6.34 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (9.38 GB in 0.25 s)
+shm: prompt 0 (5 tokens, 88 ms): logits max err 1.87e-4 (last 5 positions), top-1 5/5, hidden max err 1.34e-3, experts chosen 1920/1920 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: prompt 1 (17 tokens, 162 ms): logits max err 2.86e-4 (last 17 positions), top-1 17/17, hidden max err 1.95e-3, experts chosen 6528/6528 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: prompt 2 (15 tokens, 155 ms): logits max err 1.07e-4 (last 15 positions), top-1 15/15, hidden max err 1.83e-3, experts chosen 5760/5760 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+shm: PASS: Qwen3-MoE (YaRN) logits within 1e-2 of the PyTorch reference (worst 2.86e-4), every top-1 token identical
+shm: generate prompt 0: 32 tokens in 1.87 s (17.1 tokens/s, prompt included)
+shm:   tokens: 12095 13 576 6722 315 279 3639 15072 374 7148 13 576 6722 315 279 3639 4180 374 6515 11 422 727 13 576 6722 315 15948 374 61124 75372 13 576
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 1.18e-4 at step 21 ok
+shm: generate prompt 1: 32 tokens in 1.95 s (16.4 tokens/s, prompt included)
+shm:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 308 284 526 5384 445 6269 264 1372 25 40964 262 1173 955 579 39345 1445 4390
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 9.54e-5 at step 10 ok
+shm: generate prompt 2: 32 tokens in 1.95 s (16.4 tokens/s, prompt included)
+shm:   tokens: 429 279 1614 646 387 803 11050 13 4354 11 279 29058 374 5990 2814 304 264 1616 429 374 537 7853 315 279 3950 594 2309 304 279 8500 13 1096
+shm:   same as transformers' generate(): 32/32 tokens, logits max err 6.87e-5 at step 7 ok
+shm: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+shm: 48446 expert calls sent to 3 peers, 15682 run locally; payload f32
+shm: rank 1 (GX10-02): 16149 expert calls
+shm: rank 2 (GX10-02): 16118 expert calls
+shm: rank 3 (GX10-02): 16179 expert calls
+expert: rank 1 ran 16149 expert FFNs for rank 0 in 4362 grouped jobs, expert: rank 3 ran 16179 expert FFNs for rank 0 in 4340 grouped jobs, expert: rank 2 ran 16118 expert FFNs for rank 0 in 4325 grouped jobs, 583 us each on average (max 3165 us), 2.54 s in all; resident memory 529 us each on average (max 2557 us), 2.29 s in all; resident memory 564 us each on average (max 2920 us), 2.45 s in all; resident memory 7848 MB; 0 non-finite GPU outputs replaced by the CPU's
+7848 MB; 0 non-finite GPU outputs replaced by the CPU's
+7848 MB; 0 non-finite GPU outputs replaced by the CPU's
+expert: heap: 60 allocations, 60 frees, peak 41.0 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 60 allocations, 60 frees, peak 41.0 MB, 0 bytes still allocated at exit (balanced)
+expert: heap: 60 allocations, 60 frees, peak 41.0 MB, 0 bytes still allocated at exit (balanced)
+shm: heap: 395 allocations, 395 frees, peak 168.3 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm shm /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --golden /home/admin/lukehinojosa/models/qwen3-30b-a3b/qwen3_yarn_generate.tfref --gpu --yarn 4 --generate 32 --ranks 4 --payload f32"
+	User time (seconds): 28.29
+	System time (seconds): 4.71
+	Percent of CPU this job got: 225%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:14.63
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 9437800
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 16055108
+	Voluntary context switches: 32961
+	Involuntary context switches: 144
+	Swaps: 0
+	File system inputs: 63438120
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

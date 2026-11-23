@@ -1,0 +1,3 @@
+rdma: 4096 dispatch + 4096 combine packets verified (CRC, generation, payload), 64 slots
+rdma: 11.5 ms, 2.80 us per token (pipelined), 43.14 Gb/s both directions
+exit 0

@@ -1,0 +1,10 @@
+abi_test: ok
+test
++- run test w
+expert: rank 2 serving, resident memory 19 MB
+expert: rank 1 serving, resident memory 19 MB
+expert: rank 1 ran 31 expert FFNs for rank 0, 5 us each on average (max 14 us), 0.00 s in all; resident memory 20 MB
+expert: rank 2 ran 35 expert FFNs for rank 0, 5 us each on average (max 6 us), 0.00 s in all; resident memory 20 MB
+failed command: ./.zig-cache/o/79c6f3e1d39cba64343792fb7b5975c3/test --cache-dir=./.zig-cache --seed=0xa1cda496 --listen=-
+
+exit 0

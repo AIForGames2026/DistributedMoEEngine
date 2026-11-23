@@ -1,0 +1,10 @@
+load: non-expert weights and 64 of 64 experts, 10.53 GB in 1.93 s, expert CRC32C OK
+local: context 256 tokens + 24 generated, chunks of 64; KV cache all in memory, f32, 62208 bytes per token: 0.02 GB in memory (all of it would be 0.02 GB), GPU attention off
+local: prefill 64 of 256 positions, 2.1 s
+local: prefill 128 of 256 positions, 4.1 s
+local: prefill 192 of 256 positions, 6.0 s
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 2.3 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.0 s, experts 5.4 s, LM head 0.1 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 1.6 s, Gated DeltaNet 0.0 s, output 0.0 s, router 0.0 s, experts 4.8 s, LM head 0.3 s
+local: time to first token 7.928 s (32 tokens/s prefill); decode 0.293 s per token (3.41 tokens/s) over 23 steps from position 256; resident memory 10613 MB
+local: PASS: all 24 generated tokens and their logits match /home/admin/lukehinojosa/bench-t42/base/moonlight-cpu.bin bit for bit
+local: heap: 152 allocations, 152 frees, peak 103.1 MB, 0 bytes still allocated at exit (balanced)

@@ -1,0 +1,19 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.85 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: prompt 0 (5 tokens, 64 ms): logits max err 1.33e0 (last 5 positions), top-1 5/5, hidden max err 1.54e0, experts chosen 1873/1920 same (97.552%), QSA blocks 0/0 same (100.000%) FAIL
+local: prompt 1 (17 tokens, 122 ms): logits max err 1.90e0 (last 17 positions), top-1 17/17, hidden max err 1.92e0, experts chosen 6304/6528 same (96.569%), QSA blocks 0/0 same (100.000%) FAIL
+local: prompt 2, position 1: top-1 315, transformers' 362, whose own top two are 1.47e-2 apart
+local: prompt 2, position 5: top-1 525, transformers' 320, whose own top two are 1.44e-2 apart
+local: prompt 2 (15 tokens, 175 ms): logits max err 1.18e0 (last 15 positions), top-1 13/15, hidden max err 5.71e0, experts chosen 5619/5760 same (97.552%), QSA blocks 0/0 same (100.000%) FAIL
+local: fp8 KV cache: logits differ by up to 1.90e0; reported, not held to 1e-2
+local: generate prompt 0: 32 tokens in 0.88 s (36.6 tokens/s, prompt included)
+local:   tokens: 12095 13 576 6722 315 279 3639 15072 374 7148 13 576 6722 315 279 3639 4180 374 6515 11 422 727 13 576 6722 315 9856 374 19846 13 576 6722
+local:   same as transformers' generate(): 26/32 tokens, logits max err 2.14e0 at step 21 FAIL
+local: generate prompt 1: 32 tokens in 0.93 s (34.3 tokens/s, prompt included)
+local:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 308 284 526 5384 445 6269 264 1372 25 40964 262 1173 955 579 39345 1445 4390
+local:   same as transformers' generate(): 32/32 tokens, logits max err 2.29e0 at step 8 FAIL
+local: generate prompt 2: 32 tokens in 0.94 s (34.1 tokens/s, prompt included)
+local:   tokens: 429 279 1614 646 387 803 11050 13 4354 11 279 29058 374 5990 2814 304 264 1616 429 374 537 7853 315 279 3950 594 2309 304 279 8500 13 1096
+local:   same as transformers' generate(): 32/32 tokens, logits max err 2.09e0 at step 22 FAIL
+local: fp8 KV cache: generated tokens or their logits differ from transformers' generate(); reported, not held to it
+local: heap: 371 allocations, 371 frees, peak 149.6 MB, 0 bytes still allocated at exit (balanced)

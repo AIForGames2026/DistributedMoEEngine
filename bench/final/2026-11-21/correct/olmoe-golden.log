@@ -1,0 +1,41 @@
+load: non-expert weights and 64 of 64 experts, 7.36 GB in 1.33 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (7.36 GB in 0.19 s)
+local: prompt 0 (5 tokens, 28 ms): logits max err 2.19e-5 (last 5 positions), top-1 5/5, hidden max err 2.67e-4, experts chosen 640/640 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (21 tokens, 57 ms): logits max err 3.86e-5 (last 21 positions), top-1 21/21, hidden max err 3.28e-4, experts chosen 2688/2688 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (17 tokens, 47 ms): logits max err 4.67e-5 (last 17 positions), top-1 17/17, hidden max err 2.90e-4, experts chosen 2176/2176 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: OLMoE logits within 1e-2 of the PyTorch reference (worst 4.67e-5), every top-1 token identical
+local: generate prompt 0: 64 tokens in 0.61 s (104.1 tokens/s, prompt included)
+local:   tokens: 7785 15 187 187 510 14731 273 6181 310 253 14029 15 187 187 510 3072 273 6181 310 1475 9963 3041 952 15 187 187 510 3565 3448 273 6181 310 5112 15 187 187 510 6253 2846 275 6181 310 7785 15 187 187 510 4585 11129 275 6181 310 7812 2071 1377 13 534 9572 387 577 13 23576 17249 313
+local:   same as transformers' generate(): 64/64 tokens, logits max err 4.48e-5 at step 39 ok
+local: generate prompt 1: 64 tokens in 0.63 s (101.6 tokens/s, prompt included)
+local:   tokens: 5713 251 42401 9 79 14 18 10 559 5713 251 42401 9 79 14 19 10 187 187 3845 9 36240 251 42401 9 740 1228 187 187 1552 2086 13067 247 1159 1925 5713 251 42401 326 45319 253 295 394 1180 275 253 34125 251 42401 3425 15 380 34125 251 42401 3425 310 247 2962 273 3904 275 534 1016
+local:   same as transformers' generate(): 64/64 tokens, logits max err 3.81e-5 at step 22 ok
+local: generate prompt 2: 64 tokens in 0.63 s (101.2 tokens/s, prompt included)
+local:   tokens: 326 1016 6485 310 5506 323 247 2173 873 273 21761 15 380 10071 840 897 616 1211 3210 281 3283 253 1735 10669 15 831 476 320 625 5919 685 247 2014 1566 13 347 253 10071 476 3894 1491 285 3037 432 1016 643 15 187 187 510 4477 273 436 2929 897 247 5019 273 418 27127 285 4480 19946 3210
+local:   same as transformers' generate(): 64/64 tokens, logits max err 4.34e-5 at step 45 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+local: heap: 655 allocations, 655 frees, peak 103.1 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/olmoe-1b-7b-0924-instruct-q8_0.gguf --golden /home/admin/lukehinojosa/models/olmoe_generate.tfref --gpu --generate 64"
+	User time (seconds): 2.35
+	System time (seconds): 0.77
+	Percent of CPU this job got: 70%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.42
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 7400204
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3683914
+	Voluntary context switches: 7109
+	Involuntary context switches: 25
+	Swaps: 0
+	File system inputs: 14371408
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

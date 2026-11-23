@@ -1,0 +1,23 @@
+2026-11-21T04:22:49Z start f3873c4: setup correct speed storage kv transport soak
+2026-11-21T04:22:49Z begin setup
+2026-11-21T04:26:41Z end setup
+2026-11-21T04:26:41Z begin correct
+2026-11-21T04:41:28Z end correct
+2026-11-21T04:41:28Z begin speed
+2026-11-21T09:22:49Z end speed
+2026-11-21T09:22:49Z begin storage
+2026-11-21T09:46:43Z end storage
+2026-11-21T09:46:43Z begin kv
+2026-11-21T10:26:45Z end kv
+2026-11-21T10:26:45Z begin transport
+2026-11-21T10:28:29Z end transport
+2026-11-21T10:28:29Z begin soak
+2026-11-22T03:53:25Z end soak
+2026-11-22T03:53:25Z FINAL_DONE
+2026-11-22T03:54:18Z begin fixup
+2026-11-22T03:55:54Z FIXUP_DONE
+2026-11-22T03:56:53Z begin followup
+2026-11-22T03:59:28Z begin followup
+2026-11-22T04:11:36Z FOLLOWUP_DONE
+2026-11-22T04:12:10Z begin glm-golden
+2026-11-22T04:15:42Z GLM_GOLDEN_DONE

@@ -1,0 +1,42 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.86 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.84 s)
+local: context 65408 tokens + 32 generated, chunks of 2048; KV cache offloaded to NVMe, fp8, 50688 bytes per token: 0.79 GB in memory (all of it would be 3.32 GB), GPU attention on
+local: prefill 8192 of 65408 positions, 8.2 s
+local: prefill 14336 of 65408 positions, 16.7 s
+local: prefill 20480 of 65408 positions, 27.4 s
+local: prefill 26624 of 65408 positions, 39.6 s
+local: prefill 32768 of 65408 positions, 53.6 s
+local: prefill 40960 of 65408 positions, 75.5 s
+local: prefill 47104 of 65408 positions, 93.9 s
+local: prefill 53248 of 65408 positions, 114.3 s
+local: prefill 59392 of 65408 positions, 136.2 s
+local: prefill time: projections 7.4 s, QK norm and rope 3.3 s, attention 112.7 s, Gated DeltaNet 0.0 s, output 6.4 s, router 3.4 s, experts 21.3 s, LM head 0.1 s
+local: decode time: projections 0.1 s, QK norm and rope 0.0 s, attention 16.8 s, Gated DeltaNet 0.0 s, output 0.1 s, router 0.1 s, experts 0.4 s, LM head 0.1 s
+local: time to first token 159.408 s (410 tokens/s prefill); decode 0.567 s per token (1.76 tokens/s) over 31 steps from position 65408; resident memory 33450 MB
+local: kv offload during decode: read 108.73 GB from NVMe at 6.22 GB/s (0.564 s per token), attention waited 0.520 s per token; over the whole run, read 156.1 GB and wrote 3.5 GB (1.30 GB/s)
+local: PASS: all 32 generated tokens and their logits match /home/admin/lukehinojosa/bench-final/t.bin bit for bit
+local: heap: 266 allocations, 266 frees, peak 276.7 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/qwen3-30b-a3b/Qwen3-30B-A3B-Q8_0.gguf --tokens /home/admin/lukehinojosa/models/qwen3-30b-a3b/repo.tokens --chunk 2048 --gpu --yarn 4 --context 65408 --generate 32 --kv-format fp8 --kv-offload /home/admin/lukehinojosa/bench-final/kvtmp --kv-window 8192 --compare /home/admin/lukehinojosa/bench-final/t.bin"
+	User time (seconds): 252.48
+	System time (seconds): 142.34
+	Percent of CPU this job got: 211%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:06.51
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 32789304
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 43029337
+	Voluntary context switches: 575779
+	Involuntary context switches: 3921
+	Swaps: 0
+	File system inputs: 368283440
+	File system outputs: 6850600
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

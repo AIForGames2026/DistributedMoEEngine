@@ -1,0 +1,35 @@
+commit f3873c4, built ReleaseFast with -Drdma=true -Dgpu=true
+GX10-02: 7.0.0-1019-nvidia, driver 580.178.04, zig 0.17.0
+name, clocks.max.sm [MHz], clocks.max.memory [MHz], power.limit [W]
+NVIDIA GB10, 3003 MHz, [N/A], [N/A]
+CPU(s):                                  20
+Model name:                              Cortex-X925
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             3900.0000
+CPU min MHz:                             1378.0000
+Model name:                              Cortex-A725
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             2808.0000
+CPU min MHz:                             338.0000
+               total        used        free      shared  buff/cache   available
+Mem:             121           5         107           0           9         115
+/dev/nvme0n1p2  916G  678G  191G  79% /
+/dev/nvme0n1          /dev/ng0n1            5P1250820001002529   ESL01TBTLCZ-27J2-TYN                     0x1          1.00  TB /   1.00  TB    512   B +  0 B   ERFM12.0
+ESL01TBTLCZ-27J2-TYN                    
+hca_id:	rocep1s0f0
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+			link_layer:		Ethernet
+hca_id:	rocep1s0f1
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+			link_layer:		Ethernet
+hca_id:	roceP2p1s0f0
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+			link_layer:		Ethernet
+hca_id:	roceP2p1s0f1
+			state:			PORT_ACTIVE (4)
+			active_mtu:		4096 (5)
+			link_layer:		Ethernet
+Python 3.12.3

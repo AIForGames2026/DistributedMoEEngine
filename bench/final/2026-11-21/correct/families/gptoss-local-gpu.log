@@ -1,0 +1,19 @@
+load: non-expert weights and 32 of 32 experts, 12.10 GB in 2.20 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (12.10 GB in 0.31 s)
+warning: gpu: a mxfp4 weight (2880x2880) runs on the CPU: the GPU's expert kernels add no biases and use no gpt-oss SwiGLU
+local: prompt 0 (5 tokens, 533 ms): logits max err 9.35e-5 (last 5 positions), top-1 5/5, hidden max err 1.10e-1, experts chosen 480/480 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 1 (17 tokens, 772 ms): logits max err 1.26e-4 (last 17 positions), top-1 17/17, hidden max err 1.17e-1, experts chosen 1632/1632 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 844 ms): logits max err 1.03e-4 (last 15 positions), top-1 15/15, hidden max err 1.04e-1, experts chosen 1440/1440 same (100.000%), QSA blocks 0/0 same (100.000%) ok
+local: PASS: gpt-oss logits within 1e-2 of the PyTorch reference (worst 1.26e-4), every top-1 token identical
+local: generate prompt 0: 32 tokens in 6.05 s (5.3 tokens/s, prompt included)
+local:   tokens: 12650 3692 279 62915 0 44257 261 4705 4994 328 261 26534 2193 484 8844 290 2700 81811 63 11282 316 12011 261 53556 326 1815 8844 2700 52998 73795 63 591
+local:   same as transformers' generate(): 32/32 tokens, logits max err 7.06e-5 at step 8 ok
+local: generate prompt 1: 32 tokens in 6.29 s (5.1 tokens/s, prompt included)
+local:   tokens: 165916 2406 12 16 8 659 165916 2406 12 17 1029 1314 2758 8595 271 297 314 220 702 198 271 2123 1526 1 37 89815 2086 540 4010 354 77 92
+local:   same as transformers' generate(): 32/32 tokens, logits max err 9.16e-5 at step 7 ok
+local: generate prompt 2: 32 tokens in 6.36 s (5.0 tokens/s, prompt included)
+local:   tokens: 290 777 73397 3097 382 17255 13 5551 11 290 54478 14678 553 2452 777 6602 11 326 290 54478 5402 2804 413 22203 316 14975 20290 316 13071 54286 364 637
+local:   same as transformers' generate(): 32/32 tokens, logits max err 9.16e-5 at step 10 ok
+local: PASS: generated tokens match transformers' generate(), logits within 1e-2 where held to it
+gpu: 2376 calls on mxfp4 weights ran on the CPU (biased)
+local: heap: 2747 allocations, 2747 frees, peak 179.3 MB, 0 bytes still allocated at exit (balanced)

@@ -1,0 +1,40 @@
+load: non-expert weights and 288 of 288 experts (through the expert cache), 10.13 GB in 1.84 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.13 GB in 0.26 s)
+local: expert cache: 2500 slots (35.45 GB), 2 loader threads, 288 experts of layers below 1 loaded and kept in 2.45 s; cached experts run on the GPU
+local: context 512 tokens + 64 generated, chunks of 64; KV cache all in memory, f32, 22528 bytes per token: 0.01 GB in memory (all of it would be 0.01 GB), GPU attention off
+local: prefill 64 of 512 positions, 16.6 s
+local: prefill 128 of 512 positions, 34.0 s
+local: prefill 192 of 512 positions, 51.2 s
+local: prefill 256 of 512 positions, 68.5 s
+local: prefill 320 of 512 positions, 85.0 s
+local: prefill 384 of 512 positions, 102.3 s
+local: prefill 448 of 512 positions, 119.6 s
+local: prefill time: projections 0.0 s, QK norm and rope 0.0 s, attention 2.2 s, Gated DeltaNet 2.9 s, output 2.0 s, router 0.3 s, experts 128.2 s, LM head 0.0 s
+local: decode time: projections 0.0 s, QK norm and rope 0.0 s, attention 3.5 s, Gated DeltaNet 4.9 s, output 0.4 s, router 1.2 s, experts 23.6 s, LM head 0.3 s
+local: time to first token 135.887 s (4 tokens/s prefill); decode 0.540 s per token (1.85 tokens/s) over 63 steps from position 512; resident memory 47602 MB
+local: expert cache: 69306 expert calls: 22.1% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 77.9% missed; 175563 calls set aside while others ran; 137477.7 ms with nothing to run but loads; 54308 loads (0 for hints, 768.77 GB, 5.40 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 377 allocations, 377 frees, peak 3237.8 MB, 0 bytes still allocated at exit (balanced)
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf --tokens /home/admin/lukehinojosa/models/glm53-flash/repo.tokens --context 512 --generate 64 --chunk 64 --gpu --cache 2500"
+	User time (seconds): 222.57
+	System time (seconds): 19.32
+	Percent of CPU this job got: 137%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:55.83
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 46524204
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 23772932
+	Voluntary context switches: 1471347
+	Involuntary context switches: 11455
+	Swaps: 0
+	File system inputs: 1522605608
+	File system outputs: 48
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+exit 0

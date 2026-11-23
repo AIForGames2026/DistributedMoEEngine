@@ -1,0 +1,18 @@
+load: non-expert weights and 128 of 128 experts, 32.48 GB in 5.85 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (32.48 GB in 0.85 s)
+local: prompt 0 (5 tokens, 63 ms): logits max err 3.76e-1 (last 5 positions), top-1 5/5, hidden max err 2.11e-1, experts chosen 1918/1920 same (99.896%), QSA blocks 0/0 same (100.000%) FAIL
+local: prompt 1 (17 tokens, 121 ms): logits max err 6.63e-1 (last 17 positions), top-1 17/17, hidden max err 1.89e0, experts chosen 6499/6528 same (99.556%), QSA blocks 0/0 same (100.000%) FAIL
+local: prompt 2, position 1: top-1 315, transformers' 362, whose own top two are 1.47e-2 apart
+local: prompt 2 (15 tokens, 167 ms): logits max err 6.50e-1 (last 15 positions), top-1 14/15, hidden max err 4.56e-1, experts chosen 5739/5760 same (99.635%), QSA blocks 0/0 same (100.000%) FAIL
+local: bf16 KV cache: logits differ by up to 6.63e-1; reported, not held to 1e-2
+local: generate prompt 0: 32 tokens in 0.86 s (37.0 tokens/s, prompt included)
+local:   tokens: 12095 13 576 6722 315 279 3639 15072 374 7148 13 576 6722 315 279 3639 4180 374 6515 11 422 727 13 576 6722 315 9856 374 19846 13 576 6722
+local:   same as transformers' generate(): 26/32 tokens, logits max err 2.37e0 at step 21 FAIL
+local: generate prompt 1: 32 tokens in 0.92 s (34.7 tokens/s, prompt included)
+local:   tokens: 75698 1445 12 16 8 488 75698 1445 12 17 692 750 1887 3932 262 308 284 526 5384 445 6269 264 1372 25 40964 262 1173 955 579 39345 1445 4390
+local:   same as transformers' generate(): 32/32 tokens, logits max err 2.37e0 at step 29 FAIL
+local: generate prompt 2: 32 tokens in 0.93 s (34.5 tokens/s, prompt included)
+local:   tokens: 429 279 1614 646 387 803 11050 13 4354 11 279 29058 374 5990 2814 304 264 57883 1616 11 892 1231 537 387 14452 369 47963 8357 13 758 419 5567
+local:   same as transformers' generate(): 17/32 tokens, logits max err 3.84e-1 at step 3 FAIL
+local: bf16 KV cache: generated tokens or their logits differ from transformers' generate(); reported, not held to it
+local: heap: 371 allocations, 371 frees, peak 149.6 MB, 0 bytes still allocated at exit (balanced)

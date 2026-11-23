@@ -1,0 +1,35 @@
+load: non-expert weights and 288 of 288 experts (through the expert cache), 10.13 GB in 1.83 s, expert CRC32C OK
+gpu: NVIDIA GB10 (compute 12.1), weights used in place (shared memory) (10.13 GB in 0.26 s)
+local: expert cache: 5000 slots (70.90 GB), 2 loader threads, 288 experts of layers below 1 loaded and kept in 3.91 s; cached experts run on the GPU
+local: prompt 0 (5 tokens, 3923 ms): logits max err 2.18e-3 (last 5 positions), top-1 5/5, hidden max err 3.05e-2, experts chosen 1680/1680 same (100.000%), DSA pools 0/0 same (100.000%) ok
+local: prompt 1: 2 flipped expert choices, the first (layer 40) at an own gap of 5.91e-5, excuse its logits
+local: prompt 1 (17 tokens, 7687 ms): logits max err 5.05e-2 (last 17 positions), top-1 17/17, hidden max err 8.07e-1, experts chosen 5710/5712 same (99.965%), DSA pools 0/0 same (100.000%) ok
+local: prompt 2 (15 tokens, 5017 ms): logits max err 2.26e-3 (last 15 positions), top-1 15/15, hidden max err 2.44e-3, experts chosen 5040/5040 same (100.000%), DSA pools 0/0 same (100.000%) ok
+local: expert cache: 6819 expert calls: 23.8% already loaded, 0.0% loaded by a hint in time, 0.0% hinted but still loading, 76.2% missed; 9380 calls set aside while others ran; 13525.5 ms with nothing to run but loads; 5486 loads (0 for hints, 77.66 GB, 5.48 ms each); 0 hinted experts evicted unused; 0 hints dropped as stale, 0 for a full queue
+local: heap: 136 allocations, 136 frees, peak 8788.1 MB, 0 bytes still allocated at exit (balanced)
+error: TooManyTokens
+Command exited with non-zero status 1
+	Command being timed: "/home/admin/lukehinojosa/zig-out-final/bin/tfswarm local /home/admin/lukehinojosa/models/glm53-flash/GLM-5.3-Flash-Q4_K-00002-of-00002.gguf --golden /home/admin/lukehinojosa/models/glm53-flash/glm53_golden.tfref --gpu --cache 5000 --generate 16"
+	User time (seconds): 58.51
+	System time (seconds): 6.82
+	Percent of CPU this job got: 209%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:31.26
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 83862740
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 42177660
+	Voluntary context switches: 351707
+	Involuntary context switches: 37533
+	Swaps: 0
+	File system inputs: 172091504
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
+exit 1
